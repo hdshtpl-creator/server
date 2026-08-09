@@ -1,0 +1,141 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------
+   Chế độ tối theo class (.dark trên <html>)
+   Tailwind v4 mặc định gắn `dark:` vào prefers-color-scheme của hệ điều
+   hành, nên nút bật/tắt trong Header sẽ không có tác dụng nếu thiếu dòng
+   này. Khai báo lại biến thể để `dark:` bám vào class do AppContext gắn.
+------------------------------------------------------------------- */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ------------------------------------------------------------------
+   Bảng màu thương hiệu HDS Law Firm
+   Lấy đúng theo bộ biến của giao diện quản trị gốc (hds-ai/app/admin_ui.py):
+     --navy:#1f3864  --blue:#2e74b5  --soft:#f2f6fb
+     --red:#c00000   --green:#2e7d32 --gold:#f9a825
+------------------------------------------------------------------- */
+@theme {
+  --color-hds-navy: #1f3864;
+  --color-hds-navy-light: #2a4a80;
+  --color-hds-navy-dark: #16294a;
+  --color-hds-blue: #2e74b5;
+  --color-hds-blue-light: #4a90d9;
+  --color-hds-soft: #f2f6fb;
+  --color-hds-red: #c00000;
+  --color-hds-green: #2e7d32;
+  --color-hds-gold: #f9a825;
+  --color-hds-gold-light: #ffc44d;
+
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+
+  --animate-shake: shake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  --animate-fade-in: fade-in 0.18s ease-out both;
+  --animate-slide-up: slide-up 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-pop-in: pop-in 0.16s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-hds-soft);
+    color: #0f172a;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  html.dark body {
+    background-color: #020617;
+    color: #e2e8f0;
+  }
+
+  /* Viền focus thống nhất, luôn nhìn thấy trên cả nền sáng và nền navy */
+  :focus-visible {
+    outline: 2px solid var(--color-hds-gold);
+    outline-offset: 2px;
+  }
+
+  /* Ô chọn trong menu tối của Header: buộc màu chữ để không bị trắng trên trắng */
+  option {
+    background-color: #ffffff;
+    color: #0f172a;
+  }
+
+  html.dark option {
+    background-color: #0f172a;
+    color: #e2e8f0;
+  }
+}
+
+@layer utilities {
+  /* Ẩn thanh cuộn nhưng vẫn cuộn được — dùng cho dải tab quản trị trên mobile */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Thanh cuộn tuỳ biến */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Giảm chuyển động cho người dùng bật "reduce motion" */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

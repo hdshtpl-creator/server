@@ -1,0 +1,130 @@
+/**
+ * api.ts — Cầu nối có kiểu cho `api.js`.
+ * Logic thật nằm ở api.js; file này chỉ khai báo chữ ký để TypeScript kiểm tra.
+ */
+import * as ApiJs from './api.js';
+import type {
+  ChatResponse,
+  Stats,
+  PendingReviewDoc,
+  PendingLearnMessage,
+  MethodTemplate,
+  User,
+  LearnedDocument,
+  BrowseDocument,
+  Client,
+  Client360Data,
+  Department,
+} from './types';
+
+export const setUserId = ApiJs.setUserId as (id: string | number) => void;
+export const getUserId = ApiJs.getUserId as () => string;
+export const setAccessToken = ApiJs.setAccessToken as (token: string) => void;
+export const getAccessToken = ApiJs.getAccessToken as () => string;
+export const setApiBaseUrl = ApiJs.setApiBaseUrl as (url: string) => void;
+export const getApiBaseUrl = ApiJs.getApiBaseUrl as () => string;
+export const getDefaultApiBaseUrl = ApiJs.getDefaultApiBaseUrl as () => string;
+export const setUseMockMode = ApiJs.setUseMockMode as (enabled: boolean) => void;
+export const getUseMockMode = ApiJs.getUseMockMode as () => boolean;
+
+/** Được gọi khi api.js tự rơi về chế độ giả lập vì không kết nối được backend. */
+export const onMockFallback = ApiJs.onMockFallback as (
+  listener: ((baseUrl: string) => void) | null
+) => void;
+
+/** Ép về số nguyên hợp lệ, ngược lại null. */
+export const toIntOrNull = ApiJs.toIntOrNull as (value: unknown) => number | null;
+
+export const login = ApiJs.login as (params: {
+  email: string;
+  password?: string;
+}) => Promise<{ access_token: string; token_type: string; user: User }>;
+
+export const getMe = ApiJs.getMe as () => Promise<User>;
+
+export const changePassword = ApiJs.changePassword as (params: {
+  old_password: string;
+  new_password: string;
+}) => Promise<{ ok?: boolean; message?: string }>;
+
+export const chatInternal = ApiJs.chatInternal as (params: {
+  question: string;
+  conversation_id?: number | null;
+  use_temp?: boolean;
+  use_method?: boolean;
+}) => Promise<ChatResponse>;
+
+export const chatPortal = ApiJs.chatPortal as (params: {
+  question: string;
+  conversation_id?: number | null;
+}) => Promise<ChatResponse>;
+
+export const uploadFile = ApiJs.uploadFile as (params: {
+  conversation_id?: number | null;
+  filename: string;
+  content: string;
+  mode: 'temp' | 'save';
+}) => Promise<{ ok?: boolean; mode?: string; chunks?: number; note?: string }>;
+
+export const getStats = ApiJs.getStats as () => Promise<Stats>;
+
+export const getPendingReviews = ApiJs.getPendingReviews as () => Promise<PendingReviewDoc[]>;
+
+export const approveReview = ApiJs.approveReview as (
+  id: number,
+  data: { doc_type: string; access_level: string; client_id?: number | string | null }
+) => Promise<{ ok?: boolean; document_id?: number }>;
+
+export const getPendingLearns = ApiJs.getPendingLearns as () => Promise<PendingLearnMessage[]>;
+
+export const reviewLearnMessage = ApiJs.reviewLearnMessage as (
+  message_id: number,
+  data: { action: 'approve' | 'edit' | 'reject'; edited_content?: string; edit_reason?: string }
+) => Promise<{ ok?: boolean; action?: string; document_id?: number }>;
+
+export const getMethods = ApiJs.getMethods as () => Promise<MethodTemplate[]>;
+export const getMethodTemplates = ApiJs.getMethodTemplates as () => Promise<MethodTemplate[]>;
+
+export const createMethod = ApiJs.createMethod as (data: {
+  case_type: string;
+  steps: string | string[];
+}) => Promise<{ ok?: boolean; method_id?: number } & Partial<MethodTemplate>>;
+
+export const getUsers = ApiJs.getUsers as () => Promise<User[]>;
+
+export const createUser = ApiJs.createUser as (data: {
+  email: string;
+  full_name: string;
+  role: string;
+  can_review: boolean;
+  client_id?: number | string | null;
+  department_ids?: number[];
+  head_of?: number[];
+  monthly_quota?: number;
+}) => Promise<User & { ok?: boolean; user_id?: number }>;
+
+export const updateUserReviewPermission = ApiJs.updateUserReviewPermission as (
+  uid: number,
+  grant: boolean
+) => Promise<{ ok?: boolean; user_id?: number; can_review?: boolean }>;
+
+export const getDocuments = ApiJs.getDocuments as (params?: {
+  q?: string;
+  doc_type?: string;
+  limit?: number;
+}) => Promise<LearnedDocument[]>;
+
+export const getBrowseDocuments = ApiJs.getBrowseDocuments as (params?: {
+  q?: string;
+}) => Promise<BrowseDocument[]>;
+
+export const getClients = ApiJs.getClients as () => Promise<Client[]>;
+
+export const getClient360 = ApiJs.getClient360 as (clientId: number) => Promise<Client360Data>;
+
+export const updateClientProfile = ApiJs.updateClientProfile as (
+  clientId: number,
+  data: { history_note?: string; issues_note?: string; warnings?: string; suggestions?: string }
+) => Promise<{ ok?: boolean; client_id?: number }>;
+
+export const getDepartments = ApiJs.getDepartments as () => Promise<Department[]>;
