@@ -1,0 +1,28 @@
+# Phụ thuộc & sản phẩm build
+node_modules/
+build/
+dist/
+coverage/
+*.log
+
+# Biến môi trường — chỉ giữ tệp mẫu và cấu hình build production (không chứa bí mật)
+.env*
+!.env.example
+!.env.production
+
+# Python (thư mục backend/ đi kèm)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Bản sao lưu cơ sở dữ liệu — KHÔNG đưa lên GitHub
+backups/
+*.dump
+*.sql.gz
+
+# Hệ điều hành & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

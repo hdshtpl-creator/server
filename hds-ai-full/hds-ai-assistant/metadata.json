@@ -1,0 +1,6 @@
+{
+  "name": "HDS AI Assistant",
+  "description": "Trợ lý AI Pháp Lý & Hệ thống Quản trị Nội bộ cho HDS Law Firm",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

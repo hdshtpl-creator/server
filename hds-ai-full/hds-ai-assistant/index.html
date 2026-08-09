@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Trợ lý AI pháp lý và hệ thống quản trị tri thức nội bộ của Công ty Luật HDS."
+    />
+    <meta name="theme-color" content="#1f3864" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f3864'/%3E%3Ctext x='16' y='22' font-family='system-ui,sans-serif' font-size='13' font-weight='700' fill='%23f9a825' text-anchor='middle'%3EHDS%3C/text%3E%3C/svg%3E"
+    />
+    <title>HDS AI — Trợ lý Pháp lý</title>
+    <script>
+      // Áp dụng chủ đề trước khi React dựng cây để tránh chớp trắng khi đang ở chế độ tối
+      try {
+        if (localStorage.getItem('hds_theme') === 'dark') {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
