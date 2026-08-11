@@ -16,6 +16,7 @@ import {
   Users2,
   Briefcase,
   Building,
+  MessageSquareWarning,
 } from 'lucide-react';
 
 type IconType = React.ComponentType<{ className?: string }>;
@@ -294,6 +295,14 @@ export const OverviewTab: React.FC = () => {
           icon={MessageSquareText}
           tone={TONES.indigo}
           onClick={() => setAdminTab('learn')}
+        />
+        <StatCard
+          label="Báo cáo chờ xử lý"
+          value={stats.bao_cao_cho_xu_ly}
+          hint="Người dùng báo chất lượng câu trả lời"
+          icon={MessageSquareWarning}
+          tone={TONES.rose}
+          onClick={() => setAdminTab('feedback')}
         />
         <StatCard
           label="Đã tiếp thu"

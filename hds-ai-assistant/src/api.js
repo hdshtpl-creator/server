@@ -400,6 +400,139 @@ export async function updateUserReviewPermission(uid, grant) {
   });
 }
 
+// ==================== 9. CÀI ĐẶT AI ====================
+
+export async function getSettings() {
+  return request('/settings', { method: 'GET' });
+}
+
+export async function updateSetting(key, value) {
+  return request(`/settings/${key}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  });
+}
+
+export async function resetSetting(key) {
+  return request(`/settings/${key}/reset`, { method: 'POST' });
+}
+
+// ==================== 10. BÁO CÁO CHẤT LƯỢNG ====================
+
+export async function sendFeedback({ message_id, rating, note }) {
+  return request('/feedback', {
+    method: 'POST',
+    body: JSON.stringify({
+      message_id: toIntOrNull(message_id),
+      rating,
+      note: note || undefined,
+    }),
+  });
+}
+
+export async function getFeedbackPending() {
+  return request('/feedback/pending', { method: 'GET' });
+}
+
+export async function reviewFeedback(fid, { action, corrected_answer, admin_note, access_level }) {
+  return request(`/feedback/${fid}/review`, {
+    method: 'POST',
+    body: JSON.stringify({
+      action,
+      corrected_answer: corrected_answer || undefined,
+      admin_note: admin_note || undefined,
+      access_level: access_level || 'internal',
+    }),
+  });
+}
+
+// ==================== 11. TỆP: TẢI LÊN / TẢI VỀ THẬT ====================
+
+// POST /files/upload (multipart) — gửi tệp thật, server tự trích văn bản + OCR.
+export async function uploadDocument({
+  file,
+  doc_type = 'other',
+  access_level = 'internal',
+  client_id,
+  matter_id,
+  department_id,
+  auto_approve = false,
+  onProgress,
+}) {
+  if (useMockBackend) {
+    await new Promise((r) => setTimeout(r, 400));
+    if (onProgress) onProgress(100);
+    mockState.stats.cho_duyet_nhan += auto_approve ? 0 : 1;
+    mockState.stats.da_duyet_nhan += auto_approve ? 1 : 0;
+    return {
+      ok: true, document_id: Date.now(), filename: file.name, bytes: file.size,
+      note: auto_approve ? 'Đã nạp vào kho.' : 'Đã vào hàng chờ duyệt nhãn.',
+    };
+  }
+
+  const form = new FormData();
+  form.append('file', file);
+  form.append('doc_type', doc_type);
+  form.append('access_level', access_level);
+  form.append('auto_approve', String(Boolean(auto_approve)));
+  if (client_id != null) form.append('client_id', String(client_id));
+  if (matter_id != null) form.append('matter_id', String(matter_id));
+  if (department_id != null) form.append('department_id', String(department_id));
+
+  // XMLHttpRequest để có tiến trình tải lên; KHÔNG tự đặt Content-Type (trình
+  // duyệt tự thêm boundary cho multipart).
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${apiBaseUrl}/files/upload`);
+    if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+    xhr.upload.onprogress = (e) => {
+      if (onProgress && e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* để rơi xuống nhánh lỗi */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(parseErrorBody(xhr.responseText, xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error('Không kết nối được máy chủ khi tải tệp lên.'));
+    xhr.send(form);
+  });
+}
+
+// GET /files/{id}/download → tải bản gốc về máy người dùng.
+export async function downloadDocument(docId, filename) {
+  if (useMockBackend) {
+    const blob = new Blob(
+      [`Bản demo — nội dung tệp gốc của tài liệu #${docId} sẽ tải về từ máy chủ thật.`],
+      { type: 'text/plain' }
+    );
+    triggerDownload(blob, filename || `tai-lieu-${docId}.txt`);
+    return;
+  }
+  const res = await fetch(`${apiBaseUrl}/files/${docId}/download`, {
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(text, res.status));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  triggerDownload(blob, filename || (m ? decodeURIComponent(m[1]) : `tai-lieu-${docId}`));
+}
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ==================== CHẾ ĐỘ GIẢ LẬP (MOCK) ====================
 // Dữ liệu mẫu bám sát seed thật của backend:
 //   - 4 bộ phận trong app/seed_departments.py
@@ -419,6 +552,7 @@ let mockState = {
     so_khach: 3,
     vu_viec_dang_mo: 4,
     so_bo_phan: 4,
+    bao_cao_cho_xu_ly: 2,
   },
   departments: [
     { id: 1, code: 'dn-dt', name: 'Doanh nghiệp - Đầu tư' },
@@ -634,7 +768,58 @@ let mockState = {
       can_open: true,
     },
   ],
+  settings: {
+    prompt_public:
+      'Bạn là trợ lý của Công ty Luật HDS, trả lời khách trên website. Chỉ dựa vào tài liệu tham khảo. Không đủ căn cứ thì nói rõ và mời liên hệ luật sư HDS.',
+    prompt_internal:
+      'Bạn là trợ lý pháp lý nội bộ của HDS, phục vụ luật sư và chuyên viên. Trả lời chuyên sâu, trích tới Điều/Khoản khi có. Kết quả là bản nháp; luật sư chịu trách nhiệm cuối cùng.',
+    prompt_portal:
+      'Bạn là trợ lý của HDS phục vụ khách hàng đã ký hợp đồng. Chỉ dùng tài liệu thuộc về khách đang đăng nhập. Không nhắc tới khách hàng khác.',
+    llm_temperature: '0.2',
+    retrieval_top_k: '8',
+    drive_map: JSON.stringify(
+      {
+        categories: {
+          'văn bản pháp luật': { doc_type: 'law', access_level: 'public' },
+          'bản án - án lệ': { doc_type: 'ban_an', access_level: 'internal' },
+          'hợp đồng mẫu': { doc_type: 'mau_hd', access_level: 'internal' },
+          'quan điểm pháp lý': { doc_type: 'advisory', access_level: 'internal' },
+        },
+        client_roots: ['hồ sơ khách hàng'],
+        client_subcategories: { 'dự án': 'ho_so_kh', 'hợp đồng': 'contract' },
+      },
+      null,
+      2
+    ),
+  },
+  feedback: [
+    {
+      id: 1,
+      message_id: 8001,
+      rating: 'bad',
+      note: 'Trả lời thiếu căn cứ điều khoản cụ thể, chỉ nói chung chung.',
+      created_at: '2026-08-10 14:20',
+      reporter: 'Nguyễn Chuyên Viên',
+      reporter_role: 'chuyen_vien',
+      question: 'Thời hạn góp vốn của công ty TNHH là bao lâu?',
+      answer:
+        'Công ty TNHH phải hoàn tất góp vốn trong thời hạn nhất định kể từ ngày được cấp Giấy chứng nhận đăng ký doanh nghiệp.',
+    },
+    {
+      id: 2,
+      message_id: 8002,
+      rating: 'good',
+      note: null,
+      created_at: '2026-08-10 15:05',
+      reporter: 'Phạm Trợ Lý',
+      reporter_role: 'tro_ly',
+      question: 'Người đại diện theo pháp luật có bắt buộc cư trú tại Việt Nam?',
+      answer:
+        'Theo khoản 3 Điều 12 Luật Doanh nghiệp 2020, doanh nghiệp phải bảo đảm luôn có ít nhất một người đại diện theo pháp luật cư trú tại Việt Nam.',
+    },
+  ],
   nextConversationId: 9000,
+  nextMessageId: 8100,
 };
 
 async function handleMockRequest(endpoint, options, headers) {
@@ -718,6 +903,7 @@ Với câu hỏi "${question}":
       ],
       conversation_id: toIntOrNull(body.conversation_id) ?? ++mockState.nextConversationId,
       latency_ms: 380,
+      message_id: ++mockState.nextMessageId,
     };
   }
 
@@ -728,6 +914,7 @@ Với câu hỏi "${question}":
       conversation_id: toIntOrNull(body.conversation_id) ?? ++mockState.nextConversationId,
       latency_ms: 290,
       quota: { used: 1, limit: me.monthly_quota || 50 },
+      message_id: ++mockState.nextMessageId,
     };
   }
 
@@ -903,6 +1090,55 @@ Với câu hỏi "${question}":
     const u = mockState.users.find((x) => String(x.id) === String(targetId));
     if (u) u.can_review = grant;
     return { ok: true, user_id: Number(targetId), can_review: grant };
+  }
+
+  // ---------- Cài đặt AI ----------
+  if (endpoint === '/settings' && method === 'GET') {
+    return {
+      settings: { ...mockState.settings },
+      editable_keys: Object.keys(mockState.settings),
+      defaults: { ...mockState.settings },
+    };
+  }
+
+  if (/^\/settings\/[^/]+$/.test(endpoint) && method === 'PUT') {
+    const key = endpoint.split('/')[2];
+    if (key === 'drive_map') JSON.parse(body.value);
+    mockState.settings[key] = body.value;
+    return { ok: true, key };
+  }
+
+  if (/^\/settings\/[^/]+\/reset$/.test(endpoint) && method === 'POST') {
+    const key = endpoint.split('/')[2];
+    return { ok: true, key, value: mockState.settings[key] };
+  }
+
+  // ---------- Báo cáo chất lượng ----------
+  if (endpoint === '/feedback' && method === 'POST') {
+    const item = {
+      id: Date.now(),
+      message_id: body.message_id,
+      rating: body.rating,
+      note: body.note || null,
+      created_at: new Date().toLocaleString('vi-VN'),
+      reporter: me.full_name,
+      reporter_role: me.role,
+      question: '(câu hỏi trong phiên chat hiện tại)',
+      answer: '(câu trả lời được báo cáo)',
+    };
+    mockState.feedback.unshift(item);
+    mockState.stats.bao_cao_cho_xu_ly += 1;
+    return { ok: true, feedback_id: item.id };
+  }
+
+  if (endpoint === '/feedback/pending') return [...mockState.feedback];
+
+  if (/^\/feedback\/[^/]+\/review$/.test(endpoint) && method === 'POST') {
+    const fid = endpoint.split('/')[2];
+    mockState.feedback = mockState.feedback.filter((f) => String(f.id) !== String(fid));
+    mockState.stats.bao_cao_cho_xu_ly = Math.max(0, mockState.stats.bao_cao_cho_xu_ly - 1);
+    if (body.action === 'apply') mockState.stats.da_hoc += 1;
+    return { ok: true, feedback_id: Number(fid), action: body.action };
   }
 
   throw new Error(`Đường dẫn chưa được hỗ trợ trong chế độ giả lập: ${endpoint}`);

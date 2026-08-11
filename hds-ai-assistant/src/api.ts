@@ -15,6 +15,9 @@ import type {
   Client,
   Client360Data,
   Department,
+  AppSettings,
+  FeedbackItem,
+  UploadResult,
 } from './types';
 
 export const setUserId = ApiJs.setUserId as (id: string | number) => void;
@@ -128,3 +131,51 @@ export const updateClientProfile = ApiJs.updateClientProfile as (
 ) => Promise<{ ok?: boolean; client_id?: number }>;
 
 export const getDepartments = ApiJs.getDepartments as () => Promise<Department[]>;
+
+// ---------- Cài đặt AI ----------
+export const getSettings = ApiJs.getSettings as () => Promise<AppSettings>;
+
+export const updateSetting = ApiJs.updateSetting as (
+  key: string,
+  value: string
+) => Promise<{ ok?: boolean; key?: string }>;
+
+export const resetSetting = ApiJs.resetSetting as (
+  key: string
+) => Promise<{ ok?: boolean; key?: string; value?: string }>;
+
+// ---------- Báo cáo chất lượng ----------
+export const sendFeedback = ApiJs.sendFeedback as (params: {
+  message_id: number;
+  rating: 'good' | 'bad';
+  note?: string;
+}) => Promise<{ ok?: boolean; feedback_id?: number }>;
+
+export const getFeedbackPending = ApiJs.getFeedbackPending as () => Promise<FeedbackItem[]>;
+
+export const reviewFeedback = ApiJs.reviewFeedback as (
+  fid: number,
+  data: {
+    action: 'apply' | 'reject';
+    corrected_answer?: string;
+    admin_note?: string;
+    access_level?: string;
+  }
+) => Promise<{ ok?: boolean; feedback_id?: number; action?: string; document_id?: number }>;
+
+// ---------- Tệp ----------
+export const uploadDocument = ApiJs.uploadDocument as (params: {
+  file: File;
+  doc_type?: string;
+  access_level?: string;
+  client_id?: number | null;
+  matter_id?: number | null;
+  department_id?: number | null;
+  auto_approve?: boolean;
+  onProgress?: (percent: number) => void;
+}) => Promise<UploadResult>;
+
+export const downloadDocument = ApiJs.downloadDocument as (
+  docId: number,
+  filename?: string
+) => Promise<void>;

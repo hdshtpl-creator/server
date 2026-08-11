@@ -19,14 +19,18 @@ Xác thực: đăng nhập JWT.
 """
 import json
 import os
+import re
+import uuid
+from datetime import datetime
+from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Depends
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Header, HTTPException, Depends, File, Form, UploadFile
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app import db, rag, auth
+from app import db, rag, auth, settings
 from app.admin_ui import ADMIN_HTML
 
 app = FastAPI(title="HDS AI", version="1.0")
@@ -579,12 +583,14 @@ def stats():
                 (SELECT count(*) FROM analysis_methods WHERE approved),
                 (SELECT count(*) FROM clients),
                 (SELECT count(*) FROM matters WHERE status <> 'hoan_thanh'),
-                (SELECT count(*) FROM departments)""")
+                (SELECT count(*) FROM departments),
+                (SELECT count(*) FROM answer_feedback WHERE status='pending')""")
             r = cur.fetchone()
     return {"tai_lieu": r[0], "da_duyet_nhan": r[1], "cho_duyet_nhan": r[2],
             "thieu_chu_so_huu": r[3], "so_doan": r[4], "hoi_thoai_cho_duyet": r[5],
             "da_hoc": r[6], "so_mau_phuong_phap": r[7],
-            "so_khach": r[8], "vu_viec_dang_mo": r[9], "so_bo_phan": r[10]}
+            "so_khach": r[8], "vu_viec_dang_mo": r[9], "so_bo_phan": r[10],
+            "bao_cao_cho_xu_ly": r[11]}
 
 
 @app.get("/health")
@@ -592,6 +598,293 @@ def health():
     from app.models import check_models
     st = check_models()
     return {"database": db.check_connection(), **st}
+
+
+# ---------- 8a. TỆP: TẢI LÊN / TẢI VỀ QUA WEB ----------
+# Khác /upload (nhận text đã trích sẵn, chỉ dùng được .txt): các endpoint dưới đây
+# nhận TỆP THẬT (pdf/docx/...), tự lưu vào đúng thư mục trên server, tự trích văn
+# bản + OCR nếu là bản scan, rồi nạp vào kho. Không cần SSH, không cần chép tay.
+
+DATA_RAW = Path(os.getenv("DATA_RAW", "./data/raw"))
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
+ALLOWED_UPLOAD_EXT = {".pdf", ".docx", ".txt", ".md"}
+
+
+def _safe_filename(name: str) -> str:
+    """Giữ tên gốc cho người dùng dễ nhận ra, nhưng loại ký tự nguy hiểm.
+    Chặn cả path traversal (../) vì tên tệp do người dùng gửi lên."""
+    name = Path(name or "").name                      # bỏ mọi thành phần đường dẫn
+    name = re.sub(r"[^\w\s.\-()À-ỹ]", "_", name, flags=re.UNICODE).strip()
+    return name[:150] or "tai_lieu"
+
+
+@app.post("/files/upload")
+async def files_upload(
+    file: UploadFile = File(...),
+    doc_type: str = Form("other"),
+    access_level: str = Form("internal"),
+    client_id: int | None = Form(None),
+    matter_id: int | None = Form(None),
+    department_id: int | None = Form(None),
+    auto_approve: bool = Form(False),
+    user=Depends(current_user),
+):
+    """Tải tệp lên từ giao diện web → lưu vào server → nạp vào kho tri thức.
+
+    auto_approve=true (chỉ người có quyền duyệt) → dùng được ngay.
+    Mặc định false → vào hàng chờ duyệt nhãn.
+    """
+    require(user, INTERNAL_ROLES)
+    if access_level == "client" and client_id is None:
+        raise HTTPException(400, "Tài liệu mức 'client' bắt buộc chọn khách hàng")
+    if auto_approve:
+        require_reviewer(user)
+
+    safe = _safe_filename(file.filename)
+    ext = Path(safe).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXT:
+        raise HTTPException(400, f"Chỉ nhận {', '.join(sorted(ALLOWED_UPLOAD_EXT))}")
+
+    # Cấu trúc lưu: data/raw/uploads/<doc_type>/<YYYY-MM>/<mã>_<tên gốc>
+    dest_dir = DATA_RAW / "uploads" / doc_type / datetime.now().strftime("%Y-%m")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{uuid.uuid4().hex[:8]}_{safe}"
+
+    size = 0
+    limit = MAX_UPLOAD_MB * 1024 * 1024
+    try:
+        with dest.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, f"Tệp vượt quá {MAX_UPLOAD_MB} MB")
+                out.write(chunk)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+
+    from app.ingest import ingest_file
+    try:
+        doc_id = ingest_file(
+            dest, doc_type=doc_type, access_level=access_level, client_id=client_id,
+            department_id=department_id, matter_id=matter_id,
+            approved=auto_approve, label_verified=auto_approve, source_kind="web",
+        )
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(500, f"Không nạp được tài liệu: {e}")
+
+    if not doc_id:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, "Không trích được nội dung văn bản từ tệp này")
+
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE documents SET uploaded_by=%s WHERE id=%s", (user["id"], doc_id))
+        db.audit(conn, user["id"], "web_upload", "documents", doc_id,
+                 {"file": safe, "bytes": size, "auto_approve": auto_approve})
+
+    return {"ok": True, "document_id": doc_id, "filename": safe, "bytes": size,
+            "stored_path": str(dest),
+            "note": "Đã nạp vào kho." if auto_approve else "Đã vào hàng chờ duyệt nhãn."}
+
+
+@app.get("/files/{doc_id}/download")
+def files_download(doc_id: int, user=Depends(current_user)):
+    """Tải bản gốc tài liệu. Quyền mở dùng CHUNG một hàm với cơ chế che tên
+    (rag.can_open_doc) nên không thể tải thứ mình không được xem."""
+    require(user, INTERNAL_ROLES)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT d.title, d.source_path, d.access_level, d.department_id,
+                                  d.doc_type, d.client_id, dep.name
+                             FROM documents d
+                             LEFT JOIN departments dep ON dep.id=d.department_id
+                            WHERE d.id=%s""", (doc_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Không thấy tài liệu")
+
+    doc = {"access_level": row[2], "department_id": row[3], "doc_type": row[4],
+           "client_id": row[5], "title": row[0], "department_name": row[6]}
+    if not rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"], doc):
+        raise HTTPException(403, "Tài khoản chưa có quyền mở tài liệu này")
+
+    if not row[1]:
+        raise HTTPException(404, "Tài liệu này không có tệp gốc (nạp từ hội thoại)")
+    path = Path(row[1])
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    # Chốt an toàn: đường dẫn phải nằm trong thư mục dữ liệu
+    data_root = (Path.cwd() / DATA_RAW).resolve()
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(data_root)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "Tệp gốc không còn trên máy chủ")
+
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "download_document", "documents", doc_id, {})
+    return FileResponse(resolved, filename=resolved.name.split("_", 1)[-1])
+
+
+# ---------- 8b. CÀI ĐẶT AI (phong cách tư vấn, bản đồ Drive) ----------
+@app.get("/settings")
+def settings_get(user=Depends(current_user)):
+    """Đọc toàn bộ cài đặt. Chỉ admin — đây là nơi chứa prompt và bản đồ Drive."""
+    require(user, {"admin"})
+    return {"settings": settings.get_all(), "editable_keys": sorted(settings.EDITABLE_KEYS),
+            "defaults": settings.DEFAULTS}
+
+
+class SettingIn(BaseModel):
+    value: str
+
+
+@app.put("/settings/{key}")
+def settings_put(key: str, body: SettingIn, user=Depends(current_user)):
+    """Sửa một cài đặt. Có hiệu lực ngay ở câu hỏi tiếp theo, không cần khởi động lại."""
+    require(user, {"admin"})
+    try:
+        settings.set(key, body.value, user["id"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except json.JSONDecodeError:
+        raise HTTPException(400, "Giá trị không phải JSON hợp lệ")
+    return {"ok": True, "key": key}
+
+
+@app.post("/settings/{key}/reset")
+def settings_reset(key: str, user=Depends(current_user)):
+    """Trả một cài đặt về giá trị mặc định trong mã nguồn."""
+    require(user, {"admin"})
+    if key not in settings.EDITABLE_KEYS:
+        raise HTTPException(400, f"Khoá cài đặt không hợp lệ: {key}")
+    return {"ok": True, "key": key, "value": settings.reset(key, user["id"])}
+
+
+# ---------- 8c. BÁO CÁO CHẤT LƯỢNG CÂU TRẢ LỜI ----------
+class FeedbackIn(BaseModel):
+    message_id: int
+    rating: str                  # 'good' | 'bad'
+    note: str | None = None
+
+
+@app.post("/feedback")
+def feedback_create(body: FeedbackIn, user=Depends(current_user)):
+    """MỌI vai đều gửi được — nút nhỏ cạnh câu trả lời của AI trong chat."""
+    if body.rating not in ("good", "bad"):
+        raise HTTPException(400, "rating chỉ nhận 'good' hoặc 'bad'")
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            # Chỉ cho báo cáo tin nhắn của AI, và phải thuộc hội thoại của chính mình
+            # (admin/ban_qt được báo cáo mọi tin) — chặn dò tin nhắn người khác.
+            cur.execute("""SELECT m.id FROM messages m
+                           JOIN conversations cv ON cv.id = m.conversation_id
+                           WHERE m.id=%s AND m.role='assistant'
+                             AND (cv.user_id=%s OR %s)""",
+                        (body.message_id, user["id"], user["role"] in ("admin", "ban_qt")))
+            if not cur.fetchone():
+                raise HTTPException(404, "Không thấy câu trả lời này trong hội thoại của bạn")
+            cur.execute("""INSERT INTO answer_feedback (message_id,user_id,rating,note)
+                           VALUES (%s,%s,%s,%s) RETURNING id""",
+                        (body.message_id, user["id"], body.rating, body.note))
+            fid = cur.fetchone()[0]
+        db.audit(conn, user["id"], "send_feedback", "messages", body.message_id,
+                 {"rating": body.rating})
+    return {"ok": True, "feedback_id": fid}
+
+
+@app.get("/feedback/pending")
+def feedback_pending(user=Depends(current_user), limit: int = 50):
+    """Hàng chờ xử lý báo cáo. Chỉ admin hoặc người được cấp quyền duyệt."""
+    require_reviewer(user)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT f.id, f.message_id, f.rating, f.note, f.created_at,
+                                  u.full_name, u.role, m.content,
+                                  (SELECT content FROM messages
+                                    WHERE conversation_id=m.conversation_id
+                                      AND role='user' AND id<m.id
+                                    ORDER BY id DESC LIMIT 1)
+                             FROM answer_feedback f
+                             JOIN messages m ON m.id=f.message_id
+                             LEFT JOIN users u ON u.id=f.user_id
+                            WHERE f.status='pending'
+                            ORDER BY f.created_at DESC LIMIT %s""", (limit,))
+            rows = cur.fetchall()
+    return [{"id": r[0], "message_id": r[1], "rating": r[2], "note": r[3],
+             "created_at": str(r[4]), "reporter": r[5], "reporter_role": r[6],
+             "answer": r[7], "question": r[8]} for r in rows]
+
+
+class FeedbackReviewIn(BaseModel):
+    action: str                          # 'apply' | 'reject'
+    corrected_answer: str | None = None  # bản sửa của admin (khi apply)
+    admin_note: str | None = None
+    access_level: str = "internal"
+
+
+@app.post("/feedback/{fid}/review")
+def feedback_review(fid: int, body: FeedbackReviewIn, user=Depends(current_user)):
+    """Admin xử lý báo cáo.
+
+    apply  → nạp câu hỏi + câu trả lời (đã sửa nếu có) thành tri thức lâu dài.
+    reject → chỉ đóng báo cáo, không nạp gì.
+    """
+    require_reviewer(user)
+    if body.action not in ("apply", "reject"):
+        raise HTTPException(400, "action chỉ nhận 'apply' hoặc 'reject'")
+
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT f.message_id, m.content,
+                                  (SELECT content FROM messages
+                                    WHERE conversation_id=m.conversation_id
+                                      AND role='user' AND id<m.id
+                                    ORDER BY id DESC LIMIT 1)
+                             FROM answer_feedback f JOIN messages m ON m.id=f.message_id
+                            WHERE f.id=%s AND f.status='pending'""", (fid,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Không thấy báo cáo đang chờ xử lý")
+    message_id, answer_text, question = row
+
+    doc_id = None
+    if body.action == "apply":
+        final = (body.corrected_answer or answer_text).strip()
+        if not final:
+            raise HTTPException(400, "Nội dung nạp vào bộ nhớ không được để trống")
+        content = f"HỎI: {question}\n\nTRẢ LỜI:\n{final}"
+        from app.models import embed
+        vec = embed(content)
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""INSERT INTO documents (title,doc_type,access_level,approved,label_verified)
+                               VALUES (%s,'advisory',%s,true,true) RETURNING id""",
+                            (f"Hỏi đáp (từ báo cáo): {(question or '')[:60]}", body.access_level))
+                doc_id = cur.fetchone()[0]
+                cur.execute("""INSERT INTO chunks (document_id,chunk_index,content,access_level,doc_type,embedding)
+                               VALUES (%s,0,%s,%s,'advisory',%s)""",
+                            (doc_id, content, body.access_level, json.dumps(vec)))
+                cur.execute("""UPDATE messages SET review_status='edited', reviewed_by=%s,
+                               reviewed_at=now(), edited_content=%s, promoted_doc_id=%s
+                               WHERE id=%s""",
+                            (user["id"], body.corrected_answer, doc_id, message_id))
+
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE answer_feedback
+                              SET status=%s, admin_note=%s, reviewed_by=%s, reviewed_at=now()
+                            WHERE id=%s""",
+                        ("applied" if body.action == "apply" else "rejected",
+                         body.admin_note, user["id"], fid))
+        db.audit(conn, user["id"], "review_feedback", "answer_feedback", fid,
+                 {"action": body.action, "document_id": doc_id})
+
+    return {"ok": True, "feedback_id": fid, "action": body.action, "document_id": doc_id}
 
 
 # ---------- 9. Giao diện quản trị ----------

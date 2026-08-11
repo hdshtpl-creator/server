@@ -19,7 +19,6 @@ export const ChatLayout: React.FC = () => {
     setConvServerId,
     setConvTempFile,
     currentUser,
-    isMockMode,
   } = useApp();
 
   const [inputQuestion, setInputQuestion] = useState('');
@@ -35,9 +34,9 @@ export const ChatLayout: React.FC = () => {
 
   const isClient = isClientRole(currentUser?.role);
   const serverConvId = activeConversation?.server_id;
-  // Backend yêu cầu conversation_id kiểu int cho POST /upload, mã này chỉ có
-  // sau câu hỏi đầu tiên. Giả lập thì không ràng buộc.
-  const canUpload = !isClient && (isMockMode || Boolean(serverConvId));
+  // Nhân viên nội bộ luôn tải được: chế độ "lưu vào kho" không cần mã hội thoại,
+  // chỉ chế độ "dùng tạm" cần (modal tự báo nếu chưa có).
+  const canUpload = !isClient;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -94,6 +93,7 @@ export const ChatLayout: React.FC = () => {
         sources: response.sources,
         timestamp: nowLabel(),
         latency_ms: response.latency_ms,
+        serverMessageId: response.message_id,
       });
     } catch (err: any) {
       const errMsg = err?.message || 'Có lỗi xảy ra khi hỏi AI.';

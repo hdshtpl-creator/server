@@ -10,29 +10,21 @@ Hỗ trợ thêm:
 """
 import json
 
-from app import db
+from app import db, settings
 from app.models import embed, llm
 
 TOP_K = 8
 
-SYSTEM_PROMPTS = {
-    "public": ("Bạn là trợ lý của Công ty Luật HDS, trả lời khách trên website. "
-               "Chỉ dựa vào TÀI LIỆU THAM KHẢO bên dưới. Không đủ căn cứ thì nói rõ. "
-               "Trả lời khái quát, luôn kết thúc bằng gợi ý liên hệ luật sư HDS. "
-               "Không bịa điều luật, không nêu số hiệu văn bản nếu không có trong tài liệu."),
-    "internal": ("Bạn là trợ lý pháp lý nội bộ của HDS, phục vụ luật sư và chuyên viên. "
-                 "Chỉ dựa vào TÀI LIỆU THAM KHẢO. Trả lời chuyên sâu, trích tới Điều/Khoản khi có. "
-                 "Nêu rõ điểm nào chắc chắn, điểm nào cần luật sư kiểm chứng. "
-                 "Kết quả là bản nháp; luật sư rà soát và chịu trách nhiệm cuối cùng."),
-    "portal": ("Bạn là trợ lý của HDS phục vụ khách hàng đã ký hợp đồng. "
-               "Chỉ dựa vào TÀI LIỆU THAM KHẢO — chỉ thuộc về khách đang đăng nhập. "
-               "Không nhắc tới bất kỳ khách hàng nào khác. Không đủ căn cứ thì đề nghị liên hệ luật sư."),
-}
 CHANNEL_LEVEL = {"public": "public", "internal": "internal", "portal": "client"}
 
+# Phong cách tư vấn (system prompt) KHÔNG còn nằm cứng ở đây nữa — admin sửa
+# trên web, lưu ở bảng app_settings. Xem app/settings.py (khoá prompt_<kênh>).
 
-def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False, top_k=TOP_K):
+
+def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False, top_k=None):
     """Tìm đoạn liên quan. SQL KHÔNG lọc quyền — RLS tự lo (kể cả theo phòng)."""
+    if top_k is None:
+        top_k = settings.get_int("retrieval_top_k", TOP_K)
     qvec = embed(question)
     level = CHANNEL_LEVEL[channel]
     sql = """SELECT c.id, c.content, c.document_id, d.title,
@@ -136,12 +128,25 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
     if channel == "portal" and client_id is None:
         raise ValueError("Kênh portal bắt buộc có client_id")
 
-    chunks = retrieve(question, channel, client_id, dept_ids=dept_ids, is_banqt=is_banqt)
+    # Đọc cài đặt MỘT LẦN cho cả lượt hỏi (prompt, nhiệt độ, top_k) thay vì mở
+    # ba kết nối CSDL riêng. Vẫn lấy tươi mỗi câu hỏi nên admin sửa là ăn ngay.
+    cfg = settings.get_all()
+
+    def _num(key, fallback, cast):
+        try:
+            return cast(float(cfg.get(key)))
+        except (TypeError, ValueError):
+            return fallback
+
+    chunks = retrieve(question, channel, client_id, dept_ids=dept_ids, is_banqt=is_banqt,
+                      top_k=_num("retrieval_top_k", TOP_K, int))
     temp_chunks = get_temp_context(conversation_id, question) if (use_temp and conversation_id) else None
     method = find_method(question) if use_method else None
 
     prompt = build_prompt(question, chunks, temp_chunks, method)
-    text, latency = llm(prompt, system=SYSTEM_PROMPTS[channel], prefer=prefer)
+    system_prompt = cfg.get(f"prompt_{channel}") or settings.DEFAULTS.get(f"prompt_{channel}", "")
+    text, latency = llm(prompt, system=system_prompt, prefer=prefer,
+                        temperature=_num("llm_temperature", 0.2, float))
 
     msg_id = None
     if conversation_id:

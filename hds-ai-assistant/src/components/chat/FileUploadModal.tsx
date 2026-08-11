@@ -1,19 +1,24 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
+import type { Client } from '../../types';
+import { DOC_TYPES, ACCESS_LEVELS } from '../../constants';
 import { Upload, FileText, AlertCircle, Timer, Database, X, Loader2 } from 'lucide-react';
 
 interface FileUploadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Mã hội thoại do backend cấp (int). null nếu chưa hỏi câu nào. */
   conversationId: number | null;
-  /** Mã cục bộ, dùng để gắn tài liệu tạm vào đúng cuộc trò chuyện trên giao diện. */
   localConversationId: string;
 }
 
-const TEXT_EXTENSIONS = ['txt', 'md', 'csv'];
-const MAX_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB — nội dung được gửi thẳng trong thân JSON
+const TEMP_EXTENSIONS = ['txt', 'md', 'csv'];
+const SAVE_EXTENSIONS = ['pdf', 'docx', 'txt', 'md'];
+const TEMP_MAX = 2 * 1024 * 1024;
+const SAVE_MAX = 50 * 1024 * 1024;
+
+const inputClass =
+  'w-full px-3 py-2 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl text-xs focus:ring-2 focus:ring-hds-blue focus:outline-none';
 
 export const FileUploadModal: React.FC<FileUploadModalProps> = ({
   isOpen,
@@ -21,14 +26,28 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
   conversationId,
   localConversationId,
 }) => {
-  const { showToast, setConvTempFile } = useApp();
+  const { showToast, setConvTempFile, currentUser } = useApp();
+  const canReview = Boolean(currentUser?.can_review) || currentUser?.role === 'admin';
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileContent, setFileContent] = useState<string>('');
   const [isReading, setIsReading] = useState(false);
   const [mode, setMode] = useState<'temp' | 'save'>('temp');
   const [isUploading, setIsUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string>('');
+
+  const [docType, setDocType] = useState('other');
+  const [accessLevel, setAccessLevel] = useState('internal');
+  const [clientId, setClientId] = useState('');
+  const [autoApprove, setAutoApprove] = useState(false);
+  const [clients, setClients] = useState<Client[]>([]);
+
+  useEffect(() => {
+    if (isOpen && mode === 'save' && clients.length === 0) {
+      api.getClients().then(setClients).catch(() => {});
+    }
+  }, [isOpen, mode, clients.length]);
 
   if (!isOpen) return null;
 
@@ -37,6 +56,11 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
     setFileContent('');
     setErrorMsg('');
     setMode('temp');
+    setProgress(0);
+    setDocType('other');
+    setAccessLevel('internal');
+    setClientId('');
+    setAutoApprove(false);
   };
 
   const handleClose = () => {
@@ -44,85 +68,94 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
     onClose();
   };
 
+  const extAllowed = mode === 'temp' ? TEMP_EXTENSIONS : SAVE_EXTENSIONS;
+  const maxSize = mode === 'temp' ? TEMP_MAX : SAVE_MAX;
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setErrorMsg('');
     setFileContent('');
 
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
-    if (!TEXT_EXTENSIONS.includes(ext)) {
+    if (!extAllowed.includes(ext)) {
       setSelectedFile(null);
-      setErrorMsg(
-        `Hệ thống chỉ đọc được tệp văn bản thuần (${TEXT_EXTENSIONS.join(', ')}). ` +
-          'Với PDF hoặc Word, hãy dùng luồng nạp tài liệu của backend (app/ingest.py).'
-      );
+      setErrorMsg(`Chế độ này chỉ nhận: ${extAllowed.map((x) => `.${x}`).join(', ')}`);
       return;
     }
-
-    if (file.size > MAX_SIZE_BYTES) {
+    if (file.size > maxSize) {
       setSelectedFile(null);
       setErrorMsg(
-        `Tệp nặng ${(file.size / 1024 / 1024).toFixed(1)} MB, vượt giới hạn 2 MB cho mỗi lần tải lên.`
+        `Tệp nặng ${(file.size / 1024 / 1024).toFixed(1)} MB, vượt giới hạn ${(
+          maxSize /
+          1024 /
+          1024
+        ).toFixed(0)} MB.`
       );
       return;
     }
 
     setSelectedFile(file);
-    setIsReading(true);
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setFileContent((event.target?.result as string) || '');
-      setIsReading(false);
-    };
-    reader.onerror = () => {
-      setIsReading(false);
-      setSelectedFile(null);
-      setErrorMsg('Không đọc được nội dung tệp. Hãy thử lại hoặc chọn tệp khác.');
-    };
-    reader.readAsText(file);
+    // Chế độ tạm cần nội dung văn bản để làm ngữ cảnh trong phiên chat.
+    if (mode === 'temp') {
+      setIsReading(true);
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setFileContent((ev.target?.result as string) || '');
+        setIsReading(false);
+      };
+      reader.onerror = () => {
+        setIsReading(false);
+        setSelectedFile(null);
+        setErrorMsg('Không đọc được nội dung tệp.');
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const switchMode = (m: 'temp' | 'save') => {
+    setMode(m);
+    setSelectedFile(null);
+    setFileContent('');
+    setErrorMsg('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile) {
-      setErrorMsg('Vui lòng chọn tệp văn bản.');
+      setErrorMsg('Vui lòng chọn tệp.');
       return;
     }
-    if (isReading) return;
-    if (!fileContent.trim()) {
-      setErrorMsg('Tệp không có nội dung văn bản để nạp.');
+    if (accessLevel === 'client' && mode === 'save' && !clientId) {
+      setErrorMsg('Mức "Hồ sơ khách hàng" bắt buộc chọn khách hàng.');
       return;
     }
 
     setIsUploading(true);
     setErrorMsg('');
+    setProgress(0);
     try {
-      await api.uploadFile({
-        conversation_id: conversationId,
-        filename: selectedFile.name,
-        content: fileContent,
-        mode,
-      });
-
       if (mode === 'temp') {
-        setConvTempFile(localConversationId, {
+        await api.uploadFile({
+          conversation_id: conversationId,
           filename: selectedFile.name,
           content: fileContent,
+          mode: 'temp',
         });
-        showToast(
-          `Đã nạp tài liệu tạm "${selectedFile.name}". Các câu hỏi tiếp theo sẽ tự tham chiếu tệp này.`,
-          'success'
-        );
+        setConvTempFile(localConversationId, { filename: selectedFile.name, content: fileContent });
+        showToast(`Đã nạp tài liệu tạm "${selectedFile.name}".`, 'success');
       } else {
-        showToast(
-          `Đã gửi "${selectedFile.name}" vào hàng chờ duyệt. Duyệt xong mới thành tri thức lâu dài.`,
-          'success'
-        );
+        const res = await api.uploadDocument({
+          file: selectedFile,
+          doc_type: docType,
+          access_level: accessLevel,
+          client_id: clientId ? Number(clientId) : null,
+          auto_approve: autoApprove && canReview,
+          onProgress: setProgress,
+        });
+        showToast(res.note || `Đã tải lên "${selectedFile.name}".`, 'success');
       }
-
       handleClose();
     } catch (err: any) {
       const msg = err?.message || 'Lỗi khi tải tệp lên.';
@@ -157,15 +190,15 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
       >
         <div className="flex items-start justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-hds-soft dark:bg-hds-navy text-hds-navy dark:text-blue-200 rounded-lg">
+            <span className="p-2 bg-hds-soft dark:bg-hds-navy text-hds-navy dark:text-blue-200 rounded-lg">
               <Upload className="w-5 h-5" />
-            </div>
+            </span>
             <div>
               <h3 id="upload-modal-title" className="font-bold text-base">
-                Tải tài liệu lên cuộc trò chuyện
+                Tải tài liệu lên
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Nạp nội dung văn bản để AI phân tích
+                Dùng tạm trong phiên, hoặc lưu vào kho tri thức
               </p>
             </div>
           </div>
@@ -179,15 +212,61 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4 text-xs">
+          {/* Chế độ */}
+          <fieldset>
+            <legend className="font-semibold text-slate-700 dark:text-slate-300 mb-2">
+              Chế độ xử lý
+            </legend>
+            <div className="grid grid-cols-1 gap-2.5">
+              <label className={radioCard(mode === 'temp', 'navy')}>
+                <input
+                  type="radio"
+                  name="upload_mode"
+                  checked={mode === 'temp'}
+                  onChange={() => switchMode('temp')}
+                  className="mt-1 accent-[#1f3864]"
+                />
+                <div className="space-y-0.5">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <Timer className="w-3.5 h-3.5 text-hds-blue" />
+                    Dùng xong bỏ
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                    Chỉ ghi nhớ trong phiên trò chuyện này, tự xoá sau 6 giờ. Nhận tệp văn bản thuần.
+                  </p>
+                </div>
+              </label>
+
+              <label className={radioCard(mode === 'save', 'green')}>
+                <input
+                  type="radio"
+                  name="upload_mode"
+                  checked={mode === 'save'}
+                  onChange={() => switchMode('save')}
+                  className="mt-1 accent-[#2e7d32]"
+                />
+                <div className="space-y-0.5">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <Database className="w-3.5 h-3.5 text-hds-green" />
+                    Lưu vào kho
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                    Tải PDF/Word lên máy chủ, tự trích văn bản và OCR tiếng Việt, rồi nạp vào tri thức.
+                  </p>
+                </div>
+              </label>
+            </div>
+          </fieldset>
+
           {/* Chọn tệp */}
           <div>
             <span className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-              Chọn tệp văn bản ({TEXT_EXTENSIONS.map((e) => `.${e}`).join(', ')})
+              Chọn tệp ({extAllowed.map((x) => `.${x}`).join(', ')})
             </span>
             <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-4 text-center hover:border-hds-navy dark:hover:border-blue-500 transition-colors bg-slate-50/60 dark:bg-slate-800/40">
               <input
                 type="file"
-                accept={TEXT_EXTENSIONS.map((e) => `.${e}`).join(',')}
+                accept={extAllowed.map((x) => `.${x}`).join(',')}
                 onChange={handleFileChange}
                 className="sr-only"
                 id="file-input-chat"
@@ -202,78 +281,106 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
                 </span>
                 <span className="text-[11px] text-slate-400 dark:text-slate-500">
                   {selectedFile
-                    ? `${(selectedFile.size / 1024).toFixed(1)} KB${
-                        isReading ? ' — đang đọc nội dung…' : ''
-                      }`
-                    : 'Tối đa 2 MB'}
+                    ? `${(selectedFile.size / 1024).toFixed(1)} KB${isReading ? ' — đang đọc…' : ''}`
+                    : `Tối đa ${(maxSize / 1024 / 1024).toFixed(0)} MB`}
                 </span>
               </label>
             </div>
-
-            {errorMsg && (
-              <div className="mt-2 p-2.5 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 rounded-lg text-amber-900 dark:text-amber-200 flex items-start gap-2 text-[11px]">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
           </div>
 
-          {/* Chế độ xử lý */}
-          <fieldset>
-            <legend className="font-semibold text-slate-700 dark:text-slate-300 mb-2">
-              Chế độ xử lý tài liệu
-            </legend>
-
-            <div className="grid grid-cols-1 gap-2.5">
-              <label className={radioCard(mode === 'temp', 'navy')}>
-                <input
-                  type="radio"
-                  name="upload_mode"
-                  checked={mode === 'temp'}
-                  onChange={() => setMode('temp')}
-                  className="mt-1 accent-[#1f3864]"
-                />
-                <div className="space-y-0.5">
-                  <div className="font-bold flex items-center gap-1.5">
-                    <Timer className="w-3.5 h-3.5 text-hds-blue" />
-                    <span>Dùng xong bỏ</span>
-                    <code className="font-mono font-normal text-[10px] text-slate-500 dark:text-slate-400">
-                      mode=temp
-                    </code>
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
-                    Chỉ ghi nhớ trong phiên trò chuyện này và tự xoá sau 6 giờ. Không vào kho tri
-                    thức chung.
-                  </p>
+          {/* Phân loại — chỉ ở chế độ lưu vào kho */}
+          {mode === 'save' && (
+            <div className="space-y-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 border border-slate-200 dark:border-slate-700">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Loại tài liệu
+                  </label>
+                  <select
+                    value={docType}
+                    onChange={(e) => setDocType(e.target.value)}
+                    className={inputClass}
+                  >
+                    {DOC_TYPES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              </label>
-
-              <label className={radioCard(mode === 'save', 'green')}>
-                <input
-                  type="radio"
-                  name="upload_mode"
-                  checked={mode === 'save'}
-                  onChange={() => setMode('save')}
-                  className="mt-1 accent-[#2e7d32]"
-                />
-                <div className="space-y-0.5">
-                  <div className="font-bold flex items-center gap-1.5">
-                    <Database className="w-3.5 h-3.5 text-hds-green" />
-                    <span>Lưu vào kho</span>
-                    <code className="font-mono font-normal text-[10px] text-slate-500 dark:text-slate-400">
-                      mode=save
-                    </code>
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
-                    Chuyển vào hàng chờ kiểm duyệt. Sau khi người có quyền duyệt gán nhãn, tài liệu
-                    mới thành tri thức lâu dài của AI.
-                  </p>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Mức truy cập
+                  </label>
+                  <select
+                    value={accessLevel}
+                    onChange={(e) => setAccessLevel(e.target.value)}
+                    className={inputClass}
+                  >
+                    {ACCESS_LEVELS.map((a) => (
+                      <option key={a.value} value={a.value}>
+                        {a.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              </label>
+              </div>
+
+              {accessLevel === 'client' && (
+                <div>
+                  <label className="flex items-center justify-between font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <span>Khách hàng sở hữu</span>
+                    <span className="text-[10px] text-hds-red dark:text-red-400 font-bold uppercase">
+                      Bắt buộc
+                    </span>
+                  </label>
+                  <select
+                    value={clientId}
+                    onChange={(e) => setClientId(e.target.value)}
+                    className={`${inputClass} ${
+                      !clientId ? 'border-red-400 dark:border-red-700' : ''
+                    }`}
+                  >
+                    <option value="">— Chọn khách hàng —</option>
+                    {clients.map((c) => (
+                      <option key={c.id} value={String(c.id)}>
+                        [{c.code}] {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {canReview && (
+                <label className="flex items-center gap-2 cursor-pointer text-[11px] text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={autoApprove}
+                    onChange={(e) => setAutoApprove(e.target.checked)}
+                    className="rounded accent-[#1f3864]"
+                  />
+                  <span>Duyệt luôn, không qua hàng chờ (dùng được ngay)</span>
+                </label>
+              )}
             </div>
-          </fieldset>
+          )}
 
-          {/* Hành động */}
+          {errorMsg && (
+            <div className="p-2.5 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-lg text-red-800 dark:text-red-200 flex items-start gap-2 text-[11px]">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-px" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {isUploading && mode === 'save' && progress > 0 && progress < 100 && (
+            <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-hds-navy transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
@@ -295,7 +402,7 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
               ) : (
                 <>
                   <Upload className="w-4 h-4" />
-                  <span>Nạp tài liệu</span>
+                  <span>{mode === 'temp' ? 'Nạp tài liệu tạm' : 'Tải lên kho'}</span>
                 </>
               )}
             </button>

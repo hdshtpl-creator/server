@@ -88,7 +88,11 @@ export const ConversationSidebar: React.FC = () => {
                 )}
 
                 <button
-                  onClick={() => deleteConversation(conv.id)}
+                  onClick={() => {
+                    if (window.confirm(`Xoá cuộc trò chuyện "${conv.title}"?`)) {
+                      deleteConversation(conv.id);
+                    }
+                  }}
                   className="p-1.5 mr-1 rounded-lg text-slate-500 hover:text-red-300 hover:bg-red-500/15 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity shrink-0"
                   title="Xoá cuộc trò chuyện"
                   aria-label={`Xoá cuộc trò chuyện ${conv.title}`}

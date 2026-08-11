@@ -188,7 +188,9 @@ done
 
 # ---------- 5. Môi trường Python + nạp schema + seed ----------
 c_info "5/8  Cài thư viện Python & nạp CSDL"
-cat > "$BACKEND_DIR/requirements.txt" <<'REQ'
+# requirements.txt đi kèm repo là nguồn chuẩn; chỉ sinh dự phòng nếu thiếu.
+if [ ! -f "$BACKEND_DIR/requirements.txt" ]; then
+  cat > "$BACKEND_DIR/requirements.txt" <<'REQ'
 psycopg[binary]==3.2.3
 python-dotenv==1.0.1
 requests==2.32.3
@@ -200,13 +202,15 @@ pdf2image==1.17.0
 Pillow==11.0.0
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+python-multipart==0.0.20
 pydantic==2.10.4
 bcrypt==4.2.1
 PyJWT==2.10.1
 google-api-python-client==2.156.0
 google-auth==2.37.0
 REQ
-chown "$SERVICE_USER":"$SERVICE_USER" "$BACKEND_DIR/requirements.txt"
+  chown "$SERVICE_USER":"$SERVICE_USER" "$BACKEND_DIR/requirements.txt"
+fi
 
 run_as "cd '$BACKEND_DIR' && { [ -d .venv ] || python3 -m venv .venv; } && \
         .venv/bin/pip install -q --upgrade pip && \

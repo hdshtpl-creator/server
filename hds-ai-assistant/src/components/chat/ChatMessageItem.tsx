@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import type { ChatMessage } from '../../types';
+import { useApp } from '../../context/AppContext';
+import * as api from '../../api';
 import {
   User,
   Bot,
@@ -10,6 +12,11 @@ import {
   Sliders,
   Clock,
   AlertTriangle,
+  ThumbsUp,
+  ThumbsDown,
+  Send,
+  X,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface ChatMessageItemProps {
@@ -17,9 +24,30 @@ interface ChatMessageItemProps {
 }
 
 export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => {
+  const { showToast } = useApp();
   const isUser = message.sender === 'user';
   const isError = Boolean(message.isError);
   const [showSources, setShowSources] = useState(true);
+
+  const canReport = !isUser && !isError && typeof message.serverMessageId === 'number';
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+
+  const submitFeedback = async (rating: 'good' | 'bad', withNote = '') => {
+    if (!message.serverMessageId || sending) return;
+    setSending(true);
+    try {
+      await api.sendFeedback({ message_id: message.serverMessageId, rating, note: withNote });
+      setSent(true);
+      setNoteOpen(false);
+    } catch (err: any) {
+      showToast(err?.message || 'Không gửi được báo cáo.', 'error');
+    } finally {
+      setSending(false);
+    }
+  };
 
   const rowBg = isError
     ? 'bg-red-50/70 dark:bg-red-950/30'
@@ -28,9 +56,10 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
     : 'bg-white dark:bg-slate-900';
 
   return (
-    <div className={`py-5 px-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 ${rowBg}`}>
+    <div
+      className={`group py-5 px-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 ${rowBg}`}
+    >
       <div className="max-w-3xl mx-auto flex items-start gap-3.5">
-        {/* Ảnh đại diện */}
         <div
           className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${
             isError
@@ -49,7 +78,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
           )}
         </div>
 
-        {/* Nội dung */}
         <div className="flex-1 space-y-2 min-w-0">
           <div className="flex items-center justify-between gap-3 text-xs">
             <span className="font-semibold text-slate-800 dark:text-slate-100">
@@ -67,7 +95,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             </div>
           </div>
 
-          {/* Nhãn tuỳ chọn đã áp dụng */}
           {(message.used_method || message.used_temp_file) && (
             <div className="flex flex-wrap gap-1.5 text-[10px] font-medium">
               {message.used_method && (
@@ -85,7 +112,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             </div>
           )}
 
-          {/* Nội dung tin nhắn */}
           <div
             className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${
               isError
@@ -96,7 +122,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             {message.text}
           </div>
 
-          {/* Nguồn trích dẫn */}
           {!isUser && message.sources && message.sources.length > 0 && (
             <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
               <button
@@ -167,6 +192,73 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                     );
                   })}
                 </ul>
+              )}
+            </div>
+          )}
+
+          {/* Báo cáo chất lượng câu trả lời */}
+          {canReport && (
+            <div className="pt-1">
+              {sent ? (
+                <span className="inline-flex items-center gap-1 text-[11px] text-hds-green dark:text-emerald-400 font-medium">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Đã gửi báo cáo, cảm ơn bạn.
+                </span>
+              ) : noteOpen ? (
+                <div className="space-y-2 max-w-md">
+                  <textarea
+                    rows={2}
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    autoFocus
+                    placeholder="Sai ở đâu? Thiếu căn cứ nào? (không bắt buộc)"
+                    className="w-full px-2.5 py-1.5 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-lg text-xs focus:ring-2 focus:ring-hds-blue focus:outline-none resize-y"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => submitFeedback('bad', note)}
+                      disabled={sending}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white bg-hds-red hover:bg-red-800 disabled:opacity-50 transition-colors"
+                    >
+                      <Send className="w-3 h-3" />
+                      Gửi báo cáo
+                    </button>
+                    <button
+                      onClick={() => {
+                        setNoteOpen(false);
+                        setNote('');
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                      Huỷ
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1 opacity-40 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 mr-0.5">
+                    Câu trả lời này thế nào?
+                  </span>
+                  <button
+                    onClick={() => submitFeedback('good')}
+                    disabled={sending}
+                    title="Câu trả lời tốt"
+                    aria-label="Báo cáo: câu trả lời tốt"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-hds-green hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                  >
+                    <ThumbsUp className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setNoteOpen(true)}
+                    disabled={sending}
+                    title="Câu trả lời chưa tốt"
+                    aria-label="Báo cáo: câu trả lời chưa tốt"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-hds-red hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
+                  >
+                    <ThumbsDown className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               )}
             </div>
           )}

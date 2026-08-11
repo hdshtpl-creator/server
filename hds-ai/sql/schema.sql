@@ -319,3 +319,36 @@ SELECT d.access_level, d.doc_type,
        count(DISTINCT d.id) FILTER (WHERE NOT d.label_verified) AS chua_duyet
 FROM documents d LEFT JOIN chunks c ON c.document_id=d.id
 GROUP BY 1,2 ORDER BY 1,2;
+
+-- =============================================================
+-- CÀI ĐẶT ỨNG DỤNG (admin sửa trên web, không cần sửa code)
+-- Chứa: phong cách tư vấn / system prompt cho từng kênh,
+--        bản đồ thư mục Drive → nhãn tài liệu, tham số sinh câu trả lời.
+-- =============================================================
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_by INT REFERENCES users(id),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- =============================================================
+-- BÁO CÁO CHẤT LƯỢNG CÂU TRẢ LỜI
+-- Mọi vai đều gửi được (nút nhỏ cạnh câu trả lời của AI).
+-- Chỉ admin/người có quyền duyệt được xem và xử lý.
+-- =============================================================
+CREATE TABLE IF NOT EXISTS answer_feedback (
+  id          BIGSERIAL PRIMARY KEY,
+  message_id  BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id     INT REFERENCES users(id),
+  rating      TEXT NOT NULL CHECK (rating IN ('good','bad')),
+  note        TEXT,
+  status      TEXT NOT NULL DEFAULT 'pending'
+              CHECK (status IN ('pending','applied','rejected')),
+  admin_note  TEXT,
+  reviewed_by INT REFERENCES users(id),
+  reviewed_at TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_pending ON answer_feedback(status) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS idx_feedback_msg ON answer_feedback(message_id);

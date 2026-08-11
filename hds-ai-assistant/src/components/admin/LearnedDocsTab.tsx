@@ -3,15 +3,27 @@ import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { LearnedDocument } from '../../types';
 import { DOC_TYPES, DOC_TYPE_LABELS, ACCESS_LEVEL_BADGES } from '../../constants';
-import { BookOpen, Search, Filter, RefreshCw, Building2 } from 'lucide-react';
+import { BookOpen, Search, Filter, RefreshCw, Building2, Download } from 'lucide-react';
 
 export const LearnedDocsTab: React.FC = () => {
   const { showToast } = useApp();
   const [docs, setDocs] = useState<LearnedDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [docTypeFilter, setDocTypeFilter] = useState('');
+
+  const handleDownload = async (docId: number, title: string) => {
+    setDownloadingId(docId);
+    try {
+      await api.downloadDocument(docId, title);
+    } catch (err: any) {
+      showToast(err?.message || 'Không tải được tệp gốc.', 'error');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const fetchLearnedDocs = async (q = searchQuery, docType = docTypeFilter) => {
     setIsLoading(true);
@@ -122,6 +134,7 @@ export const LearnedDocsTab: React.FC = () => {
                   <th scope="col" className="p-4">Mức truy cập</th>
                   <th scope="col" className="p-4 text-center">Số đoạn</th>
                   <th scope="col" className="p-4">Ngày nạp</th>
+                  <th scope="col" className="p-4 text-right">Tải về</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -177,6 +190,22 @@ export const LearnedDocsTab: React.FC = () => {
 
                       <td className="p-4 text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">
                         {doc.created_at}
+                      </td>
+
+                      <td className="p-4 text-right">
+                        <button
+                          onClick={() => handleDownload(doc.id, doc.title)}
+                          disabled={downloadingId === doc.id}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg border border-blue-200 dark:border-slate-700 text-[11px] disabled:opacity-50 transition-colors"
+                          title="Tải bản gốc về máy"
+                        >
+                          {downloadingId === doc.id ? (
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Download className="w-3 h-3" />
+                          )}
+                          <span>Tải về</span>
+                        </button>
                       </td>
                     </tr>
                   );

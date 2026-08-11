@@ -18,7 +18,8 @@ echo ">> 3/5 Môi trường Python"
 [ -d .venv ] || python3 -m venv .venv
 source .venv/bin/activate
 pip install -q --upgrade pip
-cat > requirements.txt <<'REQ'
+# requirements.txt đi kèm repo là nguồn chuẩn; chỉ sinh dự phòng nếu thiếu.
+[ -f requirements.txt ] || cat > requirements.txt <<'REQ'
 psycopg[binary]==3.2.3
 python-dotenv==1.0.1
 requests==2.32.3
@@ -30,6 +31,7 @@ pdf2image==1.17.0
 Pillow==11.0.0
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+python-multipart==0.0.20
 pydantic==2.10.4
 bcrypt==4.2.1
 PyJWT==2.10.1

@@ -43,6 +43,7 @@ export interface Stats {
   so_khach: number;
   vu_viec_dang_mo: number;
   so_bo_phan: number;
+  bao_cao_cho_xu_ly?: number;
 }
 
 export interface Source {
@@ -71,8 +72,9 @@ export interface ChatMessage {
   latency_ms?: number;
   used_temp_file?: string;
   used_method?: boolean;
-  /** Đánh dấu bong bóng lỗi để tô màu riêng thay vì nhét ⚠️ vào nội dung. */
   isError?: boolean;
+  /** Mã tin nhắn do backend cấp — cần để gửi báo cáo chất lượng. */
+  serverMessageId?: number;
 }
 
 export interface Conversation {
@@ -189,4 +191,30 @@ export interface Department {
   id: number;
   code: string;
   name: string;
+}
+
+export interface AppSettings {
+  settings: Record<string, string>;
+  editable_keys: string[];
+  defaults: Record<string, string>;
+}
+
+export interface FeedbackItem {
+  id: number;
+  message_id: number;
+  rating: 'good' | 'bad';
+  note: string | null;
+  created_at: string;
+  reporter: string | null;
+  reporter_role: string;
+  question: string | null;
+  answer: string;
+}
+
+export interface UploadResult {
+  ok?: boolean;
+  document_id?: number;
+  filename?: string;
+  bytes?: number;
+  note?: string;
 }

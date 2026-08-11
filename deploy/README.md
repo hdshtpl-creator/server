@@ -41,6 +41,32 @@ Xong, script tự làm hết: sinh mật khẩu ngẫu nhiên, dựng CSDL, nạ
 đăng nhập, chạy backend bằng systemd, build giao diện, cấu hình nginx, và cấp HTTPS nếu
 có tên miền. Cuối cùng nó in ra địa chỉ truy cập và danh sách tài khoản demo.
 
+## Đưa ra Internet ngay — không cần sửa gì ở Namecheap
+
+Sau khi `setup.sh` chạy xong (đã có giao diện, chỉ chưa công khai), chạy tiếp:
+
+```bash
+sudo bash deploy/go-public.sh
+```
+
+Script này tự động: dò IP công khai, **thử tự mở cổng 80/443 trên router qua UPnP**
+(nhiều router gia đình bật sẵn, không cần đăng nhập router), gắn thêm một tên miền
+**dùng ngay lập tức** dạng `hds-ai.<ip>.sslip.io` (dịch vụ DNS công cộng tự trỏ theo IP
+nhúng trong tên — **không cần đụng vào Namecheap**), rồi tự xin HTTPS Let's Encrypt.
+
+Có tên miền thật muốn dùng luôn (vd `app.hdslaw.vn`, chỉ cần **thêm bản ghi A** ở
+Namecheap Advanced DNS — không phải đổi nameserver):
+
+```bash
+sudo bash deploy/go-public.sh app.hdslaw.vn ban@hdslaw.vn
+```
+
+Nếu tên miền thật chưa trỏ kịp, script vẫn cấp HTTPS cho `sslip.io` để bạn xem web ngay;
+chạy lại y nguyên lệnh sau khi trỏ DNS xong — an toàn khi chạy nhiều lần.
+
+Nếu router không hỗ trợ UPnP, script in ra chính xác 2 dòng cần thêm trong trang quản trị
+router (Port Forwarding / Virtual Server: TCP 80 và 443 trỏ về IP LAN của máy).
+
 ## Nếu máy chủ ĐÃ chạy backend (nâng cấp từ bản demo)
 
 Trường hợp bạn đã cài `~/hds-ai` trước đó và backend đang chạy: **không cần làm lại từ
@@ -152,6 +178,22 @@ phải có **IP công khai** và mở cổng 80/443 ra Internet — không thể
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen3:8b
 ollama pull bge-m3
+```
+
+## Dạy bot học tài liệu (train)
+
+Bot tự học **mỗi file mới thả vào Google Drive** theo cấu trúc thư mục:
+
+| Tài liệu | Nội dung |
+|---|---|
+| [**CAU_TRUC_DRIVE.md**](CAU_TRUC_DRIVE.md) | **Cây thư mục Drive chuẩn** — làm cái này trước |
+| [TRAIN_DRIVE.md](TRAIN_DRIVE.md) | Tạo service account, cấp quyền, bật lịch tự học |
+| [LUU_TRU_DU_LIEU.md](LUU_TRU_DU_LIEU.md) | Sơ đồ luồng dữ liệu, dữ liệu AI nằm ở đâu, sao lưu |
+
+```bash
+bash deploy/auto-learn.sh --dry-run              # xem sẽ học gì
+bash deploy/auto-learn.sh                          # học một lần
+sudo bash deploy/auto-learn.sh --install-timer     # tự học mỗi 15 phút
 ```
 
 ## Cập nhật khi có mã mới

@@ -1,0 +1,154 @@
+# Cấu trúc Google Drive chuẩn cho HDS AI
+
+Bám theo phong cách đánh số tiếng Việt bạn đang dùng (`1. HỒ SƠ KHÁCH HÀNG`,
+`Văn bản pháp luật`) và 4 nhóm nguồn trong *260725. HDS. Nguồn tài liệu pháp luật*.
+
+**Tên thư mục CHÍNH LÀ nhãn phân loại + mức bảo mật.** Thả file đúng chỗ là xong —
+không phải vào web bấm gì. Bot chuẩn hoá tên trước khi so khớp (bỏ số thứ tự, bỏ dấu,
+hạ chữ thường) nên `1. VĂN BẢN PHÁP LUẬT` = `Văn bản pháp luật` = `van ban phap luat`.
+**Đánh số lại thư mục không làm hỏng gì.**
+
+---
+
+## Cây thư mục đầy đủ
+
+Tạo **một** thư mục gốc, chia sẻ nó cho service account, và trỏ `DRIVE_FOLDER_ID` vào đó.
+
+```
+HDS. CƠ SỞ DỮ LIỆU/                        ← DRIVE_FOLDER_ID trỏ vào thư mục NÀY
+│
+├── 1. VĂN BẢN PHÁP LUẬT/                  → law · CÔNG KHAI
+│   ├── 1.1 Luật - Bộ luật/                  (nguồn: chinhphu.vn, vbpl.vn)
+│   ├── 1.2 Nghị định/
+│   ├── 1.3 Thông tư/
+│   ├── 1.4 Nghị quyết - Quyết định/
+│   └── 1.5 Văn bản hợp nhất/
+│
+├── 2. BẢN ÁN - ÁN LỆ/                     → NỘI BỘ
+│   ├── 2.1 Án lệ/                         → an_le   (anle.toaan.gov.vn)
+│   └── 2.2 Bản án/                        → ban_an  (congbobanan.toaan.gov.vn)
+│
+├── 3. HỢP ĐỒNG MẪU/                       → mau_hd · NỘI BỘ
+│   ├── 3.1 Doanh nghiệp - Đầu tư/           (lawinsider, moj.gov.vn, bvntd.gov.vn)
+│   ├── 3.2 Thương mại/
+│   ├── 3.3 Lao động/
+│   ├── 3.4 Đất đai - Xây dựng/
+│   └── 3.5 Sở hữu trí tuệ/
+│
+├── 4. QUAN ĐIỂM PHÁP LÝ/                  → advisory · NỘI BỘ
+│   ├── 4.1 Nghiên cứu - Trao đổi/           (moj.gov.vn, danchuphapluat.vn)
+│   ├── 4.2 Hướng dẫn nghiệp vụ/             (phapdien.moj.gov.vn)
+│   └── 4.3 Ý kiến pháp lý HDS/              (bản do HDS soạn)
+│
+├── 5. THƯ MẪU - BIỂU MẪU/                 → thu_mau · NỘI BỘ
+│   ├── 5.1 Thư tư vấn mẫu/
+│   ├── 5.2 Đơn - Tờ khai/
+│   └── 5.3 Biểu mẫu nội bộ/
+│
+├── 6. QUY TRÌNH NỘI BỘ/                   → quy_trinh · NỘI BỘ
+│   ├── 6.1 Quy trình tiếp nhận vụ việc/
+│   ├── 6.2 Quy trình tố tụng/
+│   └── 6.3 Quy trình ĐKKD/
+│
+├── 7. NHÃN HIỆU - SHTT/                   → nhan_hieu · NỘI BỘ
+│   ├── 7.1 Dữ liệu nhãn hiệu/
+│   └── 7.2 Hướng dẫn đăng ký/
+│
+├── 8. HỒ SƠ NHÂN SỰ/                      → ho_so_ns · NỘI BỘ (hạn chế)
+│
+└── 9. HỒ SƠ KHÁCH HÀNG/                   → access_level = client
+    │
+    ├── [SUNGROUP] Tập đoàn SunGroup/      ← BẮT BUỘC có [MÃ_KHÁCH]
+    │   ├── 1. Thông tin khách hàng/       → ho_so_kh
+    │   ├── 2. Dự án - Vụ việc/
+    │   │   ├── [M-2026-001] Tái cấu trúc vốn SunPhuQuoc/   ← tự gắn vụ việc
+    │   │   └── [M-2026-014] Thuê đất thương mại/
+    │   ├── 3. Hợp đồng/                   → contract
+    │   ├── 4. Thư tư vấn/                 → advisory
+    │   └── 5. Hồ sơ nộp cơ quan/          → filing
+    │
+    └── [VINAPHARMA] Công ty CP Vinapharma/
+        └── ...
+```
+
+---
+
+## Ba quy tắc bắt buộc
+
+**1. Thư mục khách phải có mã trong ngoặc vuông: `[MÃ_KHÁCH] Tên khách`**
+
+Mã phải khớp mã khách trong hệ thống (`SUNGROUP`, `VINAPHARMA`…). Tạo khách trên web
+trước, rồi mới thả file. Không xác định được khách → **bot bỏ qua file** và ghi rõ lý do.
+Thà thiếu còn hơn lộ hồ sơ khách này sang khách khác.
+
+> Thư mục hiện tại của bạn đang là `9. CHI NHÁNH CÔNG T...` — đó là số thứ tự, không phải
+> mã khách. Cần đổi thành `[MÃ] Tên khách`, ví dụ `[CNCTABC] Chi nhánh Công ty ABC`.
+
+**2. Vụ việc cũng dùng ngoặc vuông: `[MÃ_VỤ_VIỆC] Tên vụ việc`**
+
+Đặt trong `2. Dự án - Vụ việc/`. Mã khớp mã vụ việc trong hệ thống → tài liệu tự gắn đúng
+vụ việc, hiện lên trong Hồ sơ khách 360°. Không có mã cũng không sao, chỉ là không tự gắn.
+
+**3. Không để file trơ ở thư mục gốc**
+
+File nằm ngoài các thư mục trên → bỏ qua kèm cảnh báo. Cứ chạy `--dry-run` để xem trước.
+
+---
+
+## Định dạng nhận được
+
+| Nhận | Ghi chú |
+|---|---|
+| `.pdf` | PDF scan được **OCR tiếng Việt** tự động |
+| `.docx` | Đọc cả bảng biểu |
+| `.txt` `.md` | |
+| Google Docs / Sheets | Tự xuất sang .docx / .xlsx |
+
+`.doc` cũ **không đọc được** — mở bằng Word/Google Docs lưu lại thành `.docx`.
+
+Tên file nên giữ nguyên quy ước bạn đang dùng (`07_2022_QH15_458435.pdf`) — bot dùng tên
+file làm tiêu đề tài liệu nên tên rõ ràng thì tra cứu dễ hơn.
+
+---
+
+## Thêm/đổi nhãn thư mục — không cần sửa code
+
+Bản đồ *thư mục → nhãn* nằm trong **web: Quản trị → Cài đặt AI → Bản đồ thư mục Drive**
+(khoá `drive_map`). Muốn thêm thư mục `10. HỢP ĐỒNG QUỐC TẾ` chỉ cần thêm một dòng:
+
+```json
+{
+  "categories": {
+    "hợp đồng quốc tế": { "doc_type": "contract", "access_level": "internal" }
+  }
+}
+```
+
+Khoá viết thường không dấu cũng được — hệ thống chuẩn hoá cả hai bên trước khi so.
+
+Các `doc_type` hợp lệ: `law` `ban_an` `an_le` `mau_hd` `contract` `advisory` `filing`
+`nhan_hieu` `thu_mau` `quy_trinh` `ho_so_ns` `ho_so_kh` `other`.
+`access_level`: `public` `internal` `client`.
+
+---
+
+## Vận hành
+
+```bash
+cd ~/hds-ai-full
+bash deploy/auto-learn.sh --dry-run           # xem sẽ học file nào, nhãn gì
+bash deploy/auto-learn.sh                     # học thật
+sudo bash deploy/auto-learn.sh --install-timer # tự học mỗi 15 phút
+```
+
+Bot chỉ xử lý file **mới hoặc đã sửa** (so checksum) → chạy lại rất nhanh.
+Sửa nội dung file trên Drive → lần sau bot tự thay bản cũ bằng bản mới.
+
+## Thứ tự làm cho bản demo
+
+1. Tạo cây thư mục ở trên (chưa cần đủ file, cứ có khung trước).
+2. Trên web: tạo **khách hàng** + **vụ việc** với mã đúng như tên thư mục `[MÃ]`.
+3. Thả vài file mỗi loại — nên có: 2–3 văn bản luật, 1 hợp đồng mẫu, 1 án lệ, 1 hồ sơ khách.
+4. `bash deploy/auto-learn.sh --dry-run` → soát nhãn có đúng không.
+5. Chạy thật, rồi vào chat hỏi thử — câu trả lời phải kèm **nguồn trích dẫn** đúng file đó.
+6. Bật timer.

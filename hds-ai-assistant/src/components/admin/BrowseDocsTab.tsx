@@ -11,7 +11,7 @@ import {
   RefreshCw,
   Building,
   ShieldAlert,
-  ExternalLink,
+  Download,
 } from 'lucide-react';
 
 export const BrowseDocsTab: React.FC = () => {
@@ -19,6 +19,18 @@ export const BrowseDocsTab: React.FC = () => {
   const [docs, setDocs] = useState<BrowseDocument[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+
+  const handleDownload = async (docId: number, title: string) => {
+    setDownloadingId(docId);
+    try {
+      await api.downloadDocument(docId, title);
+    } catch (err: any) {
+      showToast(err?.message || 'Không tải được tệp gốc.', 'error');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const fetchBrowseDocs = async () => {
     setIsLoading(true);
@@ -185,11 +197,17 @@ export const BrowseDocsTab: React.FC = () => {
                     <td className="p-4 text-right">
                       {doc.can_open ? (
                         <button
-                          onClick={() => showToast(`Đang mở tài liệu: ${doc.title}`, 'info')}
-                          className="px-3 py-1.5 bg-hds-navy hover:bg-hds-navy-light text-white font-bold rounded-lg text-xs inline-flex items-center gap-1 shadow-sm transition-colors"
+                          onClick={() => handleDownload(doc.id, doc.title)}
+                          disabled={downloadingId === doc.id}
+                          className="px-3 py-1.5 bg-hds-navy hover:bg-hds-navy-light text-white font-bold rounded-lg text-xs inline-flex items-center gap-1 shadow-sm disabled:opacity-50 transition-colors"
+                          title="Tải bản gốc về máy"
                         >
-                          <ExternalLink className="w-3 h-3" />
-                          <span>Mở</span>
+                          {downloadingId === doc.id ? (
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Download className="w-3 h-3" />
+                          )}
+                          <span>Tải về</span>
                         </button>
                       ) : (
                         <button
