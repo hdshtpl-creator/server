@@ -41,8 +41,15 @@ CREATE TABLE IF NOT EXISTS users (
                   ('admin','ban_qt','truong_bph','chuyen_vien','tro_ly',
                    'client_free','client_plus','client_pro')),
   can_review    BOOLEAN DEFAULT false,
+  -- Quyền xem số liệu tài chính/công nợ của khách. Mặc định KHÔNG ai có,
+  -- admin cấp từng người. Chặn thật ở RLS bên dưới (app.can_finance), không
+  -- phải chỉ ẩn trên giao diện.
+  can_view_finance BOOLEAN DEFAULT false,
   client_id     INT REFERENCES clients(id),
-  api_key       TEXT UNIQUE,
+  -- Băm SHA-256 của khoá API, KHÔNG phải khoá thật. Khoá thật chỉ hiện một lần
+  -- lúc cấp. Xem app/auth.py: new_api_key().
+  api_key_hash  TEXT UNIQUE,
+  api_key_at    TIMESTAMPTZ,
   monthly_quota INT DEFAULT 0,
   used_this_month INT DEFAULT 0,
   quota_reset_at  DATE DEFAULT date_trunc('month', now()) + interval '1 month',
@@ -52,7 +59,23 @@ CREATE TABLE IF NOT EXISTS users (
     CHECK (role NOT IN ('client_free','client_plus','client_pro')
            OR client_id IS NOT NULL)
 );
-CREATE INDEX IF NOT EXISTS idx_users_apikey ON users(api_key) WHERE api_key IS NOT NULL;
+-- CSDL tạo từ bản trước có cột 'api_key' (chưa bao giờ được ghi vào, nên đổi
+-- tên là an toàn tuyệt đối). Đổi tên thay vì thêm cột mới để không để lại một
+-- cột tên 'api_key' mà thực chất chứa bản băm — dễ khiến người sau tưởng là
+-- khoá thật rồi đem hiển thị ra ngoài.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_name='users' AND column_name='api_key')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_name='users' AND column_name='api_key_hash') THEN
+    ALTER TABLE users RENAME COLUMN api_key TO api_key_hash;
+  END IF;
+END $$;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_hash TEXT UNIQUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_users_apikey ON users(api_key_hash)
+  WHERE api_key_hash IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS user_departments (
   user_id       INT REFERENCES users(id) ON DELETE CASCADE,
@@ -86,7 +109,8 @@ CREATE TABLE IF NOT EXISTS documents (
   checksum       TEXT,
   doc_type       TEXT CHECK (doc_type IN
                   ('law','ban_an','an_le','mau_hd','nhan_hieu','thu_mau',
-                   'quy_trinh','ho_so_ns','ho_so_kh','advisory','filing','contract','other')),
+                   'quy_trinh','ho_so_ns','ho_so_kh','advisory','filing','contract',
+                   'cong_no','other')),
   access_level   TEXT NOT NULL DEFAULT 'internal'
                  CHECK (access_level IN ('public','internal','client')),
   client_id      INT REFERENCES clients(id),
@@ -104,6 +128,18 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 CREATE INDEX IF NOT EXISTS idx_doc_access ON documents(access_level, client_id, department_id);
 CREATE INDEX IF NOT EXISTS idx_doc_pending ON documents(label_verified) WHERE label_verified = false;
+
+-- -------------------------------------------------------------
+-- NÂNG CẤP CSDL TẠO TỪ BẢN TRƯỚC
+-- CREATE TABLE IF NOT EXISTS ở trên không chạm vào bảng đã tồn tại, nên cột và
+-- ràng buộc mới phải thêm bằng ALTER. deploy/update.sh nạp lại đúng file này
+-- mỗi lần cập nhật, nên khai ở đây là máy chủ tự lên phiên bản mới.
+-- -------------------------------------------------------------
+ALTER TABLE users ADD COLUMN IF NOT EXISTS can_view_finance BOOLEAN DEFAULT false;
+ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_doc_type_check;
+ALTER TABLE documents ADD CONSTRAINT documents_doc_type_check CHECK (doc_type IN
+  ('law','ban_an','an_le','mau_hd','nhan_hieu','thu_mau','quy_trinh','ho_so_ns',
+   'ho_so_kh','advisory','filing','contract','cong_no','other'));
 
 CREATE TABLE IF NOT EXISTS access_rules (
   role_level      TEXT NOT NULL,
@@ -278,11 +314,19 @@ CREATE OR REPLACE FUNCTION app_in_dept(dept INT) RETURNS BOOLEAN AS $$
   END;
 $$ LANGUAGE sql STABLE;
 
+-- Tài liệu công nợ/tài chính: chỉ người được admin cấp quyền mới đọc được.
+-- Chặn ở đây thì bộ tìm kiếm vector cũng không lôi ra được đoạn công nợ cho
+-- người không có quyền — bịt ở tầng Python là bịt hờ, câu hỏi khéo vẫn lọt.
+CREATE OR REPLACE FUNCTION app_can_finance() RETURNS BOOLEAN AS $$
+  SELECT coalesce(current_setting('app.can_finance', true) = 'yes', false);
+$$ LANGUAGE sql STABLE;
+
 ALTER TABLE chunks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chunks FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS chunk_access ON chunks;
 CREATE POLICY chunk_access ON chunks FOR SELECT USING (
-  CASE current_setting('app.role', true)
+  (doc_type IS DISTINCT FROM 'cong_no' OR app_can_finance())
+  AND CASE current_setting('app.role', true)
     WHEN 'internal' THEN
       access_level IN ('public','internal')
       OR (access_level='client' AND app_in_dept(department_id))
@@ -299,7 +343,8 @@ ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS doc_access ON documents;
 CREATE POLICY doc_access ON documents FOR SELECT USING (
-  CASE current_setting('app.role', true)
+  (doc_type IS DISTINCT FROM 'cong_no' OR app_can_finance())
+  AND CASE current_setting('app.role', true)
     WHEN 'internal' THEN true
     WHEN 'client'   THEN access_level='public'
                       OR (access_level='client'
@@ -313,12 +358,66 @@ CREATE POLICY doc_ins ON documents FOR INSERT WITH CHECK (true);
 DROP POLICY IF EXISTS doc_upd ON documents;
 CREATE POLICY doc_upd ON documents FOR UPDATE USING (current_setting('app.role', true)='internal');
 
+-- =============================================================
+-- CẢNH BÁO VỤ VIỆC — tính trực tiếp, không lưu sẵn
+--
+-- Cố tình làm VIEW thay vì bảng + tiến trình quét định kỳ:
+--   · luôn đúng tại thời điểm hỏi, không có cảnh báo cũ còn treo lại;
+--   · sửa hạn hoặc đóng vụ là cảnh báo tự mất, không cần ai bấm "đã xử lý";
+--   · không thêm tiến trình nền nào để mà hỏng.
+-- Ngưỡng: gấp = quá hạn hoặc còn ≤7 ngày; lưu ý = còn ≤30 ngày, thiếu hạn,
+-- hoặc treo quá 60 ngày không có tài liệu mới.
+--
+-- Bảng matters KHÔNG có RLS nên tầng API phải tự lọc theo phòng ban.
+-- =============================================================
+CREATE OR REPLACE VIEW v_matter_alerts AS
+SELECT
+  mt.id                        AS matter_id,
+  mt.code                      AS matter_code,
+  mt.title                     AS matter_title,
+  mt.matter_type,
+  mt.status,
+  mt.deadline,
+  mt.department_id,
+  mt.client_id,
+  cl.name                      AS client_name,
+  cl.code                      AS client_code,
+  (mt.deadline - current_date) AS days_left,
+  agg.last_doc_at,
+  CASE
+    WHEN mt.deadline <  current_date      THEN 'qua_han'
+    WHEN mt.deadline <= current_date + 7  THEN 'den_han_gap'
+    WHEN mt.deadline <= current_date + 30 THEN 'den_han_gan'
+    WHEN mt.deadline IS NULL              THEN 'thieu_han'
+    ELSE 'treo_lau'
+  END AS kind,
+  CASE
+    WHEN mt.deadline < current_date OR mt.deadline <= current_date + 7 THEN 'gap'
+    ELSE 'luu_y'
+  END AS severity
+FROM matters mt
+JOIN clients cl ON cl.id = mt.client_id
+LEFT JOIN LATERAL (
+  SELECT max(d.created_at) AS last_doc_at FROM documents d WHERE d.matter_id = mt.id
+) agg ON true
+WHERE mt.status IN ('tiep_nhan','dang_xu_ly','tam_dung')
+  AND (
+    mt.deadline <= current_date + 30
+    OR (mt.deadline IS NULL AND mt.status = 'dang_xu_ly')
+    OR (mt.status = 'dang_xu_ly'
+        AND coalesce(agg.last_doc_at, mt.created_at) < now() - interval '60 days')
+  );
+
 CREATE OR REPLACE VIEW v_kb_stats AS
 SELECT d.access_level, d.doc_type,
        count(DISTINCT d.id) AS so_tai_lieu, count(c.id) AS so_doan,
        count(DISTINCT d.id) FILTER (WHERE NOT d.label_verified) AS chua_duyet
 FROM documents d LEFT JOIN chunks c ON c.document_id=d.id
 GROUP BY 1,2 ORDER BY 1,2;
+
+-- GRANT ở phần trên chạy TRƯỚC khi các view này tồn tại nên không với tới
+-- chúng. Cấp lại ở đây để vai ứng dụng đọc được mà không phải mở phiên admin.
+GRANT SELECT ON v_matter_alerts, v_kb_stats TO hds_app;
 
 -- =============================================================
 -- CÀI ĐẶT ỨNG DỤNG (admin sửa trên web, không cần sửa code)

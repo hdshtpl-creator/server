@@ -189,6 +189,7 @@ Bot tự học **mỗi file mới thả vào Google Drive** theo cấu trúc th�
 | [**CAU_TRUC_DRIVE.md**](CAU_TRUC_DRIVE.md) | **Cây thư mục Drive chuẩn** — làm cái này trước |
 | [TRAIN_DRIVE.md](TRAIN_DRIVE.md) | Tạo service account, cấp quyền, bật lịch tự học |
 | [LUU_TRU_DU_LIEU.md](LUU_TRU_DU_LIEU.md) | Sơ đồ luồng dữ liệu, dữ liệu AI nằm ở đâu, sao lưu |
+| [API_KHACH_HANG.md](API_KHACH_HANG.md) | Cấp khoá API cho khách, phạm vi 3 gói Free/Plus/Pro |
 
 ```bash
 bash deploy/auto-learn.sh --dry-run              # xem sẽ học gì

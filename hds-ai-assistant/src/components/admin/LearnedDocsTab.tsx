@@ -2,8 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { LearnedDocument } from '../../types';
-import { DOC_TYPES, DOC_TYPE_LABELS, ACCESS_LEVEL_BADGES } from '../../constants';
+import { DOC_TYPES, DOC_TYPE_LABELS, ACCESS_LEVEL_BADGES, SOURCE_KIND_BADGES } from '../../constants';
 import { BookOpen, Search, Filter, RefreshCw, Building2, Download } from 'lucide-react';
+import { DriveSyncStatusCard } from './DriveSyncStatusCard';
 
 export const LearnedDocsTab: React.FC = () => {
   const { showToast } = useApp();
@@ -68,6 +69,9 @@ export const LearnedDocsTab: React.FC = () => {
         </button>
       </div>
 
+      {/* Trạng thái đồng bộ Drive — file nào đã học, file nào chờ xử lý và vì sao */}
+      <DriveSyncStatusCard />
+
       {/* Tìm kiếm và lọc */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col md:flex-row items-stretch md:items-center gap-3 text-xs">
         <form onSubmit={handleSearchSubmit} className="flex-1 flex items-center gap-2">
@@ -125,11 +129,12 @@ export const LearnedDocsTab: React.FC = () => {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs min-w-[900px]">
+            <table className="w-full text-left text-xs min-w-[1020px]">
               <thead className="bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold uppercase tracking-wider">
                 <tr>
                   <th scope="col" className="p-4">Tên tài liệu</th>
                   <th scope="col" className="p-4">Loại</th>
+                  <th scope="col" className="p-4">Nguồn</th>
                   <th scope="col" className="p-4">Tóm tắt</th>
                   <th scope="col" className="p-4">Mức truy cập</th>
                   <th scope="col" className="p-4 text-center">Số đoạn</th>
@@ -140,6 +145,7 @@ export const LearnedDocsTab: React.FC = () => {
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {docs.map((doc) => {
                   const access = ACCESS_LEVEL_BADGES[doc.access_level];
+                  const source = SOURCE_KIND_BADGES[doc.source_kind];
 
                   return (
                     <tr
@@ -150,7 +156,7 @@ export const LearnedDocsTab: React.FC = () => {
                         <div className="space-y-1">
                           <span className="block leading-snug break-words">{doc.title}</span>
                           <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono block">
-                            ID: {doc.id} • {doc.source_kind}
+                            ID: {doc.id}
                           </span>
                           {doc.client_name && (
                             <span className="text-[10px] bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded font-semibold inline-flex items-center gap-1">
@@ -164,6 +170,17 @@ export const LearnedDocsTab: React.FC = () => {
                       <td className="p-4">
                         <span className="bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 font-semibold whitespace-nowrap">
                           {DOC_TYPE_LABELS[doc.doc_type] || doc.doc_type}
+                        </span>
+                      </td>
+
+                      <td className="p-4">
+                        <span
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${
+                            source?.badge ||
+                            'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300'
+                          }`}
+                        >
+                          {source?.label || doc.source_kind}
                         </span>
                       </td>
 

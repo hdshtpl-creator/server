@@ -59,17 +59,55 @@ HDS. CƠ SỞ DỮ LIỆU/                        ← DRIVE_FOLDER_ID trỏ vào
 └── 9. HỒ SƠ KHÁCH HÀNG/                   → access_level = client
     │
     ├── [SUNGROUP] Tập đoàn SunGroup/      ← BẮT BUỘC có [MÃ_KHÁCH]
-    │   ├── 1. Thông tin khách hàng/       → ho_so_kh
+    │   ├── 1. Thông tin khách hàng/       → ho_so_kh   ★ FILE TỔNG HỢP
     │   ├── 2. Dự án - Vụ việc/
     │   │   ├── [M-2026-001] Tái cấu trúc vốn SunPhuQuoc/   ← tự gắn vụ việc
     │   │   └── [M-2026-014] Thuê đất thương mại/
     │   ├── 3. Hợp đồng/                   → contract
     │   ├── 4. Thư tư vấn/                 → advisory
-    │   └── 5. Hồ sơ nộp cơ quan/          → filing
+    │   ├── 5. Hồ sơ nộp cơ quan/          → filing
+    │   └── 6. Công nợ - Tài chính/        → cong_no  🔒 HẠN CHẾ
     │
     └── [VINAPHARMA] Công ty CP Vinapharma/
         └── ...
 ```
+
+---
+
+## Hai thư mục đặc biệt trong hồ sơ khách
+
+**★ `1. Thông tin khách hàng/` — file tổng hợp, bot luôn đọc**
+
+Đây là nơi bạn viết tổng quan về khách: dịch vụ đã dùng, mức phí, diễn biến hợp
+tác, lưu ý riêng. Khác mọi tài liệu khác ở một điểm quan trọng:
+
+> Khi câu hỏi nhắc tới khách này, bot **luôn nạp nguyên file tổng hợp** vào ngữ
+> cảnh — không phụ thuộc vào việc tìm kiếm ngữ nghĩa có bắt được hay không.
+
+Vì vậy hỏi *"khách SUNGROUP đã dùng dịch vụ gì, phí bao nhiêu"* là chắc chắn ra,
+kể cả khi diễn đạt lệch so với chữ trong file. Các loại tài liệu khác thì vẫn
+theo cơ chế tìm kiếm thông thường.
+
+Chỉ kênh **nội bộ** được nạp file này. Cổng khách hàng không bao giờ thấy nó —
+đây là tài liệu làm việc của HDS, không phải bản gửi khách.
+
+**🔒 `6. Công nợ - Tài chính/` — chỉ người được cấp quyền**
+
+Tài liệu trong thư mục này nhận nhãn `cong_no` và bị **chặn ở tầng CSDL**
+(Row-Level Security), không phải chỉ ẩn trên giao diện. Người chưa được cấp
+quyền thì:
+
+- tra cứu không ra, kể cả hỏi vòng vo hay hỏi khéo;
+- không thấy trong danh sách tài liệu, không tải về được;
+- bot không hề biết tài liệu đó tồn tại nên không thể nhắc tới.
+
+Cấp quyền: **Quản trị → Người dùng → nút "Không xem công nợ"** để bật thành
+"Xem được công nợ". Vai `admin` luôn có sẵn. **Ban QT không tự động có** — phải
+cấp như người khác, vì tài chính là nhóm dữ liệu tách riêng khỏi quyền xem
+phòng ban.
+
+Nếu bạn muốn cả công ty đọc được công nợ thì cứ để chung trong
+`1. Thông tin khách hàng/`, đừng dùng thư mục này.
 
 ---
 
@@ -127,8 +165,11 @@ Bản đồ *thư mục → nhãn* nằm trong **web: Quản trị → Cài đ�
 Khoá viết thường không dấu cũng được — hệ thống chuẩn hoá cả hai bên trước khi so.
 
 Các `doc_type` hợp lệ: `law` `ban_an` `an_le` `mau_hd` `contract` `advisory` `filing`
-`nhan_hieu` `thu_mau` `quy_trinh` `ho_so_ns` `ho_so_kh` `other`.
+`nhan_hieu` `thu_mau` `quy_trinh` `ho_so_ns` `ho_so_kh` `cong_no` `other`.
 `access_level`: `public` `internal` `client`.
+
+`cong_no` là loại duy nhất bị chặn thêm một lớp theo quyền từng người — đặt nhãn
+này cho thư mục nào là thư mục đó thành vùng hạn chế.
 
 ---
 

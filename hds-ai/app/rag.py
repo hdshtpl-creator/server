@@ -10,7 +10,7 @@ Hỗ trợ thêm:
 """
 import json
 
-from app import db, settings
+from app import company_context, db, settings
 from app.models import embed, llm
 
 TOP_K = 8
@@ -21,23 +21,52 @@ CHANNEL_LEVEL = {"public": "public", "internal": "internal", "portal": "client"}
 # trên web, lưu ở bảng app_settings. Xem app/settings.py (khoá prompt_<kênh>).
 
 
-def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False, top_k=None):
-    """Tìm đoạn liên quan. SQL KHÔNG lọc quyền — RLS tự lo (kể cả theo phòng)."""
+def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
+             top_k=None, can_finance=False, doc_types=None):
+    """Tìm đoạn liên quan. SQL KHÔNG lọc quyền — RLS tự lo (kể cả theo phòng
+    và quyền xem công nợ).
+
+    doc_types: giới hạn theo GÓI DỊCH VỤ của khách (không phải ranh giới bảo
+    mật — việc khách A không thấy dữ liệu khách B vẫn do RLS lo). None là
+    không giới hạn.
+    """
     if top_k is None:
         top_k = settings.get_int("retrieval_top_k", TOP_K)
-    qvec = embed(question)
+    qjson = json.dumps(embed(question))
     level = CHANNEL_LEVEL[channel]
     sql = """SELECT c.id, c.content, c.document_id, d.title,
                     1 - (c.embedding <=> %s::vector) AS score
                FROM chunks c JOIN documents d ON d.id=c.document_id
-              WHERE c.embedding IS NOT NULL AND d.approved AND d.label_verified
-              ORDER BY c.embedding <=> %s::vector LIMIT %s"""
-    with db.session(role=level, client_id=client_id, dept_ids=dept_ids, is_banqt=is_banqt) as conn:
+              WHERE c.embedding IS NOT NULL AND d.approved AND d.label_verified"""
+    params = [qjson]
+    if doc_types is not None:
+        sql += " AND c.doc_type = ANY(%s)"
+        params.append(list(doc_types))
+    sql += " ORDER BY c.embedding <=> %s::vector LIMIT %s"
+    params += [qjson, top_k]
+    with db.session(role=level, client_id=client_id, dept_ids=dept_ids, is_banqt=is_banqt,
+                    can_finance=can_finance) as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (json.dumps(qvec), json.dumps(qvec), top_k))
+            cur.execute(sql, params)
             rows = cur.fetchall()
     return [{"chunk_id": r[0], "content": r[1], "document_id": r[2], "title": r[3],
              "score": float(r[4])} for r in rows]
+
+
+def tier_doc_types(role_level):
+    """Loại tài liệu một GÓI KHÁCH được tra cứu, lấy từ bảng access_rules.
+
+    Trả None khi ma trận chưa có dòng nào cho vai này — nghĩa là chưa cấu hình
+    gói, khi đó không lọc theo loại. Nếu chặn sạch thì chỉ cần quên chạy
+    seed_departments là cổng khách ngưng trả lời, hỏng nặng hơn là hở gói.
+
+    Trả set rỗng khi có cấu hình nhưng gói không được phép loại nào.
+    """
+    rules = load_access_rules()
+    if not any(role == role_level for (role, _dept, _dt) in rules):
+        return None
+    return {dt for (role, dept, dt), can_open in rules.items()
+            if role == role_level and dept == "*" and can_open}
 
 
 def find_method(case_desc):
@@ -59,11 +88,48 @@ def find_method(case_desc):
     return None
 
 
-def build_prompt(question, chunks, temp_chunks=None, method=None):
+def get_history(conversation_id, channel, client_id=None, turns=None):
+    """Mấy lượt hỏi-đáp gần nhất trong cùng cuộc chat.
+
+    Không có phần này thì mỗi câu hỏi là một lần đầu tiên: hỏi tiếp "còn vụ kia
+    thì sao" là bot không biết "vụ kia" là gì. Đọc TRƯỚC khi ghi câu hỏi hiện
+    tại nên lịch sử luôn là các lượt đã xong.
+    """
+    if not conversation_id:
+        return []
+    if turns is None:
+        turns = settings.get_int("chat_history_turns", 6)
+    if turns <= 0:
+        return []
+    level = CHANNEL_LEVEL[channel]
+    try:
+        with db.session(role=level, client_id=client_id) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT role, content FROM messages
+                                WHERE conversation_id=%s
+                                ORDER BY id DESC LIMIT %s""",
+                            (conversation_id, turns * 2))
+                rows = cur.fetchall()
+    except Exception:
+        return []
+    return list(reversed(rows))
+
+
+def build_prompt(question, chunks, temp_chunks=None, method=None,
+                 company="", history=None):
     parts = []
     if method:
         parts.append(f"QUY TRÌNH PHÂN TÍCH (loại: {method['case_type']}):\n{method['steps']}\n"
                      "Hãy phân tích theo đúng quy trình trên.\n")
+    if company:
+        # Số liệu thật trong CSDL, không phải trích từ tài liệu → không đánh [Nguồn n]
+        parts.append(company + "\n")
+    if history:
+        parts.append("DIỄN BIẾN CUỘC TRAO ĐỔI TRƯỚC ĐÓ:")
+        for role, content in history:
+            who = "Người hỏi" if role == "user" else "Trợ lý"
+            parts.append(f"{who}: {(content or '')[:800]}")
+        parts.append("")
     all_ctx = list(chunks) + list(temp_chunks or [])
     if all_ctx:
         parts.append("TÀI LIỆU THAM KHẢO:")
@@ -73,6 +139,9 @@ def build_prompt(question, chunks, temp_chunks=None, method=None):
         parts.append("(Không tìm thấy tài liệu liên quan trong kho.)")
     parts.append(f"\nCÂU HỎI: {question}\n"
                  "Trả lời dựa trên tài liệu tham khảo, ghi rõ [Nguồn n] khi dùng thông tin.")
+    if company:
+        parts.append("Phần DỮ LIỆU CÔNG TY là số liệu thực tế trong hệ thống — dùng trực tiếp, "
+                     "không cần ghi [Nguồn]. Nêu rõ ngày/hạn khi trả lời về tiến độ vụ việc.")
     return "\n".join(parts)
 
 
@@ -121,7 +190,7 @@ def get_temp_context(conversation_id, question, top_k=5):
 
 def answer(question, channel, user_id=None, client_id=None, conversation_id=None,
            prefer="local", use_temp=False, use_method=False,
-           dept_ids=None, is_banqt=False):
+           dept_ids=None, is_banqt=False, can_finance=False, role=None):
     """Hàm chính — cả 3 kênh gọi hàm này."""
     if channel not in CHANNEL_LEVEL:
         raise ValueError(f"Kênh không hợp lệ: {channel}")
@@ -138,12 +207,25 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
         except (TypeError, ValueError):
             return fallback
 
+    # Cổng khách: giới hạn loại tài liệu theo gói dịch vụ (Free/Plus/Pro).
+    # Kênh nội bộ không giới hạn ở đây — quyền nội bộ nằm ở RLS và can_open_doc.
+    doc_types = tier_doc_types(role) if (channel == "portal" and role) else None
+
     chunks = retrieve(question, channel, client_id, dept_ids=dept_ids, is_banqt=is_banqt,
-                      top_k=_num("retrieval_top_k", TOP_K, int))
+                      top_k=_num("retrieval_top_k", TOP_K, int), can_finance=can_finance,
+                      doc_types=doc_types)
     temp_chunks = get_temp_context(conversation_id, question) if (use_temp and conversation_id) else None
     method = find_method(question) if use_method else None
 
-    prompt = build_prompt(question, chunks, temp_chunks, method)
+    # Hai nguồn ngữ cảnh song song: tài liệu (vector) và dữ liệu vận hành (SQL).
+    # Thiếu nguồn thứ hai thì bot không trả lời được câu hỏi về khách/vụ việc.
+    company = company_context.build(question, channel, client_id=client_id,
+                                    dept_ids=dept_ids, is_banqt=is_banqt,
+                                    can_finance=can_finance)
+    history = get_history(conversation_id, channel, client_id)
+
+    prompt = build_prompt(question, chunks, temp_chunks, method,
+                          company=company, history=history)
     system_prompt = cfg.get(f"prompt_{channel}") or settings.DEFAULTS.get(f"prompt_{channel}", "")
     text, latency = llm(prompt, system=system_prompt, prefer=prefer,
                         temperature=_num("llm_temperature", 0.2, float))
@@ -179,23 +261,74 @@ DOC_TYPE_VN = {
     "law": "Văn bản luật", "ban_an": "Bản án", "an_le": "Án lệ",
     "mau_hd": "Mẫu hợp đồng", "nhan_hieu": "Data nhãn hiệu", "thu_mau": "Thư mẫu",
     "quy_trinh": "Quy trình", "ho_so_ns": "Hồ sơ nhân sự", "ho_so_kh": "Hồ sơ khách hàng",
-    "advisory": "Tư vấn", "filing": "Hồ sơ nộp", "contract": "Hợp đồng", "other": "Khác",
+    "advisory": "Tư vấn", "filing": "Hồ sơ nộp", "contract": "Hợp đồng",
+    "cong_no": "Công nợ - Tài chính", "other": "Khác",
 }
 
 
-def can_open_doc(role_level, dept_ids, is_banqt, doc):
+def load_access_rules():
+    """Ma trận quyền loại tài liệu × cấp × phòng, đọc từ bảng access_rules.
+
+    Bảng này do app/seed_departments.py nạp từ bảng phân quyền nhân sự của HDS.
+    Trả về dict {(role_level, department_code, doc_type): can_open}.
+
+    Đọc mỗi lần gọi để sửa bảng là có hiệu lực ngay, không phải khởi động lại —
+    cùng nguyên tắc với app_settings. Bảng chỉ vài trăm dòng nên không đáng lo.
+    """
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT role_level, department_code, doc_type, can_open
+                                 FROM access_rules""")
+                return {(r[0], r[1], r[2]): r[3] for r in cur.fetchall()}
+    except Exception:
+        return {}
+
+
+def _rules_allow_open(rules, role_level, dept_codes, doc_type):
+    """Ma trận có cho cấp này mở loại tài liệu này không.
+
+    Người thuộc nhiều phòng: chỉ cần MỘT phòng được phép là mở được. Dòng '*'
+    áp cho mọi phòng.
+
+    Không tìm thấy dòng nào khớp thì TRẢ VỀ FALSE (chặn). Bảng đã có dữ liệu mà
+    thiếu dòng cho một loại tài liệu nghĩa là loại đó chưa được cấp phép — mặc
+    định mở sẽ khiến mỗi lần thêm doc_type mới là tự động hở cho mọi người.
+    """
+    if rules.get((role_level, "*", doc_type)):
+        return True
+    return any(rules.get((role_level, code, doc_type)) for code in (dept_codes or []))
+
+
+def can_open_doc(role_level, dept_ids, is_banqt, doc, can_finance=False,
+                 rules=None, dept_codes=None):
     """Quyết định user có được MỞ/tải tài liệu này không (tầng ứng dụng).
     doc: dict có access_level, department_id, doc_type, client_id.
-    Trả về True/False. RLS đã lọc thô, đây là lớp chi tiết theo phòng + loại."""
+    Trả về True/False. RLS đã lọc thô, đây là lớp chi tiết theo phòng + loại.
+
+    Tài liệu công nợ chặn trước mọi điều kiện khác, kể cả Ban QT: các endpoint
+    duyệt/tải mở phiên bằng admin=True nên RLS không áp — chốt phải nằm ở đây.
+
+    rules/dept_codes: truyền vào để áp ma trận access_rules. Bỏ trống thì giữ
+    hành vi cũ (mọi nội bộ mở được tài liệu chung) — dùng cho các lời gọi chưa
+    có thông tin phòng, và cho hệ thống chưa nạp ma trận."""
+    if doc.get("doc_type") == "cong_no" and not can_finance:
+        return False
     if is_banqt:
         return True
     acc = doc.get("access_level")
+    doc_type = doc.get("doc_type")
     if acc in ("public", "internal"):
-        # tài liệu chung: mọi nội bộ mở được (lọc loại theo access_rules ở nơi khác nếu cần)
+        if rules:
+            return _rules_allow_open(rules, role_level, dept_codes, doc_type)
         return True
-    # hồ sơ khách: chỉ mở nếu cùng phòng
+    # hồ sơ khách: phải cùng phòng, VÀ ma trận phải cho phép mở loại này
     dep = doc.get("department_id")
-    return dep is not None and dep in (dept_ids or [])
+    if dep is None or dep not in (dept_ids or []):
+        return False
+    if rules:
+        return _rules_allow_open(rules, role_level, dept_codes, doc_type)
+    return True
 
 
 def mask_title(doc, can_open):

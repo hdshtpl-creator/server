@@ -43,6 +43,7 @@ import os
 import re
 import sys
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -52,6 +53,8 @@ from app.ingest import extract_text, split_document
 from app.models import embed, summarize
 
 load_dotenv()
+
+MAX_STATUS_ITEMS = 30  # giới hạn số dòng chi tiết lưu vào trạng thái để không phình CSDL
 
 FOLDER_ID = os.getenv("DRIVE_FOLDER_ID", "")
 SA_FILE = os.getenv("DRIVE_SA_FILE", "credentials/service-account.json")
@@ -280,27 +283,60 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None):
     return True
 
 
+def _write_status(started_at, folder_id, counts, new_items, updated_items,
+                  skipped_items, error_items, finished=True):
+    """Ghi tóm tắt lần quét gần nhất vào app_settings để dashboard đọc được.
+
+    Đây chính là 'cơ chế nhận biết file đã học và file mới chưa học': admin
+    không cần SSH vào máy chủ hay xem log, chỉ cần mở web là thấy lần quét gần
+    nhất chạy khi nào, học được bao nhiêu, và — quan trọng nhất — file nào bị
+    BỎ QUA kèm lý do cụ thể để sửa (đổi tên thư mục, tạo khách hàng, v.v.).
+    """
+    summary = {
+        "folder_id": folder_id,
+        "started_at": started_at.isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat() if finished else None,
+        "finished": finished,
+        "counts": counts,
+        "new_items": new_items[-MAX_STATUS_ITEMS:],
+        "updated_items": updated_items[-MAX_STATUS_ITEMS:],
+        "skipped_items": skipped_items[-MAX_STATUS_ITEMS:],
+        "error_items": error_items[-MAX_STATUS_ITEMS:],
+    }
+    try:
+        settings.set_system("drive_sync_status", json.dumps(summary, ensure_ascii=False))
+    except Exception as e:
+        print(f"[CẢNH BÁO] Không ghi được trạng thái đồng bộ vào CSDL: {e}")
+
+
 def run(dry_run=False):
     if not FOLDER_ID:
         print("[LỖI] Chưa đặt DRIVE_FOLDER_ID trong .env")
         sys.exit(1)
+    started_at = datetime.now(timezone.utc)
     service = get_service()
     print(f">> Duyệt cây thư mục Drive {FOLDER_ID}...")
     items = walk(service, FOLDER_ID)
     print(f"   {len(items)} file.\n")
 
-    n_new = n_upd = n_skip = n_ig = 0
+    n_new = n_upd = n_skip = n_unmapped = n_badext = 0
+    new_items, updated_items, skipped_items, error_items = [], [], [], []
+
     for f, parts in items:
         ext = Path(f["name"]).suffix.lower()
+        loc = "/".join(parts) or "(gốc)"
+
         if f["mimeType"] not in EXPORT_MAP and ext not in ALLOWED:
-            n_ig += 1
+            n_badext += 1
             continue
 
         labels, reason = resolve_labels(parts)
-        loc = "/".join(parts) or "(gốc)"
         if labels is None:
             print(f"   [BỎ QUA] {f['name']}  ← {loc}: {reason}")
-            n_ig += 1
+            n_unmapped += 1
+            # Chỉ dòng "không xác định được nhãn" mới đáng để admin xem trên
+            # dashboard — sai định dạng tệp thì không cần hành động gì.
+            skipped_items.append({"name": f["name"], "location": loc, "reason": reason})
             continue
 
         row = existing(f["id"])
@@ -314,7 +350,10 @@ def run(dry_run=False):
             tag += f"/client={labels['client_id']}"
         action = "CẬP NHẬT" if row else "MỚI"
         print(f"   [{action}] {f['name']}  ← {loc}  → {tag}")
+        item_info = {"name": f["name"], "location": loc, "doc_type": labels["doc_type"],
+                     "access_level": labels["access_level"]}
         if dry_run:
+            (updated_items if row else new_items).append(item_info)
             if row:
                 n_upd += 1
             else:
@@ -324,22 +363,32 @@ def run(dry_run=False):
         try:
             p = download(service, f, parts)
             if not p:
-                n_ig += 1
+                n_badext += 1
                 continue
             if learn_one(p, labels, f["id"], drive_md5, replace_id=row[0] if row else None):
+                (updated_items if row else new_items).append(item_info)
                 if row:
                     n_upd += 1
                 else:
                     n_new += 1
         except Exception as e:
             print(f"     [LỖI] {f['name']}: {e}")
+            error_items.append({"name": f["name"], "location": loc, "error": str(e)})
 
+    n_ig = n_unmapped + n_badext
     print(f"\n{n_new} mới | {n_upd} cập nhật | {n_skip} không đổi | {n_ig} bỏ qua")
     if not dry_run and (n_new or n_upd):
         if AUTO_APPROVE:
             print("Đã học xong — bot dùng được ngay. Kiểm tra: /admin → Kho tài liệu đã học.")
         else:
             print("Đang chờ duyệt — mở /admin → Duyệt nhãn tài liệu.")
+
+    if not dry_run:
+        counts = {"scanned": len(items), "new": n_new, "updated": n_upd,
+                  "unchanged": n_skip, "unmapped": n_unmapped, "bad_format": n_badext,
+                  "errors": len(error_items)}
+        _write_status(started_at, FOLDER_ID, counts, new_items, updated_items,
+                     skipped_items, error_items)
 
 
 if __name__ == "__main__":

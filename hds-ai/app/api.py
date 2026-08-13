@@ -30,7 +30,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app import db, rag, auth, settings
+from app import company_context, db, rag, auth, settings
 from app.admin_ui import ADMIN_HTML
 
 app = FastAPI(title="HDS AI", version="1.0")
@@ -52,9 +52,35 @@ if _cors_origins:
 bearer = HTTPBearer(auto_error=False)
 
 
-def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer)):
-    """Lấy user từ token JWT (Authorization: Bearer <token>).
-    Thay cho X-User-Id — không giả mạo được vì token có chữ ký."""
+def _user_by_api_key(raw_key: str):
+    """Tra người dùng từ khoá API. CSDL chỉ giữ bản băm nên so bằng bản băm."""
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, role FROM users WHERE api_key_hash=%s AND active",
+                        (auth.hash_api_key(raw_key),))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(401, "Khoá API không hợp lệ hoặc đã bị thu hồi")
+    # Khoá API là loại bí mật sống lâu, dán vào script rồi để đó. Chỉ mở cho vai
+    # khách — không để một khoá lọt ra ngoài là mở được toàn bộ dữ liệu nội bộ.
+    if row[1] not in CLIENT_ROLES:
+        raise HTTPException(403, "Khoá API chỉ dùng cho tài khoản khách hàng")
+    return get_user(row[0])
+
+
+def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer),
+                 x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    """Nhận diện người gọi bằng MỘT trong hai cách:
+
+    · Web app: header `Authorization: Bearer <token JWT>` sau khi đăng nhập.
+    · Khách tích hợp hệ thống: header `X-API-Key: hds_...` (không hết hạn,
+      admin cấp và thu hồi được, chỉ dùng cho vai khách).
+
+    Cả hai đường đều đi qua get_user() nên phạm vi dữ liệu giống nhau —
+    phân quyền vẫn do RLS quyết định, không phụ thuộc cách xác thực.
+    """
+    if x_api_key:
+        return _user_by_api_key(x_api_key)
     if cred is None:
         raise HTTPException(401, "Chưa đăng nhập")
     payload = auth.decode_token(cred.credentials)
@@ -70,20 +96,40 @@ SEE_ALL = {"admin", "ban_qt"}
 def get_user(user_id):
     if user_id is None:
         return {"id": None, "role": "public", "client_id": None, "can_review": False,
-                "dept_ids": [], "is_banqt": False}
+                "dept_ids": [], "dept_codes": [], "is_banqt": False,
+                "can_finance": False}
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
+            # Sang kỳ mới thì hoàn lại hạn mức trước khi đọc. Thiếu bước này thì
+            # used_this_month chỉ có tăng, khách dùng hết lượt một tháng sẽ bị
+            # chặn vĩnh viễn chứ không mở lại tháng sau.
+            cur.execute("""UPDATE users
+                              SET used_this_month = 0,
+                                  quota_reset_at =
+                                    (date_trunc('month', now()) + interval '1 month')::date
+                            WHERE id=%s AND quota_reset_at <= current_date""",
+                        (user_id,))
             cur.execute("""SELECT id,role,client_id,can_review,full_name,
-                           monthly_quota,used_this_month
+                           monthly_quota,used_this_month,can_view_finance
                            FROM users WHERE id=%s AND active""", (user_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(401, "Người dùng không tồn tại hoặc bị khóa")
-            cur.execute("SELECT department_id FROM user_departments WHERE user_id=%s", (user_id,))
-            dept_ids = [r[0] for r in cur.fetchall()]
+            # Lấy cả mã phòng: bảng access_rules khoá theo department_code
+            cur.execute("""SELECT ud.department_id, d.code
+                             FROM user_departments ud
+                             JOIN departments d ON d.id = ud.department_id
+                            WHERE ud.user_id=%s""", (user_id,))
+            dept_rows = cur.fetchall()
+            dept_ids = [r[0] for r in dept_rows]
+            dept_codes = [r[1] for r in dept_rows]
     return {"id": row[0], "role": row[1], "client_id": row[2], "can_review": row[3],
             "name": row[4], "monthly_quota": row[5], "used_this_month": row[6],
-            "dept_ids": dept_ids, "is_banqt": row[1] in SEE_ALL}
+            "dept_ids": dept_ids, "dept_codes": dept_codes,
+            "is_banqt": row[1] in SEE_ALL,
+            # Quyền xem công nợ: admin luôn có (là người đi cấp quyền), còn lại
+            # phải được cấp từng người. Ban QT KHÔNG tự động có.
+            "can_finance": row[1] == "admin" or bool(row[7])}
 
 
 def require(user, roles):
@@ -95,6 +141,38 @@ def require_reviewer(user):
     # Chỉ admin, hoặc người được cấp can_review, mới được duyệt
     if user["role"] != "admin" and not user["can_review"]:
         raise HTTPException(403, "Chỉ admin hoặc người được cấp quyền duyệt mới thực hiện được")
+
+
+def check_conversation(user, conversation_id, channel):
+    """Xác nhận cuộc trao đổi này thuộc về người đang hỏi.
+
+    BẮT BUỘC gọi trước khi dùng conversation_id do client gửi lên. Bảng
+    conversations/messages/temp_files KHÔNG có Row-Level Security, nên nếu bỏ
+    bước này thì người dùng chỉ cần đổi conversation_id trong request là đọc
+    được lịch sử hội thoại và file tạm của người khác — cả hai đều được đưa vào
+    ngữ cảnh sinh câu trả lời.
+    """
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id, channel, client_id FROM conversations WHERE id=%s",
+                        (conversation_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Cuộc trao đổi không tồn tại")
+    owner_id, conv_channel, conv_client = row
+    if conv_channel != channel:
+        raise HTTPException(403, "Cuộc trao đổi này thuộc kênh khác")
+    if channel == "public":
+        # Kênh công khai không đăng nhập nên không có chủ sở hữu để đối chiếu;
+        # chỉ cho phép nối tiếp đúng các cuộc trao đổi công khai vô danh.
+        if owner_id is not None:
+            raise HTTPException(403, "Cuộc trao đổi này không thuộc kênh công khai")
+    else:
+        if owner_id != user["id"]:
+            raise HTTPException(403, "Cuộc trao đổi này không thuộc về bạn")
+        if channel == "portal" and conv_client != user["client_id"]:
+            raise HTTPException(403, "Cuộc trao đổi này thuộc khách hàng khác")
+    return conversation_id
 
 
 # ---------- 1. CHAT ----------
@@ -125,7 +203,7 @@ def login(body: LoginIn):
 def whoami(user=Depends(current_user)):
     return {"id": user["id"], "role": user["role"], "name": user.get("name"),
             "can_review": user["can_review"], "is_banqt": user["is_banqt"],
-            "dept_ids": user["dept_ids"]}
+            "can_finance": user["can_finance"], "dept_ids": user["dept_ids"]}
 
 
 class ChangePwIn(BaseModel):
@@ -158,7 +236,8 @@ class ChatIn(BaseModel):
 
 @app.post("/chat/public")
 def chat_public(body: ChatIn):
-    conv = body.conversation_id or rag.start_conversation(None, "public")
+    conv = (check_conversation(None, body.conversation_id, "public")
+            if body.conversation_id else rag.start_conversation(None, "public"))
     res = rag.answer(body.question, "public", conversation_id=conv)
     res["conversation_id"] = conv
     return res
@@ -167,10 +246,12 @@ def chat_public(body: ChatIn):
 @app.post("/chat/internal")
 def chat_internal(body: ChatIn, user=Depends(current_user)):
     require(user, INTERNAL_ROLES)
-    conv = body.conversation_id or rag.start_conversation(user["id"], "internal")
+    conv = (check_conversation(user, body.conversation_id, "internal")
+            if body.conversation_id else rag.start_conversation(user["id"], "internal"))
     res = rag.answer(body.question, "internal", user_id=user["id"], conversation_id=conv,
                      use_temp=body.use_temp, use_method=body.use_method,
-                     dept_ids=user["dept_ids"], is_banqt=user["is_banqt"])
+                     dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
+                     can_finance=user["can_finance"])
     res["conversation_id"] = conv
     return res
 
@@ -185,9 +266,11 @@ def chat_portal(body: ChatIn, user=Depends(current_user)):
         raise HTTPException(429, f"Đã hết lượt hỏi trong tháng ({used}/{quota}). "
                                  f"Nâng cấp gói để hỏi thêm.")
     cid = user["client_id"]
-    conv = body.conversation_id or rag.start_conversation(user["id"], "portal", cid)
+    conv = (check_conversation(user, body.conversation_id, "portal")
+            if body.conversation_id else rag.start_conversation(user["id"], "portal", cid))
     res = rag.answer(body.question, "portal", user_id=user["id"], client_id=cid,
-                     conversation_id=conv, use_temp=body.use_temp)
+                     conversation_id=conv, use_temp=body.use_temp,
+                     role=user["role"])
     # Tăng bộ đếm đã dùng
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
@@ -209,6 +292,9 @@ class UploadIn(BaseModel):
 def upload_in_chat(body: UploadIn, user=Depends(current_user)):
     require(user, INTERNAL_ROLES)
     if body.mode == "temp":
+        # File tạm gắn vào cuộc trao đổi và sẽ được đọc lại làm ngữ cảnh —
+        # phải chắc cuộc trao đổi là của chính người này.
+        check_conversation(user, body.conversation_id, "internal")
         n = rag.add_temp_file(body.conversation_id, user["id"], body.filename, body.content)
         return {"ok": True, "mode": "temp", "chunks": n,
                 "note": "File dùng xong bỏ — tự xóa sau 6 giờ, không vào kho."}
@@ -386,10 +472,17 @@ def users_list(user=Depends(current_user)):
     require(user, {"admin"})
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id,email,full_name,role,can_review,active FROM users ORDER BY id")
+            # Không trả api_key_hash ra ngoài — chỉ cho biết CÓ khoá hay không
+            cur.execute("""SELECT id,email,full_name,role,can_review,active,
+                                  can_view_finance,
+                                  (api_key_hash IS NOT NULL) AS has_api_key,
+                                  api_key_at
+                             FROM users ORDER BY id""")
             rows = cur.fetchall()
     return [{"id": r[0], "email": r[1], "full_name": r[2], "role": r[3],
-             "can_review": r[4], "active": r[5]} for r in rows]
+             "can_review": r[4], "active": r[5], "can_view_finance": r[6],
+             "has_api_key": r[7], "api_key_at": str(r[8])[:10] if r[8] else None}
+            for r in rows]
 
 
 @app.post("/users")
@@ -422,6 +515,55 @@ def users_set_review(uid: int, grant: bool, user=Depends(current_user)):
     return {"ok": True, "user_id": uid, "can_review": grant}
 
 
+@app.post("/users/{uid}/finance-permission")
+def users_set_finance(uid: int, grant: bool, user=Depends(current_user)):
+    """Admin cấp/thu quyền xem công nợ, tài chính của khách.
+
+    Không có quyền này thì tài liệu loại 'cong_no' bị chặn ở CSDL (RLS): không
+    tra cứu ra, không hiện trong danh sách, bot cũng không nhắc tới."""
+    require(user, {"admin"})
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET can_view_finance=%s WHERE id=%s", (grant, uid))
+        db.audit(conn, user["id"], "set_finance_perm", "users", uid, {"grant": grant})
+    return {"ok": True, "user_id": uid, "can_view_finance": grant}
+
+
+@app.post("/users/{uid}/api-key")
+def users_issue_api_key(uid: int, user=Depends(current_user)):
+    """Cấp khoá API mới cho một tài khoản khách (thu hồi khoá cũ nếu có).
+
+    Khoá thật CHỈ trả về đúng lần này — CSDL giữ bản băm nên không lấy lại được.
+    Mất thì cấp khoá mới, không có cách xem lại."""
+    require(user, {"admin"})
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT role FROM users WHERE id=%s", (uid,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Không thấy tài khoản")
+            if row[0] not in CLIENT_ROLES:
+                raise HTTPException(400, "Chỉ cấp khoá API cho tài khoản khách hàng")
+            raw, hashed = auth.new_api_key()
+            cur.execute("UPDATE users SET api_key_hash=%s, api_key_at=now() WHERE id=%s",
+                        (hashed, uid))
+        db.audit(conn, user["id"], "issue_api_key", "users", uid, {})
+    return {"ok": True, "user_id": uid, "api_key": raw,
+            "note": "Lưu lại ngay — khoá này không hiển thị lại lần nào nữa."}
+
+
+@app.delete("/users/{uid}/api-key")
+def users_revoke_api_key(uid: int, user=Depends(current_user)):
+    """Thu hồi khoá API. Mọi lời gọi dùng khoá cũ bị chặn ngay lập tức."""
+    require(user, {"admin"})
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET api_key_hash=NULL, api_key_at=NULL WHERE id=%s",
+                        (uid,))
+        db.audit(conn, user["id"], "revoke_api_key", "users", uid, {})
+    return {"ok": True, "user_id": uid}
+
+
 # ---------- 7. DANH SÁCH TÀI LIỆU ĐÃ HỌC ----------
 @app.get("/documents")
 def documents_list(user=Depends(current_user), q: str = "", doc_type: str = "", limit: int = 200):
@@ -434,6 +576,9 @@ def documents_list(user=Depends(current_user), q: str = "", doc_type: str = "", 
                FROM documents d LEFT JOIN clients c ON c.id=d.client_id
               WHERE d.label_verified = true AND d.approved = true"""
     params = []
+    # Phiên này mở bằng admin=True nên RLS không áp — phải tự chặn công nợ.
+    if not user["can_finance"]:
+        sql += " AND d.doc_type <> 'cong_no'"
     if q:
         sql += " AND (d.title ILIKE %s OR d.summary ILIKE %s)"
         params += [f"%{q}%", f"%{q}%"]
@@ -449,6 +594,20 @@ def documents_list(user=Depends(current_user), q: str = "", doc_type: str = "", 
     return [{"id": r[0], "title": r[1], "doc_type": r[2], "access_level": r[3],
              "summary": r[4] or "(chưa có tóm tắt)", "source_kind": r[5],
              "created_at": str(r[6])[:10], "client_name": r[7], "so_doan": r[8]} for r in rows]
+
+
+@app.get("/drive/sync-status")
+def drive_sync_status(user=Depends(current_user)):
+    """Trạng thái lần quét Google Drive gần nhất (app/auto_learn.py ghi lại).
+
+    Đây là nơi admin biết bot đã học file nào, file nào bị bỏ qua và lý do —
+    không cần SSH vào máy chủ xem log."""
+    require_reviewer(user)
+    raw = settings.get("drive_sync_status")
+    if not raw:
+        return {"configured": bool(os.getenv("DRIVE_FOLDER_ID")), "last_run": None}
+    data = json.loads(raw)
+    return {"configured": True, "last_run": data}
 
 
 @app.get("/documents/browse")
@@ -473,10 +632,14 @@ def documents_browse(user=Depends(current_user), q: str = "", limit: int = 300):
             cur.execute(sql, params)
             rows = cur.fetchall()
     out = []
+    # Đọc ma trận MỘT LẦN cho cả danh sách, không mỗi dòng một lượt truy vấn
+    rules = rag.load_access_rules()
     for r in rows:
         doc = {"access_level": r[3], "department_id": r[5], "doc_type": r[2],
                "client_id": r[4], "title": r[1], "department_name": r[6]}
-        can_open = rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"], doc)
+        can_open = rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"], doc,
+                                    can_finance=user["can_finance"],
+                                    rules=rules, dept_codes=user["dept_codes"])
         out.append({
             "id": r[0],
             "title": rag.mask_title(doc, can_open),
@@ -525,6 +688,42 @@ def client_dossier(client_id: int, user=Depends(current_user)):
     if not dossier:
         raise HTTPException(404, "Không dựng được hồ sơ")
     return dossier
+
+
+@app.get("/alerts")
+def alerts_list(user=Depends(current_user), limit: int = 100):
+    """Cảnh báo vụ việc: quá hạn, sắp hết hạn, thiếu hạn, treo lâu.
+
+    Tính trực tiếp từ view v_matter_alerts nên luôn đúng tại thời điểm gọi.
+    Bảng matters không có RLS → phải tự lọc theo phòng ban ở đây."""
+    require(user, INTERNAL_ROLES)
+    sql = """SELECT matter_id, matter_code, matter_title, matter_type, status,
+                    deadline, days_left, client_id, client_name, client_code,
+                    kind, severity, last_doc_at
+               FROM v_matter_alerts"""
+    params = []
+    if not user["is_banqt"]:
+        sql += " WHERE department_id = ANY(%s)"
+        params.append(user["dept_ids"] or [-1])
+    # Gấp trước, trong mỗi mức thì hạn gần nhất lên đầu
+    sql += """ ORDER BY CASE severity WHEN 'gap' THEN 0 ELSE 1 END,
+                        days_left NULLS LAST, matter_id LIMIT %s"""
+    params.append(limit)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+    items = [{"matter_id": r[0], "matter_code": r[1], "matter_title": r[2],
+              "matter_type": r[3], "status": r[4],
+              "deadline": str(r[5]) if r[5] else None, "days_left": r[6],
+              "client_id": r[7], "client_name": r[8], "client_code": r[9],
+              "kind": r[10],
+              "kind_label": company_context.ALERT_KIND_VN.get(r[10], r[10]),
+              "severity": r[11],
+              "last_doc_at": str(r[12])[:10] if r[12] else None} for r in rows]
+    return {"total": len(items),
+            "urgent": sum(1 for x in items if x["severity"] == "gap"),
+            "items": items}
 
 
 class ProfileIn(BaseModel):
@@ -709,7 +908,10 @@ def files_download(doc_id: int, user=Depends(current_user)):
 
     doc = {"access_level": row[2], "department_id": row[3], "doc_type": row[4],
            "client_id": row[5], "title": row[0], "department_name": row[6]}
-    if not rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"], doc):
+    if not rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"], doc,
+                            can_finance=user["can_finance"],
+                            rules=rag.load_access_rules(),
+                            dept_codes=user["dept_codes"]):
         raise HTTPException(403, "Tài khoản chưa có quyền mở tài liệu này")
 
     if not row[1]:

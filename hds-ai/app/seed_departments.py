@@ -14,9 +14,25 @@ DEPARTMENTS = [
     ("shtt", "Sở hữu trí tuệ"),
 ]
 
-# Các loại tài liệu
+# Các loại tài liệu.
+# 'cong_no' KHÔNG có trong danh sách này: nó không đi theo ma trận phòng ban mà
+# theo quyền riêng từng người (users.can_view_finance), chặn ở RLS.
 DOC_TYPES = ["law", "ban_an", "an_le", "mau_hd", "nhan_hieu", "thu_mau",
              "quy_trinh", "ho_so_ns", "ho_so_kh", "advisory", "contract", "filing", "other"]
+
+# Ba gói khách hàng — quyết định khách được TRA CỨU loại tài liệu nào qua cổng
+# hỏi đáp và khoá API. Đây là phạm vi gói dịch vụ, không phải ranh giới bảo mật:
+# việc khách A không thấy dữ liệu khách B do RLS lo, độc lập hoàn toàn với đây.
+#
+# Hồ sơ của chính khách (ho_so_kh, contract, advisory, filing) chỉ mở từ gói
+# Plus trở lên; gói Free chỉ tra cứu tri thức pháp luật chung.
+CLIENT_TIERS = {
+    "client_free": ["law"],
+    "client_plus": ["law", "quy_trinh", "thu_mau",
+                    "ho_so_kh", "contract", "advisory", "filing"],
+    "client_pro": ["law", "quy_trinh", "thu_mau", "mau_hd", "an_le",
+                   "ho_so_kh", "contract", "advisory", "filing"],
+}
 
 # Ma trận: (role_level, department_code, doc_type, can_view, can_open)
 # '*' = áp cho mọi phòng.
@@ -68,6 +84,12 @@ def build_rules():
             add("tro_ly", "*", dt, True, False)
         else:
             add("tro_ly", "*", dt, True, dt in troly_open)
+
+    # ---- BA GÓI KHÁCH HÀNG ----
+    for tier, allowed in CLIENT_TIERS.items():
+        for dt in DOC_TYPES:
+            ok = dt in allowed
+            add(tier, "*", dt, ok, ok)
 
     return rules
 

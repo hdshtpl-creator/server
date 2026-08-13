@@ -18,6 +18,7 @@ import {
   Building,
   MessageSquareWarning,
 } from 'lucide-react';
+import { MatterAlertsCard } from './MatterAlertsCard';
 
 type IconType = React.ComponentType<{ className?: string }>;
 
@@ -154,6 +155,9 @@ export const OverviewTab: React.FC = () => {
           <span>Cập nhật số liệu</span>
         </button>
       </div>
+
+      {/* Hạn chót vụ việc — việc cần làm hôm nay, đặt trước mọi số liệu */}
+      <MatterAlertsCard />
 
       {/* Cảnh báo tài liệu thiếu chủ sở hữu */}
       {missingOwner > 0 && (

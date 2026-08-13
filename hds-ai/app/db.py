@@ -59,14 +59,16 @@ def _conn_str(as_app: bool = True) -> str:
 @contextmanager
 def session(role: str = "public", client_id: int | None = None,
             dept_ids: list[int] | None = None, is_banqt: bool = False,
-            admin: bool = False):
+            can_finance: bool = False, admin: bool = False):
     """Mở phiên CSDL đã set quyền.
 
-    role     : 1 trong 8 vai, hoặc 'internal'/'client'/'public'.
-    client_id: bắt buộc khi mức 'client'.
-    dept_ids : phòng user thuộc (mức 'internal', để lọc hồ sơ khách theo phòng).
-    is_banqt : True nếu thấy mọi phòng.
-    admin    : True -> kết nối tài khoản chủ 'hds', BỎ QUA RLS (chỉ ingest/migration).
+    role       : 1 trong 8 vai, hoặc 'internal'/'client'/'public'.
+    client_id  : bắt buộc khi mức 'client'.
+    dept_ids   : phòng user thuộc (mức 'internal', để lọc hồ sơ khách theo phòng).
+    is_banqt   : True nếu thấy mọi phòng.
+    can_finance: True nếu được xem tài liệu công nợ/tài chính (admin cấp từng người).
+                 Mặc định False — không truyền là không thấy, đúng hướng an toàn.
+    admin      : True -> kết nối tài khoản chủ 'hds', BỎ QUA RLS (chỉ ingest/migration).
     """
     if role in ("internal", "client", "public"):
         level = role
@@ -86,6 +88,8 @@ def session(role: str = "public", client_id: int | None = None,
             cur.execute("SELECT set_config('app.dept_ids', %s, false)", (dept_csv,))
             cur.execute("SELECT set_config('app.is_banqt', %s, false)",
                         ("yes" if is_banqt else "no",))
+            cur.execute("SELECT set_config('app.can_finance', %s, false)",
+                        ("yes" if can_finance else "no",))
         yield conn
         conn.commit()
 

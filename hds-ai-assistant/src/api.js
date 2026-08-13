@@ -400,6 +400,30 @@ export async function updateUserReviewPermission(uid, grant) {
   });
 }
 
+// POST /users/{uid}/finance-permission?grant=true|false
+// Quyền xem công nợ khách. Không có quyền thì tài liệu công nợ bị CSDL chặn.
+export async function updateUserFinancePermission(uid, grant) {
+  return request(`/users/${uid}/finance-permission?grant=${Boolean(grant)}`, {
+    method: 'POST',
+  });
+}
+
+// POST /users/{uid}/api-key — cấp khoá API mới cho tài khoản khách.
+// Khoá thật chỉ trả về đúng lần này, backend chỉ lưu bản băm.
+export async function issueApiKey(uid) {
+  return request(`/users/${uid}/api-key`, { method: 'POST' });
+}
+
+// DELETE /users/{uid}/api-key — thu hồi khoá, chặn ngay mọi lời gọi bằng khoá cũ
+export async function revokeApiKey(uid) {
+  return request(`/users/${uid}/api-key`, { method: 'DELETE' });
+}
+
+// GET /alerts — vụ việc quá hạn / sắp đến hạn / treo lâu, lọc theo phòng ban
+export async function getMatterAlerts(limit = 100) {
+  return request(`/alerts?limit=${Number(limit) || 100}`, { method: 'GET' });
+}
+
 // ==================== 9. CÀI ĐẶT AI ====================
 
 export async function getSettings() {
@@ -415,6 +439,11 @@ export async function updateSetting(key, value) {
 
 export async function resetSetting(key) {
   return request(`/settings/${key}/reset`, { method: 'POST' });
+}
+
+// GET /drive/sync-status — trạng thái lần bot quét Google Drive gần nhất
+export async function getDriveSyncStatus() {
+  return request('/drive/sync-status', { method: 'GET' });
 }
 
 // ==================== 10. BÁO CÁO CHẤT LƯỢNG ====================
@@ -561,12 +590,12 @@ let mockState = {
     { id: 4, code: 'shtt', name: 'Sở hữu trí tuệ' },
   ],
   users: [
-    { id: 1, email: 'admin@hdslaw.vn', full_name: 'Quản trị hệ thống', role: 'admin', can_review: true, active: true, department_ids: [], head_of: [], monthly_quota: 0 },
-    { id: 2, email: 'giamdoc@hdslaw.vn', full_name: 'Giám đốc (Ban QT)', role: 'ban_qt', can_review: true, active: true, department_ids: [], head_of: [], monthly_quota: 0 },
-    { id: 3, email: 'truong.dndt@hdslaw.vn', full_name: 'Trưởng phòng DN-ĐT', role: 'truong_bph', can_review: true, active: true, department_ids: [1], head_of: [1], monthly_quota: 0 },
-    { id: 4, email: 'cv.tranhtung@hdslaw.vn', full_name: 'Chuyên viên Tranh tụng', role: 'chuyen_vien', can_review: false, active: true, department_ids: [3], head_of: [], monthly_quota: 0 },
-    { id: 5, email: 'troly@hdslaw.vn', full_name: 'Trợ lý', role: 'tro_ly', can_review: false, active: true, department_ids: [2], head_of: [], monthly_quota: 0 },
-    { id: 6, email: 'lienhe@sungroup.vn', full_name: 'Đại diện SunGroup', role: 'client_plus', can_review: false, active: true, client_id: 1, department_ids: [], head_of: [], monthly_quota: 50 },
+    { id: 1, email: 'admin@hdslaw.vn', full_name: 'Quản trị hệ thống', role: 'admin', can_review: true, can_view_finance: true, active: true, department_ids: [], head_of: [], monthly_quota: 0 },
+    { id: 2, email: 'giamdoc@hdslaw.vn', full_name: 'Giám đốc (Ban QT)', role: 'ban_qt', can_review: true, can_view_finance: true, active: true, department_ids: [], head_of: [], monthly_quota: 0 },
+    { id: 3, email: 'truong.dndt@hdslaw.vn', full_name: 'Trưởng phòng DN-ĐT', role: 'truong_bph', can_review: true, can_view_finance: false, active: true, department_ids: [1], head_of: [1], monthly_quota: 0 },
+    { id: 4, email: 'cv.tranhtung@hdslaw.vn', full_name: 'Chuyên viên Tranh tụng', role: 'chuyen_vien', can_review: false, can_view_finance: false, active: true, department_ids: [3], head_of: [], monthly_quota: 0 },
+    { id: 5, email: 'troly@hdslaw.vn', full_name: 'Trợ lý', role: 'tro_ly', can_review: false, can_view_finance: false, active: true, department_ids: [2], head_of: [], monthly_quota: 0 },
+    { id: 6, email: 'lienhe@sungroup.vn', full_name: 'Đại diện SunGroup', role: 'client_plus', can_review: false, can_view_finance: false, active: true, client_id: 1, department_ids: [], head_of: [], monthly_quota: 50 },
   ],
   clients: [
     { id: 1, name: 'Tập đoàn SunGroup', code: 'SUNGROUP', department: 'Doanh nghiệp - Đầu tư' },
@@ -792,6 +821,71 @@ let mockState = {
       2
     ),
   },
+  driveSyncStatus: {
+    folder_id: '1uoDwXCX1CO6F3KukOQOIlf2Byuy6U8ng',
+    started_at: '2026-08-11T02:00:03+00:00',
+    finished_at: '2026-08-11T02:00:41+00:00',
+    finished: true,
+    counts: {
+      scanned: 18, new: 3, updated: 1, unchanged: 12, unmapped: 2, bad_format: 0, errors: 0,
+    },
+    new_items: [
+      { name: '90_2025_QH15_662379', location: '1. Văn bản pháp luật', doc_type: 'law', access_level: 'public' },
+      { name: '100_2026_ND-CP_695468', location: '1. Văn bản pháp luật', doc_type: 'law', access_level: 'public' },
+      { name: 'Mau_HD_Tu_van_Phap_ly.docx', location: '3. Hợp đồng mẫu', doc_type: 'mau_hd', access_level: 'internal' },
+    ],
+    updated_items: [
+      { name: '07_2022_QH15_458435.pdf', location: '1. Văn bản pháp luật', doc_type: 'law', access_level: 'public' },
+    ],
+    skipped_items: [
+      {
+        name: 'Ghi_chu_noi_bo_thang_8.docx',
+        location: '(gốc)',
+        reason: "nằm ở thư mục gốc (không rõ loại)",
+      },
+      {
+        name: 'Hop_dong_dich_vu_ABC.pdf',
+        location: '9. Hồ sơ khách hàng/Công ty ABC',
+        reason:
+          "chưa xác định được khách từ thư mục 'Công ty ABC'. Đặt tên dạng '[MÃ_KHÁCH] Tên khách' và tạo khách trong hệ thống trước",
+      },
+    ],
+    error_items: [],
+  },
+  matterAlerts: [
+    {
+      matter_id: 1, matter_code: 'M-2026-001',
+      matter_title: 'Tái cấu trúc vốn SunPhuQuoc', matter_type: 'Doanh nghiệp',
+      status: 'dang_xu_ly', deadline: '2026-08-10', days_left: -3,
+      client_id: 1, client_name: 'Tập đoàn SunGroup', client_code: 'SUNGROUP',
+      kind: 'qua_han', kind_label: 'ĐÃ QUÁ HẠN', severity: 'gap',
+      last_doc_at: '2026-07-28',
+    },
+    {
+      matter_id: 2, matter_code: 'M-2026-014',
+      matter_title: 'Thuê đất thương mại', matter_type: 'Đất đai',
+      status: 'dang_xu_ly', deadline: '2026-08-18', days_left: 5,
+      client_id: 1, client_name: 'Tập đoàn SunGroup', client_code: 'SUNGROUP',
+      kind: 'den_han_gap', kind_label: 'sắp hết hạn trong 7 ngày', severity: 'gap',
+      last_doc_at: '2026-08-09',
+    },
+    {
+      matter_id: 3, matter_code: 'M-2026-009',
+      matter_title: 'Tranh chấp hợp đồng phân phối', matter_type: 'Tranh tụng',
+      status: 'dang_xu_ly', deadline: '2026-09-05', days_left: 23,
+      client_id: 2, client_name: 'Công ty CP Vinapharma', client_code: 'VINAPHARMA',
+      kind: 'den_han_gan', kind_label: 'đến hạn trong 30 ngày', severity: 'luu_y',
+      last_doc_at: '2026-08-01',
+    },
+    {
+      matter_id: 4, matter_code: 'M-2026-022',
+      matter_title: 'Đăng ký nhãn hiệu nhóm 35', matter_type: 'SHTT',
+      status: 'dang_xu_ly', deadline: null, days_left: null,
+      client_id: 3, client_name: 'Công ty TechLogistics', client_code: 'TECHLOG',
+      kind: 'thieu_han', kind_label: 'đang xử lý nhưng chưa đặt hạn',
+      severity: 'luu_y', last_doc_at: '2026-08-05',
+    },
+  ],
   feedback: [
     {
       id: 1,
@@ -1092,6 +1186,30 @@ Với câu hỏi "${question}":
     return { ok: true, user_id: Number(targetId), can_review: grant };
   }
 
+  if (endpoint.includes('/finance-permission')) {
+    const targetId = endpoint.split('/')[2];
+    const grant = endpoint.includes('grant=true');
+    const u = mockState.users.find((x) => String(x.id) === String(targetId));
+    if (u) u.can_view_finance = grant;
+    return { ok: true, user_id: Number(targetId), can_view_finance: grant };
+  }
+
+  if (endpoint.includes('/api-key')) {
+    const targetId = Number(endpoint.split('/')[2]);
+    const u = mockState.users.find((x) => x.id === targetId);
+    if (method === 'DELETE') {
+      if (u) u.has_api_key = false;
+      return { ok: true, user_id: targetId };
+    }
+    if (u) u.has_api_key = true;
+    return {
+      ok: true,
+      user_id: targetId,
+      api_key: 'hds_GIA_LAP_khong_dung_that_' + Math.random().toString(36).slice(2, 14),
+      note: 'Lưu lại ngay — khoá này không hiển thị lại lần nào nữa.',
+    };
+  }
+
   // ---------- Cài đặt AI ----------
   if (endpoint === '/settings' && method === 'GET') {
     return {
@@ -1111,6 +1229,19 @@ Với câu hỏi "${question}":
   if (/^\/settings\/[^/]+\/reset$/.test(endpoint) && method === 'POST') {
     const key = endpoint.split('/')[2];
     return { ok: true, key, value: mockState.settings[key] };
+  }
+
+  if (endpoint === '/drive/sync-status') {
+    return { configured: true, last_run: mockState.driveSyncStatus };
+  }
+
+  if (endpoint.startsWith('/alerts')) {
+    const items = [...mockState.matterAlerts];
+    return {
+      total: items.length,
+      urgent: items.filter((x) => x.severity === 'gap').length,
+      items,
+    };
   }
 
   // ---------- Báo cáo chất lượng ----------

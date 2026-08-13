@@ -7,7 +7,9 @@ Luồng:
   2. Client gửi kèm mọi request: header Authorization: Bearer <token>
   3. get_current_user() giải mã token -> biết user là ai (không giả được)
 """
+import hashlib
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -68,6 +70,27 @@ def verify_password(plain: str, hashed: str) -> bool:
         return bcrypt.checkpw(plain.encode(), hashed.encode())
     except Exception:
         return False
+
+
+API_KEY_PREFIX = "hds_"
+
+
+def new_api_key() -> tuple[str, str]:
+    """Sinh khoá API cho khách tích hợp. Trả về (khoá thật, bản băm để lưu).
+
+    Khoá thật chỉ hiện MỘT LẦN lúc cấp; CSDL chỉ giữ bản băm. Máy chủ bị đọc
+    CSDL thì kẻ đọc vẫn không gọi được API thay khách.
+
+    Dùng SHA-256 chứ không bcrypt vì phải tra cứu được theo khoá (bcrypt có
+    muối ngẫu nhiên nên không tra được). An toàn ở đây đến từ việc khoá dài và
+    ngẫu nhiên thật (256 bit), không phải từ độ chậm của hàm băm.
+    """
+    raw = API_KEY_PREFIX + secrets.token_urlsafe(32)
+    return raw, hash_api_key(raw)
+
+
+def hash_api_key(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def make_token(user_id: int, role: str) -> str:

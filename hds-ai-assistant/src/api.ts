@@ -18,6 +18,8 @@ import type {
   AppSettings,
   FeedbackItem,
   UploadResult,
+  DriveSyncStatus,
+  MatterAlerts,
 } from './types';
 
 export const setUserId = ApiJs.setUserId as (id: string | number) => void;
@@ -111,6 +113,19 @@ export const updateUserReviewPermission = ApiJs.updateUserReviewPermission as (
   grant: boolean
 ) => Promise<{ ok?: boolean; user_id?: number; can_review?: boolean }>;
 
+export const updateUserFinancePermission = ApiJs.updateUserFinancePermission as (
+  uid: number,
+  grant: boolean
+) => Promise<{ ok?: boolean; user_id?: number; can_view_finance?: boolean }>;
+
+export const issueApiKey = ApiJs.issueApiKey as (
+  uid: number
+) => Promise<{ ok?: boolean; user_id?: number; api_key: string; note?: string }>;
+
+export const revokeApiKey = ApiJs.revokeApiKey as (
+  uid: number
+) => Promise<{ ok?: boolean; user_id?: number }>;
+
 export const getDocuments = ApiJs.getDocuments as (params?: {
   q?: string;
   doc_type?: string;
@@ -132,6 +147,10 @@ export const updateClientProfile = ApiJs.updateClientProfile as (
 
 export const getDepartments = ApiJs.getDepartments as () => Promise<Department[]>;
 
+export const getMatterAlerts = ApiJs.getMatterAlerts as (
+  limit?: number
+) => Promise<MatterAlerts>;
+
 // ---------- Cài đặt AI ----------
 export const getSettings = ApiJs.getSettings as () => Promise<AppSettings>;
 
@@ -143,6 +162,8 @@ export const updateSetting = ApiJs.updateSetting as (
 export const resetSetting = ApiJs.resetSetting as (
   key: string
 ) => Promise<{ ok?: boolean; key?: string; value?: string }>;
+
+export const getDriveSyncStatus = ApiJs.getDriveSyncStatus as () => Promise<DriveSyncStatus>;
 
 // ---------- Báo cáo chất lượng ----------
 export const sendFeedback = ApiJs.sendFeedback as (params: {

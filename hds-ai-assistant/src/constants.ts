@@ -23,6 +23,7 @@ export const DOC_TYPES = [
   { value: 'quy_trinh', label: 'Quy trình' },
   { value: 'ho_so_ns', label: 'Hồ sơ nhân sự' },
   { value: 'ho_so_kh', label: 'Hồ sơ khách hàng' },
+  { value: 'cong_no', label: 'Công nợ - Tài chính' },
   { value: 'other', label: 'Khác' },
 ] as const;
 
@@ -67,6 +68,32 @@ export const ACCESS_LEVEL_BADGES: Record<string, { label: string; badge: string 
     label: 'Hồ sơ khách',
     badge:
       'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800',
+  },
+};
+
+/* --------------------------------------------------------------
+   Nguồn nạp tài liệu — schema.sql: documents.source_kind CHECK (...)
+-------------------------------------------------------------- */
+export const SOURCE_KIND_BADGES: Record<string, { label: string; badge: string }> = {
+  drive: {
+    label: 'Google Drive',
+    badge:
+      'bg-sky-100 text-sky-800 border-sky-300 dark:bg-sky-950 dark:text-sky-300 dark:border-sky-800',
+  },
+  manual: {
+    label: 'Nhập tay',
+    badge:
+      'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
+  },
+  chat: {
+    label: 'Từ hội thoại',
+    badge:
+      'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800',
+  },
+  web: {
+    label: 'Tải lên web',
+    badge:
+      'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800',
   },
 };
 

@@ -14,6 +14,32 @@ export type UserRole =
   | 'client_plus'
   | 'client_pro';
 
+/** Một vụ việc cần chú ý, tính trực tiếp từ view v_matter_alerts. */
+export interface MatterAlert {
+  matter_id: number;
+  matter_code: string | null;
+  matter_title: string;
+  matter_type: string | null;
+  status: string;
+  deadline: string | null;
+  /** Số ngày còn lại; âm là đã quá hạn; null khi chưa đặt hạn. */
+  days_left: number | null;
+  client_id: number;
+  client_name: string;
+  client_code: string | null;
+  kind: 'qua_han' | 'den_han_gap' | 'den_han_gan' | 'thieu_han' | 'treo_lau';
+  kind_label: string;
+  severity: 'gap' | 'luu_y';
+  last_doc_at: string | null;
+}
+
+export interface MatterAlerts {
+  total: number;
+  /** Số vụ ở mức gấp: đã quá hạn hoặc còn không quá 7 ngày. */
+  urgent: number;
+  items: MatterAlert[];
+}
+
 export interface User {
   id: number;
   email?: string;
@@ -29,6 +55,14 @@ export interface User {
   used_this_month?: number;
   /** true với vai admin / ban_qt — được xem toàn bộ phòng ban. */
   is_banqt?: boolean;
+  /** Cờ trong CSDL: admin đã cấp quyền xem công nợ cho người này chưa. */
+  can_view_finance?: boolean;
+  /** Quyền xem công nợ có hiệu lực (admin luôn có, người khác phải được cấp). */
+  can_finance?: boolean;
+  /** Tài khoản khách này đã được cấp khoá API chưa. Backend không trả khoá. */
+  has_api_key?: boolean;
+  /** Ngày cấp khoá API gần nhất. */
+  api_key_at?: string | null;
 }
 
 export interface Stats {
@@ -217,4 +251,40 @@ export interface UploadResult {
   filename?: string;
   bytes?: number;
   note?: string;
+}
+
+export interface DriveSyncItem {
+  name: string;
+  location: string;
+  doc_type?: string;
+  access_level?: string;
+  reason?: string;
+  error?: string;
+}
+
+export interface DriveSyncCounts {
+  scanned: number;
+  new: number;
+  updated: number;
+  unchanged: number;
+  unmapped: number;
+  bad_format: number;
+  errors: number;
+}
+
+export interface DriveSyncRun {
+  folder_id: string;
+  started_at: string;
+  finished_at: string | null;
+  finished: boolean;
+  counts: DriveSyncCounts;
+  new_items: DriveSyncItem[];
+  updated_items: DriveSyncItem[];
+  skipped_items: DriveSyncItem[];
+  error_items: DriveSyncItem[];
+}
+
+export interface DriveSyncStatus {
+  configured: boolean;
+  last_run: DriveSyncRun | null;
 }

@@ -38,6 +38,9 @@ DEFAULTS = {
     # Tham số sinh câu trả lời
     "llm_temperature": "0.2",
     "retrieval_top_k": "8",
+    # Số lượt hỏi-đáp cũ đưa lại vào ngữ cảnh để bot hiểu "vụ đó", "khách kia".
+    # Đặt 0 là tắt bộ nhớ hội thoại (mỗi câu hỏi độc lập).
+    "chat_history_turns": "6",
     # Bản đồ thư mục Drive → nhãn tài liệu (app/auto_learn.py dùng).
     # Khoá được so khớp sau khi chuẩn hoá: bỏ số thứ tự đầu, bỏ dấu, viết thường.
     # Nhờ vậy "1. VĂN BẢN PHÁP LUẬT" và "van ban phap luat" là một.
@@ -65,7 +68,9 @@ DEFAULTS = {
             },
             # Thư mục cấp 1 chứa hồ sơ khách hàng
             "client_roots": ["hồ sơ khách hàng", "khach hang", "khách hàng"],
-            # Thư mục con trong hồ sơ khách → loại giấy tờ
+            # Thư mục con trong hồ sơ khách → loại giấy tờ.
+            # 'cong_no' là loại HẠN CHẾ: chặn ở CSDL (RLS), chỉ người được admin
+            # cấp quyền xem tài chính mới tra cứu ra và bot mới dám nhắc tới.
             "client_subcategories": {
                 "thông tin khách hàng": "ho_so_kh",
                 "tổng hợp thông tin khách hàng": "ho_so_kh",
@@ -76,6 +81,9 @@ DEFAULTS = {
                 "thư tư vấn": "advisory",
                 "hồ sơ nộp cơ quan": "filing",
                 "bản án": "ban_an",
+                "công nợ": "cong_no",
+                "công nợ - tài chính": "cong_no",
+                "tài chính": "cong_no",
             },
         },
         ensure_ascii=False,
@@ -170,3 +178,21 @@ def reset(key, user_id=None):
             cur.execute("DELETE FROM app_settings WHERE key=%s", (key,))
         db.audit(conn, user_id, "reset_setting", "app_settings", None, {"key": key})
     return DEFAULTS.get(key)
+
+
+def set_system(key, value):
+    """Ghi một giá trị hệ thống, KHÔNG qua kiểm tra EDITABLE_KEYS.
+
+    Dùng cho các tiến trình nền tự ghi trạng thái của chính nó (vd auto_learn.py
+    ghi 'drive_sync_status' sau mỗi lần quét) — khác với set(), vốn dành cho
+    admin sửa tay qua API và phải nằm trong danh sách khoá được phép sửa.
+    """
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO app_settings (key, value, updated_at)
+                   VALUES (%s,%s,now())
+                   ON CONFLICT (key) DO UPDATE
+                     SET value=EXCLUDED.value, updated_at=now()""",
+                (key, value),
+            )
