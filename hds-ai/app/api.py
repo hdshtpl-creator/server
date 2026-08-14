@@ -799,6 +799,25 @@ def health():
     return {"database": db.check_connection(), **st}
 
 
+@app.get("/models")
+def models_list(user=Depends(current_user)):
+    """Model AI đang có trên máy chủ (Ollama) + model đang dùng để sinh câu trả lời.
+
+    Dùng cho nút chọn model trong Cài đặt AI. Chỉ admin — đổi model ảnh hưởng
+    toàn hệ thống."""
+    require(user, {"admin"})
+    from app.models import check_models
+    st = check_models()
+    return {
+        "ollama": st["ollama"],
+        "available": st.get("models", []),   # tên mọi model đã cài trên server
+        "current": st.get("llm_model"),       # model sinh câu trả lời đang chọn
+        "current_ready": st.get("llm"),        # model đang chọn có thật sự tồn tại không
+        "embed_model": st.get("embed_model"),  # model tạo vector — cố định, không đổi
+        "embed_ready": st.get("embed"),
+    }
+
+
 # ---------- 8a. TỆP: TẢI LÊN / TẢI VỀ QUA WEB ----------
 # Khác /upload (nhận text đã trích sẵn, chỉ dùng được .txt): các endpoint dưới đây
 # nhận TỆP THẬT (pdf/docx/...), tự lưu vào đúng thư mục trên server, tự trích văn

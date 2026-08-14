@@ -430,6 +430,11 @@ export async function getSettings() {
   return request('/settings', { method: 'GET' });
 }
 
+// GET /models — model Ollama có trên máy chủ + model đang dùng
+export async function getModels() {
+  return request('/models', { method: 'GET' });
+}
+
 export async function updateSetting(key, value) {
   return request(`/settings/${key}`, {
     method: 'PUT',
@@ -806,6 +811,8 @@ let mockState = {
       'Bạn là trợ lý của HDS phục vụ khách hàng đã ký hợp đồng. Chỉ dùng tài liệu thuộc về khách đang đăng nhập. Không nhắc tới khách hàng khác.',
     llm_temperature: '0.2',
     retrieval_top_k: '8',
+    chat_history_turns: '6',
+    llm_model: '',
     drive_map: JSON.stringify(
       {
         categories: {
@@ -1241,6 +1248,17 @@ Với câu hỏi "${question}":
       total: items.length,
       urgent: items.filter((x) => x.severity === 'gap').length,
       items,
+    };
+  }
+
+  if (endpoint === '/models') {
+    return {
+      ollama: true,
+      available: ['qwen3:8b', 'qwen2.5:14b', 'llama3.1:8b', 'bge-m3'],
+      current: mockState.settings.llm_model || 'qwen3:8b',
+      current_ready: true,
+      embed_model: 'bge-m3',
+      embed_ready: true,
     };
   }
 

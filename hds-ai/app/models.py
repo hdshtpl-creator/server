@@ -38,10 +38,26 @@ def embed(texts, batch_size: int = 16):
     return out[0] if single else out
 
 
+def effective_llm_model() -> str:
+    """Model sinh câu trả lời đang dùng: ưu tiên admin chọn trên web (app_settings),
+    ngược lại lấy LLM_MODEL trong .env. Đọc tại thời điểm gọi nên đổi là ăn ngay.
+
+    Import settings kiểu lười để tránh vòng import lúc nạp module (models nạp rất
+    sớm, trước cả khi CSDL sẵn sàng)."""
+    try:
+        from app import settings
+        m = (settings.get("llm_model") or "").strip()
+        if m:
+            return m
+    except Exception:
+        pass
+    return LLM_MODEL
+
+
 def llm_local(prompt: str, system: str = "", temperature: float = 0.2) -> tuple[str, int]:
     t0 = time.time()
     r = requests.post(f"{OLLAMA_URL}/api/generate", json={
-        "model": LLM_MODEL, "prompt": prompt, "system": system, "stream": False,
+        "model": effective_llm_model(), "prompt": prompt, "system": system, "stream": False,
         "options": {"temperature": temperature, "num_ctx": 8192}}, timeout=300)
     r.raise_for_status()
     ans = r.json().get("response", "").strip()
@@ -96,10 +112,13 @@ def check_ollama():
 
 def check_models():
     up, names = check_ollama()
+    cur = effective_llm_model()
     if not up:
-        return {"ollama": False, "llm": False, "embed": False, "models": []}
+        return {"ollama": False, "llm": False, "embed": False, "models": [],
+                "llm_model": cur, "embed_model": EMBED_MODEL}
     has = lambda m: any(n.split(":")[0] == m.split(":")[0] for n in names)
-    return {"ollama": True, "llm": has(LLM_MODEL), "embed": has(EMBED_MODEL), "models": names}
+    return {"ollama": True, "llm": has(cur), "embed": has(EMBED_MODEL),
+            "models": names, "llm_model": cur, "embed_model": EMBED_MODEL}
 
 
 if __name__ == "__main__":

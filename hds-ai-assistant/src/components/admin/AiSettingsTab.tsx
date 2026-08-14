@@ -1,7 +1,165 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
-import { RefreshCw, Save, RotateCcw, Info, AlertCircle, Loader2, Sparkles } from 'lucide-react';
+import type { ModelInfo } from '../../types';
+import {
+  RefreshCw,
+  Save,
+  RotateCcw,
+  Info,
+  AlertCircle,
+  Loader2,
+  Sparkles,
+  Cpu,
+  CircleCheck,
+  CircleAlert,
+} from 'lucide-react';
+
+/**
+ * Chọn model sinh câu trả lời trong số các model Ollama đã cài trên máy chủ.
+ * Tự quản vòng tải/lưu riêng — độc lập với phần cài đặt còn lại.
+ *
+ * KHÔNG cho đổi model tạo vector (bge-m3): mọi đoạn tài liệu đã lưu đều theo
+ * model đó, đổi sang model khác thì tra cứu ra kết quả sai. Chỉ hiển thị để biết.
+ */
+const ModelSection: React.FC = () => {
+  const { showToast } = useApp();
+  const [info, setInfo] = useState<ModelInfo | null>(null);
+  const [selected, setSelected] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    setIsLoading(true);
+    try {
+      const res = await api.getModels();
+      setInfo(res);
+      setSelected(res.current || '');
+    } catch (err: any) {
+      showToast(err?.message || 'Không tải được danh sách model.', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.updateSetting('llm_model', selected);
+      showToast('Đã đổi model. Có hiệu lực ngay ở câu hỏi tiếp theo.', 'success');
+      await load();
+    } catch (err: any) {
+      showToast(err?.message || 'Không đổi được model.', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Model dùng để SINH câu trả lời: loại model tạo vector ra khỏi lựa chọn.
+  const genModels = (info?.available || []).filter(
+    (m) => m.split(':')[0] !== (info?.embed_model || '').split(':')[0]
+  );
+  const dirty = selected !== (info?.current || '');
+
+  return (
+    <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
+      <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+        <div className="flex items-center gap-2">
+          <Cpu className="w-4 h-4 text-hds-navy dark:text-blue-400" />
+          <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Model AI</h3>
+        </div>
+        <button
+          onClick={load}
+          className="flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 hover:text-hds-navy dark:hover:text-blue-300 transition-colors"
+        >
+          <RefreshCw className="w-3 h-3" />
+          Quét lại
+        </button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 py-2">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Đang hỏi máy chủ có những model nào…
+        </div>
+      ) : !info?.ollama ? (
+        <div className="flex items-start gap-2 text-xs text-hds-red dark:text-red-400 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-lg p-3">
+          <CircleAlert className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold">Chưa kết nối được Ollama trên máy chủ.</p>
+            <p className="mt-0.5 leading-relaxed">
+              Hỏi đáp AI sẽ báo lỗi cho tới khi Ollama chạy. Trên máy chủ:{' '}
+              <code className="font-mono">curl -fsSL https://ollama.com/install.sh | sh</code> rồi{' '}
+              <code className="font-mono">ollama pull qwen3:8b bge-m3</code>.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="space-y-1">
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Model sinh câu trả lời
+            </label>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Chọn trong số model đã cài trên máy chủ. Model càng lớn càng thông minh nhưng chậm và
+              tốn RAM hơn.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <select
+                value={selected}
+                onChange={(e) => setSelected(e.target.value)}
+                className="flex-1 px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 dark:text-slate-100 rounded-xl text-xs font-medium focus:ring-2 focus:ring-hds-blue focus:outline-none"
+              >
+                <option value="">— Theo mặc định máy chủ (.env) —</option>
+                {genModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={save}
+                disabled={!dirty || saving}
+                className="px-4 py-2 rounded-xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-1.5 bg-hds-navy hover:bg-hds-navy-light disabled:bg-slate-300 dark:disabled:bg-slate-700 disabled:cursor-not-allowed transition-colors shrink-0"
+              >
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                <span>Đổi model</span>
+              </button>
+            </div>
+            {/* Model đang chọn không có trên server → cảnh báo, chat sẽ lỗi */}
+            {info.current && !info.current_ready && (
+              <p className="text-[11px] text-hds-red dark:text-red-400 flex items-center gap-1 pt-1">
+                <CircleAlert className="w-3.5 h-3.5 shrink-0" />
+                Model "{info.current}" đang chọn nhưng chưa cài trên máy chủ. Chạy{' '}
+                <code className="font-mono">ollama pull {info.current}</code>.
+              </p>
+            )}
+          </div>
+
+          {/* Model tạo vector — chỉ hiển thị, không cho đổi */}
+          <div className="flex items-start gap-2 text-[11px] text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5">
+            <Info className="w-3.5 h-3.5 shrink-0 mt-px text-hds-blue" />
+            <span>
+              Model tạo vector:{' '}
+              <code className="font-mono font-semibold">{info.embed_model || '—'}</code>{' '}
+              {info.embed_ready ? (
+                <CircleCheck className="w-3 h-3 inline text-hds-green" />
+              ) : (
+                <CircleAlert className="w-3 h-3 inline text-hds-red" />
+              )}
+              . Cố định — mọi tài liệu đã học đều theo model này, đổi sẽ làm sai kết quả tra cứu.
+            </span>
+          </div>
+        </>
+      )}
+    </section>
+  );
+};
 
 interface FieldDef {
   key: string;
@@ -154,6 +312,9 @@ export const AiSettingsTab: React.FC = () => {
           lưu, hãy thử lại vài câu hỏi để kiểm tra trước khi để nhân viên dùng.
         </p>
       </div>
+
+      {/* Chọn model AI đang chạy trên máy chủ */}
+      <ModelSection />
 
       {/* Phong cách tư vấn */}
       <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">

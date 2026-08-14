@@ -20,6 +20,7 @@ import type {
   UploadResult,
   DriveSyncStatus,
   MatterAlerts,
+  ModelInfo,
 } from './types';
 
 export const setUserId = ApiJs.setUserId as (id: string | number) => void;
@@ -164,6 +165,8 @@ export const resetSetting = ApiJs.resetSetting as (
 ) => Promise<{ ok?: boolean; key?: string; value?: string }>;
 
 export const getDriveSyncStatus = ApiJs.getDriveSyncStatus as () => Promise<DriveSyncStatus>;
+
+export const getModels = ApiJs.getModels as () => Promise<ModelInfo>;
 
 // ---------- Báo cáo chất lượng ----------
 export const sendFeedback = ApiJs.sendFeedback as (params: {

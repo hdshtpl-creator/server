@@ -14,6 +14,20 @@ export type UserRole =
   | 'client_plus'
   | 'client_pro';
 
+/** Model AI trên máy chủ, cho nút chọn model trong Cài đặt AI. */
+export interface ModelInfo {
+  ollama: boolean;
+  /** Tên mọi model Ollama đã cài trên server. */
+  available: string[];
+  /** Model đang dùng để sinh câu trả lời (rỗng nếu theo mặc định .env). */
+  current: string | null;
+  /** Model đang chọn có thật sự tồn tại trên server không. */
+  current_ready: boolean;
+  /** Model tạo vector — cố định, đổi là hỏng tra cứu. Chỉ hiển thị. */
+  embed_model: string | null;
+  embed_ready: boolean;
+}
+
 /** Một vụ việc cần chú ý, tính trực tiếp từ view v_matter_alerts. */
 export interface MatterAlert {
   matter_id: number;

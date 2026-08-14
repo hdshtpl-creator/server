@@ -41,6 +41,11 @@ DEFAULTS = {
     # Số lượt hỏi-đáp cũ đưa lại vào ngữ cảnh để bot hiểu "vụ đó", "khách kia".
     # Đặt 0 là tắt bộ nhớ hội thoại (mỗi câu hỏi độc lập).
     "chat_history_turns": "6",
+    # Model sinh câu trả lời (Ollama). Rỗng = dùng LLM_MODEL trong .env của máy
+    # chủ. Admin đổi trên web để chuyển sang model khác đã cài, không cần sửa
+    # .env rồi khởi động lại. KHÔNG áp cho model tạo vector (bge-m3): mọi đoạn
+    # đã lưu đều theo model đó, đổi là hỏng tra cứu.
+    "llm_model": "",
     # Bản đồ thư mục Drive → nhãn tài liệu (app/auto_learn.py dùng).
     # Khoá được so khớp sau khi chuẩn hoá: bỏ số thứ tự đầu, bỏ dấu, viết thường.
     # Nhờ vậy "1. VĂN BẢN PHÁP LUẬT" và "van ban phap luat" là một.
