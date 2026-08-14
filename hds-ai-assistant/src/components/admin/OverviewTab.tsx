@@ -8,7 +8,6 @@ import {
   Clock,
   AlertTriangle,
   Layers,
-  MessageSquareText,
   GraduationCap,
   Boxes,
   RefreshCw,
@@ -293,20 +292,12 @@ export const OverviewTab: React.FC = () => {
           tone={TONES.purple}
         />
         <StatCard
-          label="Hội thoại chờ học"
+          label="Câu trả lời bị báo cáo"
           value={stats.hoi_thoai_cho_duyet}
-          hint="Cần thẩm định câu trả lời"
-          icon={MessageSquareText}
-          tone={TONES.indigo}
-          onClick={() => setAdminTab('learn')}
-        />
-        <StatCard
-          label="Báo cáo chờ xử lý"
-          value={stats.bao_cao_cho_xu_ly}
-          hint="Người dùng báo chất lượng câu trả lời"
+          hint="Người dùng báo chưa ổn — cần sửa và dạy lại"
           icon={MessageSquareWarning}
           tone={TONES.rose}
-          onClick={() => setAdminTab('feedback')}
+          onClick={() => setAdminTab('learn')}
         />
         <StatCard
           label="Đã tiếp thu"

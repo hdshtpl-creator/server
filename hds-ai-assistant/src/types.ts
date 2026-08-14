@@ -159,6 +159,13 @@ export interface PendingLearnMessage {
   question: string | null;
   answer: string;
   created_at: string;
+  /** Ghi chú người dùng viết khi bấm báo cáo — vì sao câu trả lời chưa ổn. */
+  note?: string | null;
+  /** Tên người báo cáo. */
+  reporter?: string | null;
+  /** Số lượt báo cáo cho cùng câu trả lời này. */
+  report_count?: number;
+  reported_at?: string | null;
 }
 
 export interface MethodTemplate {

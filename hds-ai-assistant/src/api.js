@@ -697,6 +697,10 @@ let mockState = {
       answer:
         'Theo Điều 12 Luật Doanh nghiệp 2020, doanh nghiệp phải đăng ký thay đổi người đại diện theo pháp luật trong thời hạn 10 ngày kể từ ngày có thay đổi.',
       created_at: '2026-08-07 09:15',
+      note: 'Sai thời hạn — thực tế là trong 10 ngày nhưng dẫn nhầm Điều. Cần dẫn đúng Điều 30 Luật Doanh nghiệp 2020 về đăng ký thay đổi nội dung ĐKDN.',
+      reporter: 'Chuyên viên Tranh tụng',
+      report_count: 2,
+      reported_at: '2026-08-07 09:40',
     },
     {
       message_id: 502,
@@ -704,6 +708,10 @@ let mockState = {
       answer:
         'Hồ sơ gồm: đơn đề nghị, bản sao Giấy chứng nhận ĐKKD, phương án kinh doanh bưu chính, mẫu hợp đồng cung ứng dịch vụ và văn bản xác nhận vốn tối thiểu 5 tỷ đồng.',
       created_at: '2026-08-07 10:30',
+      note: 'Thiếu điều kiện về vốn pháp định thực tế và bản cam kết chất lượng dịch vụ.',
+      reporter: 'Trưởng phòng DN-ĐT',
+      report_count: 1,
+      reported_at: '2026-08-07 10:52',
     },
   ],
   // steps là chuỗi nhiều dòng — giống hệt cột TEXT của backend
@@ -804,11 +812,11 @@ let mockState = {
   ],
   settings: {
     prompt_public:
-      'Bạn là trợ lý của Công ty Luật HDS, trả lời khách trên website. Chỉ dựa vào tài liệu tham khảo. Không đủ căn cứ thì nói rõ và mời liên hệ luật sư HDS.',
+      'Bạn là trợ lý của Công ty Luật HDS, trả lời khách trên website. Chỉ dựa vào TÀI LIỆU THAM KHẢO. Trả lời NGẮN GỌN, khái quát. Nếu câu hỏi chưa rõ, hỏi lại một câu để làm rõ. Không đủ căn cứ thì nói rõ và mời liên hệ luật sư HDS.',
     prompt_internal:
-      'Bạn là trợ lý pháp lý nội bộ của HDS, phục vụ luật sư và chuyên viên. Trả lời chuyên sâu, trích tới Điều/Khoản khi có. Kết quả là bản nháp; luật sư chịu trách nhiệm cuối cùng.',
+      'Bạn là trợ lý pháp lý nội bộ của HDS, phục vụ luật sư và chuyên viên. Chỉ dùng TÀI LIỆU THAM KHẢO và DỮ LIỆU CÔNG TY. Trả lời NGẮN GỌN, đúng trọng tâm — không liệt kê mọi thứ liên quan tới từ khoá. Câu hỏi mơ hồ (chưa rõ khách/vụ việc) thì HỎI LẠI một câu để làm rõ. Trích Điều/Khoản và [Nguồn n] khi có. Bản nháp; luật sư chịu trách nhiệm cuối cùng.',
     prompt_portal:
-      'Bạn là trợ lý của HDS phục vụ khách hàng đã ký hợp đồng. Chỉ dùng tài liệu thuộc về khách đang đăng nhập. Không nhắc tới khách hàng khác.',
+      'Bạn là trợ lý của HDS phục vụ khách hàng đã ký hợp đồng. Chỉ dùng tài liệu thuộc về khách đang đăng nhập, không nhắc tới khách khác. Trả lời NGẮN GỌN, dễ hiểu. Câu hỏi chưa rõ thì hỏi lại. Không đủ căn cứ thì đề nghị liên hệ luật sư phụ trách.',
     llm_temperature: '0.2',
     retrieval_top_k: '8',
     chat_history_turns: '6',
@@ -925,6 +933,11 @@ let mockState = {
 
 async function handleMockRequest(endpoint, options, headers) {
   await new Promise((res) => setTimeout(res, 200));
+  // Chat thật mất nhiều giây (model suy nghĩ). Cho mock trễ thêm để bản demo
+  // giống thật và để thấy được chỉ báo "đang trả lời…".
+  if (endpoint.startsWith('/chat/')) {
+    await new Promise((res) => setTimeout(res, 1300));
+  }
   const method = (options.method || 'GET').toUpperCase();
   const body = options.body ? JSON.parse(options.body) : {};
 
@@ -1276,7 +1289,20 @@ Với câu hỏi "${question}":
       answer: '(câu trả lời được báo cáo)',
     };
     mockState.feedback.unshift(item);
-    mockState.stats.bao_cao_cho_xu_ly += 1;
+    // Báo cáo 'chưa tốt' đi thẳng vào hàng chờ Duyệt câu trả lời bị báo cáo
+    if (body.rating === 'bad') {
+      mockState.pendingLearns.unshift({
+        message_id: body.message_id,
+        question: '(câu hỏi trong phiên chat hiện tại)',
+        answer: '(câu trả lời bị báo cáo — bạn sửa lại rồi lưu để dạy AI)',
+        created_at: new Date().toLocaleString('vi-VN'),
+        note: body.note || null,
+        reporter: me.full_name,
+        report_count: 1,
+        reported_at: new Date().toLocaleString('vi-VN'),
+      });
+      mockState.stats.hoi_thoai_cho_duyet += 1;
+    }
     return { ok: true, feedback_id: item.id };
   }
 

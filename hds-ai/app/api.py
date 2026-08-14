@@ -359,17 +359,35 @@ def review_approve(doc_id: int, body: LabelIn, user=Depends(current_user)):
 # ---------- 4. TỰ HỌC (duyệt hội thoại) ----------
 @app.get("/learn/pending")
 def learn_pending(user=Depends(current_user), limit: int = 30):
+    """Câu trả lời BỊ NGƯỜI DÙNG BÁO CÁO đang chờ admin xử lý.
+
+    Chỉ tin nhắn có báo cáo 'chưa tốt' (answer_feedback rating='bad', đang chờ)
+    mới hiện ở đây — không còn dội mọi câu trả lời vào hàng chờ. Kèm ghi chú
+    người báo cáo để admin biết sai ở đâu. Gộp nhiều báo cáo cho cùng một câu
+    thành một dòng."""
     require_reviewer(user)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("""SELECT m.id,m.content,m.created_at,
-                           (SELECT content FROM messages WHERE conversation_id=m.conversation_id
-                            AND role='user' AND id<m.id ORDER BY id DESC LIMIT 1)
-                           FROM messages m JOIN conversations cv ON cv.id=m.conversation_id
-                           WHERE m.role='assistant' AND m.review_status='pending' AND cv.channel='internal'
-                           ORDER BY m.created_at DESC LIMIT %s""", (limit,))
+            cur.execute("""
+                SELECT m.id, m.content, m.created_at,
+                       (SELECT content FROM messages
+                          WHERE conversation_id=m.conversation_id AND role='user' AND id<m.id
+                          ORDER BY id DESC LIMIT 1) AS question,
+                       (array_agg(f.note ORDER BY f.created_at DESC)
+                          FILTER (WHERE f.note IS NOT NULL AND btrim(f.note) <> ''))[1] AS note,
+                       max(u.full_name) AS reporter,
+                       count(f.id) AS report_count,
+                       max(f.created_at) AS reported_at
+                  FROM answer_feedback f
+                  JOIN messages m ON m.id = f.message_id
+                  LEFT JOIN users u ON u.id = f.user_id
+                 WHERE f.status='pending' AND f.rating='bad' AND m.review_status='pending'
+                 GROUP BY m.id, m.content, m.created_at
+                 ORDER BY max(f.created_at) DESC LIMIT %s""", (limit,))
             rows = cur.fetchall()
-    return [{"message_id": r[0], "answer": r[1], "created_at": str(r[2]), "question": r[3]} for r in rows]
+    return [{"message_id": r[0], "answer": r[1], "created_at": str(r[2]), "question": r[3],
+             "note": r[4], "reporter": r[5], "report_count": r[6],
+             "reported_at": str(r[7]) if r[7] else None} for r in rows]
 
 
 class LearnIn(BaseModel):
@@ -399,6 +417,10 @@ def learn_review(message_id: int, body: LearnIn, user=Depends(current_user)):
             with conn.cursor() as cur:
                 cur.execute("""UPDATE messages SET review_status='rejected',reviewed_by=%s,
                                reviewed_at=now() WHERE id=%s""", (user["id"], message_id))
+                # Đóng luôn báo cáo đang chờ của tin nhắn này để không còn treo lại
+                cur.execute("""UPDATE answer_feedback SET status='rejected',reviewed_by=%s,
+                               reviewed_at=now() WHERE message_id=%s AND status='pending'""",
+                            (user["id"], message_id))
         return {"ok": True, "action": "rejected"}
     final = body.edited_content if body.action == "edit" else answer_text
     content = f"HỎI: {question}\n\nTRẢ LỜI:\n{final}"
@@ -417,6 +439,10 @@ def learn_review(message_id: int, body: LearnIn, user=Depends(current_user)):
                            edited_content=%s,edit_reason=%s,promoted_doc_id=%s WHERE id=%s""",
                         ("edited" if body.action == "edit" else "approved",
                          user["id"], body.edited_content, body.edit_reason, doc_id, message_id))
+            # Đã nạp bản chuẩn vào kho → đóng báo cáo đang chờ của tin nhắn này
+            cur.execute("""UPDATE answer_feedback SET status='applied',reviewed_by=%s,
+                           reviewed_at=now() WHERE message_id=%s AND status='pending'""",
+                        (user["id"], message_id))
         db.audit(conn, user["id"], "promote_to_kb", "messages", message_id,
                  {"document_id": doc_id, "action": body.action})
     return {"ok": True, "action": body.action, "document_id": doc_id}
@@ -777,7 +803,9 @@ def stats():
                 (SELECT count(*) FROM documents WHERE NOT label_verified),
                 (SELECT count(*) FROM documents WHERE access_level='client' AND client_id IS NULL),
                 (SELECT count(*) FROM chunks),
-                (SELECT count(*) FROM messages WHERE review_status='pending'),
+                (SELECT count(DISTINCT m.id) FROM messages m
+                   JOIN answer_feedback f ON f.message_id=m.id
+                  WHERE f.status='pending' AND f.rating='bad' AND m.review_status='pending'),
                 (SELECT count(*) FROM messages WHERE promoted_doc_id IS NOT NULL),
                 (SELECT count(*) FROM analysis_methods WHERE approved),
                 (SELECT count(*) FROM clients),

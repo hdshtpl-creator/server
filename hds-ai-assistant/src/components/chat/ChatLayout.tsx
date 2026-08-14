@@ -6,7 +6,7 @@ import { FileUploadModal } from './FileUploadModal';
 import * as api from '../../api';
 import type { MethodTemplate } from '../../types';
 import { isClientRole } from '../../constants';
-import { Send, Upload, Sliders, FileText, X, Loader2, Sparkles, AlertCircle } from 'lucide-react';
+import { Send, Upload, Sliders, FileText, X, Loader2, Sparkles, AlertCircle, Bot } from 'lucide-react';
 
 const nowLabel = () =>
   new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
@@ -234,15 +234,28 @@ export const ChatLayout: React.FC = () => {
           )}
 
           {isLoading && (
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800">
-              <div className="max-w-3xl mx-auto flex items-center gap-3 text-xs">
-                <Loader2 className="w-5 h-5 text-hds-navy dark:text-blue-400 animate-spin shrink-0" />
-                <div>
-                  <p className="font-semibold text-slate-900 dark:text-slate-100">
-                    HDS AI đang tra cứu văn bản và phân tích…
-                  </p>
-                  <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">
-                    Đang đối chiếu trích dẫn pháp luật và tiền lệ vụ việc.
+            <div className="py-5 px-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
+              <div className="max-w-3xl mx-auto flex items-start gap-3.5">
+                {/* Avatar trợ lý — giống hệt tin nhắn thật để nhìn ra ngay là bot đang soạn */}
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 shadow-sm bg-hds-navy text-hds-gold border border-hds-gold/40">
+                  <Bot className="w-4 h-4" />
+                </div>
+                <div className="min-w-0 pt-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                      Trợ lý AI HDS
+                    </span>
+                    <span className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                      <span>đang trả lời</span>
+                      <span className="flex gap-0.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-hds-navy dark:bg-blue-400 animate-bounce [animation-delay:-0.3s]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-hds-navy dark:bg-blue-400 animate-bounce [animation-delay:-0.15s]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-hds-navy dark:bg-blue-400 animate-bounce" />
+                      </span>
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+                    Đang tra cứu tài liệu và dữ liệu công ty — câu hỏi phức tạp có thể mất vài chục giây.
                   </p>
                 </div>
               </div>

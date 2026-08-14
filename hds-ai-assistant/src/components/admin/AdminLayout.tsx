@@ -9,7 +9,6 @@ import { LearnedDocsTab } from './LearnedDocsTab';
 import { Client360Tab } from './Client360Tab';
 import { BrowseDocsTab } from './BrowseDocsTab';
 import { AiSettingsTab } from './AiSettingsTab';
-import { FeedbackReviewTab } from './FeedbackReviewTab';
 import {
   LayoutDashboard,
   FileCheck2,
@@ -21,7 +20,6 @@ import {
   Users2,
   Search,
   SlidersHorizontal,
-  MessageSquareWarning,
 } from 'lucide-react';
 
 type TabDef = {
@@ -35,8 +33,7 @@ type TabDef = {
 const TABS: TabDef[] = [
   { id: 'overview', label: 'Tổng quan', icon: LayoutDashboard, group: 'operate' },
   { id: 'clients_360', label: 'Hồ sơ khách 360°', icon: Users2, group: 'operate' },
-  { id: 'learn', label: 'Duyệt hội thoại AI', icon: MessageSquareText, group: 'operate' },
-  { id: 'feedback', label: 'Duyệt báo cáo', icon: MessageSquareWarning, group: 'operate' },
+  { id: 'learn', label: 'Duyệt câu trả lời bị báo cáo', icon: MessageSquareText, group: 'operate' },
   { id: 'users', label: 'Người dùng & Phòng ban', icon: Users, group: 'operate', adminOnly: true },
   { id: 'settings', label: 'Cài đặt AI', icon: SlidersHorizontal, group: 'operate', adminOnly: true },
 
@@ -122,7 +119,6 @@ export const AdminLayout: React.FC = () => {
           {adminTab === 'overview' && <OverviewTab />}
           {adminTab === 'clients_360' && <Client360Tab />}
           {adminTab === 'learn' && <LearnReviewTab />}
-          {adminTab === 'feedback' && <FeedbackReviewTab />}
           {adminTab === 'users' && isAdmin && <UserManagementTab />}
           {adminTab === 'settings' && isAdmin && <AiSettingsTab />}
           {adminTab === 'browse_docs' && <BrowseDocsTab />}

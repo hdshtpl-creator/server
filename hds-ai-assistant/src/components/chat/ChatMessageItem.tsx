@@ -15,8 +15,8 @@ import {
   ThumbsUp,
   ThumbsDown,
   Send,
-  X,
   CheckCircle2,
+  Flag,
 } from 'lucide-react';
 
 interface ChatMessageItemProps {
@@ -204,37 +204,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                   <CheckCircle2 className="w-3.5 h-3.5" />
                   Đã gửi báo cáo, cảm ơn bạn.
                 </span>
-              ) : noteOpen ? (
-                <div className="space-y-2 max-w-md">
-                  <textarea
-                    rows={2}
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    autoFocus
-                    placeholder="Sai ở đâu? Thiếu căn cứ nào? (không bắt buộc)"
-                    className="w-full px-2.5 py-1.5 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-lg text-xs focus:ring-2 focus:ring-hds-blue focus:outline-none resize-y"
-                  />
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => submitFeedback('bad', note)}
-                      disabled={sending}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white bg-hds-red hover:bg-red-800 disabled:opacity-50 transition-colors"
-                    >
-                      <Send className="w-3 h-3" />
-                      Gửi báo cáo
-                    </button>
-                    <button
-                      onClick={() => {
-                        setNoteOpen(false);
-                        setNote('');
-                      }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                    >
-                      <X className="w-3 h-3" />
-                      Huỷ
-                    </button>
-                  </div>
-                </div>
               ) : (
                 <div className="flex items-center gap-1 opacity-40 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                   <span className="text-[10px] text-slate-400 dark:text-slate-500 mr-0.5">
@@ -252,7 +221,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                   <button
                     onClick={() => setNoteOpen(true)}
                     disabled={sending}
-                    title="Câu trả lời chưa tốt"
+                    title="Báo cáo câu trả lời chưa ổn"
                     aria-label="Báo cáo: câu trả lời chưa tốt"
                     className="p-1.5 rounded-lg text-slate-400 hover:text-hds-red hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
                   >
@@ -264,6 +233,64 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
           )}
         </div>
       </div>
+
+      {/* Popup báo cáo — mở khi bấm 👎 */}
+      {noteOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => {
+            setNoteOpen(false);
+            setNote('');
+          }}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-md p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <span className="p-2 bg-red-50 dark:bg-red-950 text-hds-red rounded-xl shrink-0">
+                <Flag className="w-5 h-5" />
+              </span>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                  Báo cáo câu trả lời chưa ổn
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                  Ghi rõ sai ở đâu, thiếu căn cứ nào. Quản trị sẽ sửa lại và dạy AI để lần sau gặp
+                  câu tương tự trả lời đúng.
+                </p>
+              </div>
+            </div>
+            <textarea
+              rows={4}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              autoFocus
+              placeholder="Ví dụ: trả lời sai điều luật áp dụng, cần dẫn Điều 159 Luật Doanh nghiệp 2020…"
+              className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl text-xs focus:ring-2 focus:ring-hds-blue focus:outline-none resize-y"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => {
+                  setNoteOpen(false);
+                  setNote('');
+                }}
+                className="px-3.5 py-2 rounded-xl text-xs font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Huỷ
+              </button>
+              <button
+                onClick={() => submitFeedback('bad', note)}
+                disabled={sending}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-hds-red hover:bg-red-800 disabled:opacity-50 transition-colors"
+              >
+                <Send className="w-3.5 h-3.5" />
+                {sending ? 'Đang gửi…' : 'Gửi báo cáo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

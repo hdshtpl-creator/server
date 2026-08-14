@@ -2,7 +2,16 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { PendingLearnMessage } from '../../types';
-import { CheckCircle2, XCircle, Edit3, RefreshCw, Sparkles, Save, HelpCircle } from 'lucide-react';
+import {
+  CheckCircle2,
+  XCircle,
+  Edit3,
+  RefreshCw,
+  Sparkles,
+  Save,
+  HelpCircle,
+  Flag,
+} from 'lucide-react';
 
 interface ItemState {
   edited_content: string;
@@ -93,10 +102,11 @@ export const LearnReviewTab: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
         <div>
           <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-            Duyệt hội thoại để AI tự học
+            Duyệt câu trả lời bị báo cáo
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Thẩm định và chuẩn hoá câu trả lời thực tế trước khi đưa vào kho tri thức của HDS
+            Chỉ những câu trả lời người dùng bấm báo cáo mới vào đây. Sửa cho đúng rồi lưu — lần
+            sau gặp câu tương tự, AI trả lời theo bản bạn sửa.
           </p>
         </div>
         <button
@@ -112,10 +122,11 @@ export const LearnReviewTab: React.FC = () => {
         <div className="bg-white dark:bg-slate-900 rounded-2xl p-12 text-center border border-slate-200 dark:border-slate-800 space-y-3">
           <Sparkles className="w-12 h-12 text-indigo-500 mx-auto opacity-80" />
           <h3 className="font-bold text-slate-800 dark:text-slate-100 text-base">
-            Không có câu trả lời nào chờ duyệt
+            Không có báo cáo nào chờ xử lý
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-            Tất cả hội thoại đã được thẩm định hoặc nạp vào kho tri thức.
+            Khi người dùng bấm báo cáo một câu trả lời chưa ổn, nó sẽ hiện ở đây để bạn sửa và dạy
+            lại cho AI.
           </p>
         </div>
       ) : (
@@ -142,10 +153,24 @@ export const LearnReviewTab: React.FC = () => {
                     </span>
                     <span>Tạo lúc {msg.created_at}</span>
                   </div>
-                  <span className="bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 px-2.5 py-0.5 rounded-full font-semibold text-[11px]">
-                    Chờ duyệt học tập
+                  <span className="bg-red-50 dark:bg-red-950 text-hds-red dark:text-red-300 border border-red-200 dark:border-red-900 px-2.5 py-0.5 rounded-full font-semibold text-[11px] flex items-center gap-1">
+                    <Flag className="w-3 h-3" />
+                    Bị báo cáo{(msg.report_count ?? 0) > 1 ? ` ×${msg.report_count}` : ''}
                   </span>
                 </div>
+
+                {/* Lý do người dùng báo cáo */}
+                {msg.note && (
+                  <div className="bg-red-50 dark:bg-red-950/40 rounded-xl p-3.5 border border-red-200 dark:border-red-900 space-y-1">
+                    <div className="flex items-center gap-2 text-xs font-bold text-hds-red dark:text-red-300">
+                      <Flag className="w-4 h-4" />
+                      <span>Người dùng báo cáo{msg.reporter ? ` — ${msg.reporter}` : ''}</span>
+                    </div>
+                    <p className="text-xs text-slate-800 dark:text-slate-200 pl-6 leading-relaxed break-words">
+                      {msg.note}
+                    </p>
+                  </div>
+                )}
 
                 {/* Câu hỏi */}
                 <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-3.5 border border-slate-200 dark:border-slate-700 space-y-1">
