@@ -45,10 +45,26 @@ DEFAULTS = {
     ),
     # Tham số sinh câu trả lời
     "llm_temperature": "0.2",
-    "retrieval_top_k": "8",
+    # ---- Nhóm khoá quyết định TỐC ĐỘ trả lời ----------------------------
+    # Thời gian trả lời ≈ (độ dài prompt ÷ tốc độ đọc) + (độ dài đáp ÷ tốc độ viết).
+    # Bốn khoá dưới đây điều khiển vế thứ nhất; nới rộng là chậm đi tương ứng.
+    # Kho tài liệu lớn lên KHÔNG làm prompt dài thêm — tìm kiếm vector luôn trả
+    # đúng top_k đoạn — nên các con số này không cần đổi khi dữ liệu tăng.
+    "retrieval_top_k": "5",          # số đoạn tài liệu đưa vào prompt
+    "chunk_char_limit": "1500",      # cắt mỗi đoạn còn bấy nhiêu ký tự
+    "context_char_budget": "6000",   # trần ký tự cho toàn bộ tài liệu tham khảo
+    "min_relevance": "0.25",         # dưới ngưỡng này coi như không liên quan
+    # Cửa sổ ngữ cảnh của model. Prompt dài hơn mức này bị Ollama cắt mất phần
+    # ĐẦU — đúng chỗ đặt DỮ LIỆU CÔNG TY — mà vẫn tốn thời gian đọc phần còn
+    # lại. Nên để rộng hơn prompt thực tế một quãng an toàn, rồi giữ prompt gọn
+    # bằng các trần bên trên; đó mới là chỗ quyết định tốc độ.
+    #   prompt điển hình ≈ 6000 ký tự tài liệu + hồ sơ công ty + 3 lượt hội thoại
+    #                     ≈ 4000 token → 8192 là vừa đủ thoáng.
+    "llm_num_ctx": "8192",
+    "llm_num_predict": "700",        # trần số token sinh ra = trần thời gian
     # Số lượt hỏi-đáp cũ đưa lại vào ngữ cảnh để bot hiểu "vụ đó", "khách kia".
     # Đặt 0 là tắt bộ nhớ hội thoại (mỗi câu hỏi độc lập).
-    "chat_history_turns": "6",
+    "chat_history_turns": "3",
     # Model sinh câu trả lời (Ollama). Rỗng = dùng LLM_MODEL trong .env của máy
     # chủ. Admin đổi trên web để chuyển sang model khác đã cài, không cần sửa
     # .env rồi khởi động lại. KHÔNG áp cho model tạo vector (bge-m3): mọi đoạn

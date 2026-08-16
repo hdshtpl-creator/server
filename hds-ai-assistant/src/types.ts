@@ -30,6 +30,25 @@ export interface ModelInfo {
   embed_ready: boolean;
 }
 
+/** Kết quả đo tốc độ máy chủ — nói lên PHẦN CỨNG khoẻ tới đâu. */
+export interface BenchmarkResult {
+  ok: boolean;
+  error?: string;
+  model?: string;
+  prompt_tokens?: number;
+  gen_tokens?: number;
+  load_ms?: number;
+  prefill_ms?: number;
+  gen_ms?: number;
+  total_ms?: number;
+  /** Tốc độ ĐỌC ngữ cảnh (token/giây) — quyết định phần lớn thời gian chờ. */
+  read_tok_s?: number | null;
+  /** Tốc độ VIẾT câu trả lời (token/giây). */
+  write_tok_s?: number | null;
+  /** Ước tính thời gian một lượt hỏi điển hình với cài đặt hiện tại (giây). */
+  uoc_tinh_giay?: number;
+}
+
 /** Một vụ việc cần chú ý, tính trực tiếp từ view v_matter_alerts. */
 export interface MatterAlert {
   matter_id: number;
@@ -103,12 +122,40 @@ export interface Source {
   snippet?: string;
 }
 
+/**
+ * Thời gian từng chặng của một lượt trả lời — để biết chậm ở đâu.
+ * `prefill_ms` (đọc prompt) và `gen_ms` (viết câu trả lời) do Ollama báo về.
+ */
+export interface ChatTimings {
+  /** Tra cứu vector trong kho tài liệu. */
+  tim_kiem_ms?: number;
+  /** Rút dữ liệu khách/vụ việc/nhân sự bằng SQL. */
+  du_lieu_cong_ty_ms?: number;
+  /** Tổng thời gian gọi model. */
+  ai_ms?: number;
+  /** Nạp model từ ổ cứng vào bộ nhớ (0 nếu model đã nằm sẵn). */
+  load_ms?: number;
+  /** Đọc prompt — tỉ lệ thuận với độ dài ngữ cảnh. */
+  prefill_ms?: number;
+  /** Sinh câu trả lời. */
+  gen_ms?: number;
+  prompt_tokens?: number;
+  gen_tokens?: number;
+  num_ctx?: number;
+  model?: string;
+  /** Số đoạn tài liệu thực sự đưa vào prompt. */
+  so_doan?: number;
+  /** Số đoạn bị loại vì điểm liên quan thấp. */
+  bo_qua_doan_yeu?: number;
+}
+
 export interface ChatResponse {
   answer: string;
   sources: Source[];
   conversation_id: number;
   latency_ms: number;
   message_id?: number;
+  timings?: ChatTimings;
   /** Chỉ có ở /chat/portal — hạn mức câu hỏi theo gói của khách. */
   quota?: { used: number; limit: number };
 }
@@ -125,6 +172,8 @@ export interface ChatMessage {
   isError?: boolean;
   /** Mã tin nhắn do backend cấp — cần để gửi báo cáo chất lượng. */
   serverMessageId?: number;
+  /** Phân tích thời gian, hiện khi bấm vào đồng hồ cạnh câu trả lời. */
+  timings?: ChatTimings;
 }
 
 export interface Conversation {

@@ -21,6 +21,7 @@ import type {
   DriveSyncStatus,
   MatterAlerts,
   ModelInfo,
+  BenchmarkResult,
   ChatSearchHit,
   Note,
 } from './types';
@@ -191,6 +192,10 @@ export const resetSetting = ApiJs.resetSetting as (
 export const getDriveSyncStatus = ApiJs.getDriveSyncStatus as () => Promise<DriveSyncStatus>;
 
 export const getModels = ApiJs.getModels as () => Promise<ModelInfo>;
+
+export const benchmarkModel = ApiJs.benchmarkModel as (
+  model?: string
+) => Promise<BenchmarkResult>;
 
 // ---------- Báo cáo chất lượng ----------
 export const sendFeedback = ApiJs.sendFeedback as (params: {

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { ChatMessage } from '../../types';
+import type { ChatMessage, ChatTimings } from '../../types';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import {
@@ -21,6 +21,69 @@ import {
   Undo2,
 } from 'lucide-react';
 
+const fmtSec = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
+
+/**
+ * Bảng "thời gian đi vào đâu" cho một câu trả lời.
+ *
+ * Giúp trả lời đúng câu hỏi hay gặp nhất: vì sao câu đơn giản vẫn chậm. Thủ
+ * phạm gần như luôn là ĐỌC PROMPT — phần này tỉ lệ thuận với lượng tài liệu
+ * nhồi vào mỗi lượt, chứ không phụ thuộc câu hỏi khó hay dễ, cũng không phụ
+ * thuộc kho tài liệu to hay nhỏ.
+ */
+const TimingPanel: React.FC<{ t: ChatTimings }> = ({ t }) => {
+  const rows: Array<[string, number | undefined, string]> = [
+    ['Tra cứu tài liệu', t.tim_kiem_ms, 'Tìm đoạn liên quan trong kho'],
+    ['Dữ liệu công ty', t.du_lieu_cong_ty_ms, 'Đọc khách hàng, vụ việc, nhân sự'],
+    ['Nạp model', t.load_ms, 'Đưa model từ ổ cứng vào bộ nhớ — >0 nghĩa là model đã bị đẩy ra'],
+    ['AI đọc câu hỏi + tài liệu', t.prefill_ms, 'Tỉ lệ thuận với độ dài ngữ cảnh'],
+    ['AI viết câu trả lời', t.gen_ms, 'Tỉ lệ thuận với độ dài câu trả lời'],
+  ];
+  const speed = (tok?: number, ms?: number) =>
+    tok && ms ? `${Math.round(tok / (ms / 1000))} token/giây` : '—';
+
+  return (
+    <div className="text-[11px] bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-xl p-3 space-y-1.5">
+      <div className="font-semibold text-slate-700 dark:text-slate-200">Thời gian đi vào đâu</div>
+      {rows.map(([label, ms, hint]) =>
+        typeof ms === 'number' ? (
+          <div key={label} className="flex items-baseline justify-between gap-3" title={hint}>
+            <span className="text-slate-500 dark:text-slate-400 truncate">{label}</span>
+            <span className="font-mono text-slate-700 dark:text-slate-200 shrink-0">
+              {fmtSec(ms)}
+            </span>
+          </div>
+        ) : null
+      )}
+      <div className="pt-1.5 border-t border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 space-y-0.5">
+        {t.model && <div>Model: {t.model}</div>}
+        {typeof t.prompt_tokens === 'number' && (
+          <div>
+            Ngữ cảnh: {t.prompt_tokens.toLocaleString('vi-VN')} token
+            {typeof t.num_ctx === 'number' && ` / trần ${t.num_ctx.toLocaleString('vi-VN')}`}
+            {typeof t.so_doan === 'number' && ` · ${t.so_doan} đoạn tài liệu`}
+            {` · đọc ${speed(t.prompt_tokens, t.prefill_ms)}`}
+          </div>
+        )}
+        {typeof t.gen_tokens === 'number' && (
+          <div>
+            Trả lời: {t.gen_tokens.toLocaleString('vi-VN')} token · viết{' '}
+            {speed(t.gen_tokens, t.gen_ms)}
+          </div>
+        )}
+        {typeof t.prompt_tokens === 'number' &&
+          typeof t.num_ctx === 'number' &&
+          t.prompt_tokens >= t.num_ctx - 32 && (
+            <div className="text-amber-700 dark:text-amber-400 font-semibold">
+              Ngữ cảnh đã chạm trần — phần đầu prompt bị cắt. Hãy giảm "Trần ký tự tài liệu"
+              trong Cài đặt AI.
+            </div>
+          )}
+      </div>
+    </div>
+  );
+};
+
 interface ChatMessageItemProps {
   message: ChatMessage;
 }
@@ -30,6 +93,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
   const isUser = message.sender === 'user';
   const isError = Boolean(message.isError);
   const [showSources, setShowSources] = useState(true);
+  const [showTiming, setShowTiming] = useState(false);
 
   const canReport = !isUser && !isError && typeof message.serverMessageId === 'number';
   const canNote = !isUser && !isError;
@@ -154,14 +218,23 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
 
             <div className="flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500 shrink-0">
               {typeof message.latency_ms === 'number' && (
-                <span className="flex items-center gap-1 font-mono" title="Thời gian phản hồi">
+                <button
+                  type="button"
+                  onClick={() => setShowTiming((v) => !v)}
+                  className={`flex items-center gap-1 font-mono rounded px-1 -mx-1 hover:bg-slate-100 dark:hover:bg-slate-800 ${
+                    message.latency_ms > 20000 ? 'text-amber-600 dark:text-amber-400 font-bold' : ''
+                  }`}
+                  title="Bấm để xem thời gian đi vào đâu"
+                >
                   <Clock className="w-3 h-3" />
-                  {message.latency_ms}ms
-                </span>
+                  {fmtSec(message.latency_ms)}
+                </button>
               )}
               <span>{message.timestamp}</span>
             </div>
           </div>
+
+          {showTiming && message.timings && <TimingPanel t={message.timings} />}
 
           {(message.used_method || message.used_temp_file) && (
             <div className="flex flex-wrap gap-1.5 text-[10px] font-medium">

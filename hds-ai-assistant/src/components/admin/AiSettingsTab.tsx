@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
-import type { ModelInfo } from '../../types';
+import type { ModelInfo, BenchmarkResult } from '../../types';
 import {
   RefreshCw,
   Save,
@@ -11,6 +11,7 @@ import {
   Loader2,
   Sparkles,
   Cpu,
+  Gauge,
   CircleCheck,
   CircleAlert,
 } from 'lucide-react';
@@ -28,6 +29,20 @@ const ModelSection: React.FC = () => {
   const [selected, setSelected] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [bench, setBench] = useState<BenchmarkResult | null>(null);
+  const [benching, setBenching] = useState(false);
+
+  const runBenchmark = async () => {
+    setBenching(true);
+    setBench(null);
+    try {
+      setBench(await api.benchmarkModel());
+    } catch (err: any) {
+      setBench({ ok: false, error: err?.message || 'Máy chủ không phản hồi.' });
+    } finally {
+      setBenching(false);
+    }
+  };
 
   const load = async () => {
     setIsLoading(true);
@@ -155,6 +170,83 @@ const ModelSection: React.FC = () => {
               . Cố định — mọi tài liệu đã học đều theo model này, đổi sẽ làm sai kết quả tra cứu.
             </span>
           </div>
+
+          {/* Đo tốc độ phần cứng — cơ sở để biết máy chủ có kham nổi model không */}
+          <div className="space-y-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Tốc độ máy chủ
+                </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Đo model đang chọn xử lý được bao nhiêu token mỗi giây. Chạy mất vài chục giây.
+                </p>
+              </div>
+              <button
+                onClick={runBenchmark}
+                disabled={benching}
+                className="px-3 py-2 rounded-xl font-bold text-[11px] border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0 transition-colors"
+              >
+                {benching ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Gauge className="w-3.5 h-3.5" />
+                )}
+                {benching ? 'Đang đo…' : 'Đo tốc độ'}
+              </button>
+            </div>
+
+            {bench &&
+              (bench.ok ? (
+                <div className="text-[11px] bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg p-3 space-y-1">
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500 dark:text-slate-400">
+                      Đọc ngữ cảnh (quyết định phần lớn thời gian chờ)
+                    </span>
+                    <span className="font-mono font-bold text-slate-800 dark:text-slate-100">
+                      {bench.read_tok_s ?? '—'} token/giây
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500 dark:text-slate-400">Viết câu trả lời</span>
+                    <span className="font-mono font-bold text-slate-800 dark:text-slate-100">
+                      {bench.write_tok_s ?? '—'} token/giây
+                    </span>
+                  </div>
+                  {typeof bench.uoc_tinh_giay === 'number' && (
+                    <div
+                      className={`flex justify-between gap-3 pt-1.5 border-t border-slate-200 dark:border-slate-700 font-semibold ${
+                        bench.uoc_tinh_giay > 90
+                          ? 'text-hds-red dark:text-red-400'
+                          : bench.uoc_tinh_giay > 45
+                            ? 'text-amber-700 dark:text-amber-400'
+                            : 'text-hds-green dark:text-green-400'
+                      }`}
+                    >
+                      <span>Ước tính một câu hỏi đầy đủ ngữ cảnh</span>
+                      <span className="font-mono">≈ {bench.uoc_tinh_giay}s</span>
+                    </div>
+                  )}
+                  {typeof bench.uoc_tinh_giay === 'number' && bench.uoc_tinh_giay > 90 && (
+                    <p className="text-hds-red dark:text-red-400 leading-relaxed pt-0.5">
+                      Vượt mốc 100 giây của Cloudflare → sẽ gặp lỗi 524. Hãy chọn model nhẹ hơn,
+                      hoặc giảm "Trần ký tự tài liệu" ở phần Tham số bên dưới.
+                    </p>
+                  )}
+                  {typeof bench.write_tok_s === 'number' && bench.write_tok_s < 8 && (
+                    <p className="text-amber-700 dark:text-amber-400 leading-relaxed pt-0.5">
+                      Dưới 8 token/giây là dấu hiệu model đang chạy bằng CPU chứ không phải GPU.
+                      Kiểm tra trên máy chủ bằng <code className="font-mono">ollama ps</code> — cột
+                      PROCESSOR phải ghi GPU.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-[11px] text-hds-red dark:text-red-400">
+                  Không đo được: {bench.error}
+                </p>
+              ))}
+          </div>
         </>
       )}
     </section>
@@ -166,6 +258,10 @@ interface FieldDef {
   label: string;
   hint: string;
   kind: 'textarea' | 'range' | 'number' | 'json';
+  /** Giới hạn riêng cho ô số — mỗi tham số một thang khác nhau. */
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
 const PROMPT_FIELDS: FieldDef[] = [
@@ -199,8 +295,63 @@ const PARAM_FIELDS: FieldDef[] = [
   {
     key: 'retrieval_top_k',
     label: 'Số đoạn tài liệu tham chiếu mỗi câu hỏi',
-    hint: 'Nhiều đoạn hơn = nhiều ngữ cảnh hơn nhưng chậm hơn. Khuyến nghị 6–10.',
+    hint: 'Mỗi đoạn thêm vào là mỗi lần trả lời chậm thêm. Khuyến nghị 4–6.',
     kind: 'number',
+    min: 1,
+    max: 20,
+  },
+  {
+    key: 'context_char_budget',
+    label: 'Trần ký tự tài liệu đưa vào mỗi câu hỏi',
+    hint: 'Đây là tham số ảnh hưởng tốc độ mạnh nhất. 6000 ký tự ≈ 2000 từ. Tăng gấp đôi là chậm gần gấp đôi.',
+    kind: 'number',
+    min: 1000,
+    max: 40000,
+    step: 500,
+  },
+  {
+    key: 'chunk_char_limit',
+    label: 'Cắt mỗi đoạn tài liệu còn tối đa (ký tự)',
+    hint: 'Chặn một đoạn quá dài chiếm hết chỗ của các đoạn khác.',
+    kind: 'number',
+    min: 300,
+    max: 8000,
+    step: 100,
+  },
+  {
+    key: 'min_relevance',
+    label: 'Ngưỡng liên quan tối thiểu của đoạn tài liệu',
+    hint: 'Đoạn có điểm thấp hơn mức này bị loại — không giúp câu trả lời mà vẫn làm chậm. 0 = không lọc.',
+    kind: 'number',
+    min: 0,
+    max: 0.9,
+    step: 0.05,
+  },
+  {
+    key: 'chat_history_turns',
+    label: 'Số lượt hỏi-đáp cũ bot nhớ lại',
+    hint: 'Giúp bot hiểu "vụ đó", "khách kia". Càng nhiều càng chậm. 0 = tắt trí nhớ hội thoại.',
+    kind: 'number',
+    min: 0,
+    max: 20,
+  },
+  {
+    key: 'llm_num_predict',
+    label: 'Trần độ dài câu trả lời (token)',
+    hint: 'Chặn trần thời gian trả lời. 700 token ≈ 450 từ, đủ cho câu trả lời gọn.',
+    kind: 'number',
+    min: 128,
+    max: 4096,
+    step: 64,
+  },
+  {
+    key: 'llm_num_ctx',
+    label: 'Cửa sổ ngữ cảnh của model (token)',
+    hint: 'Phải lớn hơn tổng prompt + câu trả lời. Đặt quá to chỉ tốn RAM chứ không giúp gì.',
+    kind: 'number',
+    min: 2048,
+    max: 32768,
+    step: 1024,
   },
 ];
 
@@ -398,8 +549,9 @@ export const AiSettingsTab: React.FC = () => {
             ) : (
               <input
                 type="number"
-                min={3}
-                max={20}
+                min={f.min ?? 0}
+                max={f.max}
+                step={f.step}
                 value={values[f.key] || ''}
                 onChange={(e) => patch(f.key, e.target.value)}
                 className="w-32 px-3 py-2 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl text-xs focus:ring-2 focus:ring-hds-blue focus:outline-none"

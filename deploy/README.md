@@ -197,6 +197,37 @@ bash deploy/auto-learn.sh                          # học một lần
 sudo bash deploy/auto-learn.sh --install-timer     # tự học mỗi 15 phút
 ```
 
+## Bot trả lời chậm / lỗi 524
+
+```bash
+bash deploy/kiem-tra-toc-do.sh
+```
+
+Script báo GPU hay CPU, model có nằm sẵn trong bộ nhớ không, và **đo tốc độ thật**
+của máy chủ (đọc bao nhiêu token/giây, viết bao nhiêu token/giây), rồi ước tính
+một câu hỏi sẽ mất bao lâu. Trên 100 giây là Cloudflare cắt → lỗi 524.
+
+Công thức chi phối mọi thứ:
+
+```
+thời gian trả lời ≈ (số token prompt ÷ tốc độ đọc) + (số token đáp ÷ tốc độ viết)
+```
+
+Trong đó **độ dài prompt là thứ chỉnh được ngay** ở web → Quản trị → Cài đặt AI →
+Tham số (`Trần ký tự tài liệu`, `Số đoạn tham chiếu`, `Số lượt hỏi-đáp cũ`), còn
+tốc độ đọc/viết là do phần cứng.
+
+Lượng tài liệu đã học **không** nằm trong công thức: tra cứu vector luôn trả về
+đúng `top_k` đoạn, nên kho phình từ 100 lên 1 triệu tài liệu cũng không làm câu
+trả lời chậm thêm.
+
+Trong khung chat, bấm vào con số thời gian cạnh mỗi câu trả lời để xem thời gian
+đi vào chặng nào. Xem lại các câu chậm đã qua:
+
+```bash
+sudo journalctl -u hds-ai-backend -n 200 | grep CHAM
+```
+
 ## Cập nhật khi có mã mới
 
 ```bash

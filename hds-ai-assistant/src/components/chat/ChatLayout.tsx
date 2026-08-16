@@ -114,6 +114,7 @@ export const ChatLayout: React.FC = () => {
         timestamp: nowLabel(),
         latency_ms: response.latency_ms,
         serverMessageId: response.message_id,
+        timings: response.timings,
       });
     } catch (err: any) {
       const errMsg = err?.message || 'Có lỗi xảy ra khi hỏi AI.';

@@ -142,6 +142,25 @@ ROSTER_WORDS = {
     "liet ke khach", "cac khach hang", "khach hang nao",
 }
 
+# Câu hỏi về chính công ty mình: quân số, ai làm phòng nào. Dữ liệu nằm ở bảng
+# users/departments — không nằm trong tài liệu nào để mà tìm bằng vector, nên
+# phải rút bằng SQL giống cách làm với khách hàng.
+STAFF_WORDS = {
+    "bao nhieu nhan vien", "bao nhieu nhan su", "bao nhieu nguoi",
+    "may nhan vien", "may nguoi", "tong so nhan vien", "so luong nhan vien",
+    "danh sach nhan vien", "danh sach nhan su", "nhan su cong ty",
+    "co bao nhieu luat su", "bao nhieu luat su", "bao nhieu chuyen vien",
+    "bao nhieu phong", "danh sach phong ban", "co nhung phong nao",
+    "nhan vien nao", "quan so", "co bao nhieu nhan",
+}
+
+# Tên cấp bậc hiển thị cho người đọc — khớp với CHECK role trong schema.
+ROLE_VN = {
+    "admin": "Quản trị hệ thống", "ban_qt": "Ban quản trị",
+    "truong_bph": "Trưởng bộ phận", "chuyen_vien": "Chuyên viên",
+    "tro_ly": "Trợ lý",
+}
+
 DOC_TYPE_VN = {
     "law": "văn bản luật", "ban_an": "bản án", "an_le": "án lệ",
     "mau_hd": "mẫu hợp đồng", "nhan_hieu": "data nhãn hiệu",
@@ -209,6 +228,66 @@ def _alert_intent(q_folded: str) -> bool:
 def _roster_intent(q_folded: str) -> bool:
     """Câu hỏi kiểu đếm/liệt kê khách nói chung."""
     return any(w in q_folded for w in ROSTER_WORDS)
+
+
+def _staff_intent(q_folded: str) -> bool:
+    """Câu hỏi về quân số / cơ cấu nhân sự của chính HDS."""
+    return any(w in q_folded for w in STAFF_WORDS)
+
+
+def _staff_block(cur, is_banqt):
+    """Quân số và cơ cấu phòng ban của HDS.
+
+    Chỉ đếm tài khoản NỘI BỘ đang hoạt động — tài khoản khách hàng (client_*)
+    không phải nhân viên. Không đưa email hay thông tin liên hệ vào prompt: câu
+    hỏi ở đây là về quân số, không phải danh bạ.
+
+    Người không thuộc Ban QT vẫn thấy tổng quân số và cơ cấu phòng — đây là
+    thông tin tổ chức bình thường trong nội bộ — nhưng không thấy danh sách tên.
+    """
+    cur.execute("""SELECT role, count(*) FROM users
+                    WHERE active AND role NOT IN ('client_free','client_plus','client_pro')
+                    GROUP BY role""")
+    by_role = cur.fetchall()
+    if not by_role:
+        return ["### Nhân sự HDS: hệ thống chưa có tài khoản nhân viên nào."]
+
+    total = sum(n for _, n in by_role)
+    out = [f"### Nhân sự HDS: {total} người đang hoạt động trên hệ thống.",
+           "  (Đây là số tài khoản nội bộ trong phần mềm, có thể khác quân số "
+           "thực tế nếu ai đó chưa được cấp tài khoản.)",
+           "- Theo cấp bậc: " + ", ".join(
+               f"{ROLE_VN.get(r, r)} {n}" for r, n in
+               sorted(by_role, key=lambda x: -x[1]))]
+
+    # count(u.id) chứ không phải count(ud.user_id): điều kiện lọc nằm ở mệnh đề
+    # ON nên dòng của tài khoản đã nghỉ vẫn còn, chỉ phần users là NULL.
+    cur.execute("""SELECT d.name, count(u.id)
+                     FROM departments d
+                     LEFT JOIN user_departments ud ON ud.department_id = d.id
+                     LEFT JOIN users u ON u.id = ud.user_id
+                          AND u.active AND u.role NOT IN ('client_free','client_plus','client_pro')
+                    GROUP BY d.name ORDER BY d.name""")
+    by_dept = cur.fetchall()
+    if by_dept:
+        out.append("- Theo phòng ban: " + ", ".join(f"{name} {n}" for name, n in by_dept))
+
+    if is_banqt:
+        cur.execute("""SELECT u.full_name, u.role,
+                              coalesce(string_agg(d.name, ', ' ORDER BY d.name), '')
+                         FROM users u
+                         LEFT JOIN user_departments ud ON ud.user_id = u.id
+                         LEFT JOIN departments d ON d.id = ud.department_id
+                        WHERE u.active AND u.role NOT IN ('client_free','client_plus','client_pro')
+                        GROUP BY u.id, u.full_name, u.role
+                        ORDER BY u.full_name LIMIT 100""")
+        rows = cur.fetchall()
+        if rows:
+            out.append("- Danh sách (chỉ Ban quản trị được xem):")
+            for name, role, depts in rows:
+                out.append(f"  · {name or '(chưa đặt tên)'} — {ROLE_VN.get(role, role)}"
+                           + (f", phòng {depts}" if depts else ""))
+    return out
 
 
 def _roster_block(cur, dept_ids, is_banqt, limit=60):
@@ -303,8 +382,13 @@ def _pinned_text(cur, cid, doc_types, budget):
     return out
 
 
-def _client_lines(cur, cid, name, code, internal, can_finance=False):
-    """Một khối text gọn về khách. internal=False thì bỏ hết ghi chú nội bộ."""
+def _client_lines(cur, cid, name, code, internal, can_finance=False, share=1):
+    """Một khối text gọn về khách. internal=False thì bỏ hết ghi chú nội bộ.
+
+    `share` là số khách cùng được nhắc trong một câu hỏi: ngân sách file tổng
+    hợp chia đều cho từng khách, để câu hỏi so sánh ba khách không dựng ra một
+    prompt dài gấp ba rồi bị cắt mất phần đầu.
+    """
     lines = [f"### Khách hàng: {name}" + (f" [mã {code}]" if code else "")]
 
     if internal:
@@ -354,13 +438,14 @@ def _client_lines(cur, cid, name, code, internal, can_finance=False):
         # File tổng hợp là nơi HDS ghi dịch vụ đã dùng, mức phí, diễn biến hợp
         # tác. Chỉ ghim cho kênh nội bộ: đây là tài liệu làm việc của công ty,
         # không phải bản gửi khách.
-        pinned = _pinned_text(cur, cid, ["ho_so_kh"], MAX_SUMMARY_CHARS)
+        share = max(1, share)
+        pinned = _pinned_text(cur, cid, ["ho_so_kh"], MAX_SUMMARY_CHARS // share)
         if pinned:
             lines.append("- FILE TỔNG HỢP THÔNG TIN KHÁCH (dịch vụ đã dùng, phí, hợp tác):")
             lines += pinned
 
         if can_finance:
-            fin = _pinned_text(cur, cid, ["cong_no"], MAX_FINANCE_CHARS)
+            fin = _pinned_text(cur, cid, ["cong_no"], MAX_FINANCE_CHARS // share)
             if fin:
                 lines.append("- CÔNG NỢ / TÀI CHÍNH (hạn chế — chỉ người được cấp quyền):")
                 lines += fin
@@ -379,7 +464,9 @@ def build(question, channel, client_id=None, dept_ids=None, is_banqt=False,
     channel='portal'  → chỉ đúng khách đang đăng nhập, không có ghi chú nội bộ,
                         không có file tổng hợp, không có công nợ
     channel='internal'→ nhận diện khách/vụ trong câu hỏi, kèm hồ sơ 360°, file
-                        tổng hợp, và công nợ nếu người hỏi được cấp quyền
+                        tổng hợp, và công nợ nếu người hỏi được cấp quyền;
+                        thêm danh sách khách / quân số nhân sự / cảnh báo hạn
+                        khi câu hỏi hướng về các nội dung đó
     """
     try:
         if channel == "public":
@@ -408,12 +495,15 @@ def build(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                     if c[0] not in seen:
                         found.append(c)
                         seen.add(c[0])
+                picked = found[:MAX_CLIENTS]
                 blocks = [_client_lines(cur, cid, name, code, internal=True,
-                                       can_finance=can_finance)
-                          for cid, name, code in found[:MAX_CLIENTS]]
+                                       can_finance=can_finance, share=len(picked))
+                          for cid, name, code in picked]
                 q_folded = _fold(question)
                 if _roster_intent(q_folded):
                     blocks.append(_roster_block(cur, dept_ids, is_banqt))
+                if _staff_intent(q_folded):
+                    blocks.append(_staff_block(cur, is_banqt))
                 if _alert_intent(q_folded):
                     blocks.append(_alerts_block(cur, dept_ids, is_banqt))
                 if not blocks:

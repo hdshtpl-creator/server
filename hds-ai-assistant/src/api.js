@@ -464,6 +464,12 @@ export async function getModels() {
   return request('/models', { method: 'GET' });
 }
 
+/** Đo tốc độ đọc/viết thật của máy chủ. Chạy lâu (vài chục giây trên máy yếu). */
+export async function benchmarkModel(model) {
+  const qs = model ? `?model=${encodeURIComponent(model)}` : '';
+  return request(`/models/benchmark${qs}`, { method: 'GET' });
+}
+
 export async function updateSetting(key, value) {
   return request(`/settings/${key}`, {
     method: 'PUT',
@@ -852,8 +858,14 @@ let mockState = {
     prompt_portal:
       'Bạn là trợ lý của HDS phục vụ khách hàng đã ký hợp đồng. Chỉ dùng tài liệu thuộc về khách đang đăng nhập, không nhắc tới khách khác. Trả lời NGẮN GỌN, dễ hiểu. Câu hỏi chưa rõ thì hỏi lại. Không đủ căn cứ thì đề nghị liên hệ luật sư phụ trách.',
     llm_temperature: '0.2',
-    retrieval_top_k: '8',
-    chat_history_turns: '6',
+    // Nhóm tham số quyết định tốc độ — giữ khớp DEFAULTS trong hds-ai/app/settings.py
+    retrieval_top_k: '5',
+    context_char_budget: '6000',
+    chunk_char_limit: '1500',
+    min_relevance: '0.25',
+    llm_num_ctx: '8192',
+    llm_num_predict: '700',
+    chat_history_turns: '3',
     llm_model: '',
     drive_map: JSON.stringify(
       {
@@ -1097,8 +1109,24 @@ Với câu hỏi "${question}":
         { title: 'Sổ tay Thủ tục Pháp lý Doanh nghiệp — HDS Law Firm', relevance_score: 0.82, doc_id: '12' },
       ],
       conversation_id: toIntOrNull(body.conversation_id) ?? ++mockState.nextConversationId,
-      latency_ms: 380,
+      latency_ms: 8420,
       message_id: ++mockState.nextMessageId,
+      // Số liệu giả nhưng đúng hình dạng máy chủ thật trả về, để bảng phân tích
+      // thời gian trong khung chat có cái mà hiển thị khi chạy chế độ giả lập.
+      timings: {
+        tim_kiem_ms: 240,
+        du_lieu_cong_ty_ms: 60,
+        ai_ms: 8420,
+        load_ms: 0,
+        prefill_ms: 2100,
+        gen_ms: 6300,
+        prompt_tokens: 1840,
+        gen_tokens: 320,
+        num_ctx: 4096,
+        model: 'qwen3:8b',
+        so_doan: 3,
+        bo_qua_doan_yeu: 2,
+      },
     };
   }
 
@@ -1342,6 +1370,22 @@ Với câu hỏi "${question}":
       total: items.length,
       urgent: items.filter((x) => x.severity === 'gap').length,
       items,
+    };
+  }
+
+  if (endpoint.startsWith('/models/benchmark')) {
+    return {
+      ok: true,
+      model: mockState.settings.llm_model || 'qwen3:8b',
+      prompt_tokens: 1340,
+      gen_tokens: 12,
+      load_ms: 0,
+      prefill_ms: 1850,
+      gen_ms: 900,
+      total_ms: 2750,
+      read_tok_s: 724,
+      write_tok_s: 13.3,
+      uoc_tinh_giay: 56.4,
     };
   }
 

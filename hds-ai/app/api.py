@@ -945,6 +945,32 @@ def models_list(user=Depends(current_user)):
     }
 
 
+@app.get("/models/benchmark")
+def models_benchmark(user=Depends(current_user), model: str | None = None):
+    """Đo tốc độ thật của máy chủ: đọc bao nhiêu token/giây, viết bao nhiêu.
+
+    Hai con số này quyết định toàn bộ thời gian trả lời, và chúng phụ thuộc
+    PHẦN CỨNG chứ không phụ thuộc lượng dữ liệu đã học. Có chúng thì tính được
+    ngay câu hỏi nào sẽ vượt 100 giây (mức Cloudflare cắt kết nối).
+
+    Chạy mất vài chục giây trên máy yếu nên chỉ admin gọi được.
+    """
+    require(user, {"admin"})
+    from app.models import benchmark
+    res = benchmark(model)
+    if res.get("ok"):
+        # Ước lượng thời gian một lượt hỏi điển hình với ngân sách ngữ cảnh
+        # đang đặt — cho admin thấy hậu quả của việc nới ngân sách.
+        ctx_chars = settings.get_int("context_char_budget", 6000)
+        # ~3 ký tự tiếng Việt cho một token, cộng hồ sơ công ty + lịch sử + câu hỏi
+        est_prompt = ctx_chars / 3 + 2000
+        r, w = res.get("read_tok_s"), res.get("write_tok_s")
+        if r and w:
+            res["uoc_tinh_giay"] = round(est_prompt / r + settings.get_int(
+                "llm_num_predict", 700) / w, 1)
+    return res
+
+
 # ---------- 8a. TỆP: TẢI LÊN / TẢI VỀ QUA WEB ----------
 # Khác /upload (nhận text đã trích sẵn, chỉ dùng được .txt): các endpoint dưới đây
 # nhận TỆP THẬT (pdf/docx/...), tự lưu vào đúng thư mục trên server, tự trích văn

@@ -9,11 +9,27 @@ Hỗ trợ thêm:
   - analysis_methods: áp mẫu phương pháp admin đã dạy
 """
 import json
+import time
 
 from app import company_context, db, settings
 from app.models import embed, llm
 
-TOP_K = 8
+# --------------------------------------------------------------------
+# NGÂN SÁCH NGỮ CẢNH — phần quyết định tốc độ trả lời
+#
+# Thời gian trả lời ≈ thời gian ĐỌC prompt + thời gian VIẾT câu trả lời.
+# Phần đọc tỉ lệ thuận với độ dài prompt và KHÔNG phụ thuộc câu hỏi khó hay dễ:
+# nhồi 8 đoạn × 700 từ vào mỗi lượt thì câu "chào bạn" cũng nặng như câu phân
+# tích hợp đồng. Vì vậy giới hạn ở đây, chứ không phải ở kích thước kho dữ liệu.
+#
+# Lưu ý: kho có 1 tài liệu hay 1 triệu tài liệu thì prompt vẫn bằng nhau — tìm
+# kiếm vector luôn trả về đúng top_k đoạn. Kho lớn lên KHÔNG làm chậm trả lời.
+# --------------------------------------------------------------------
+TOP_K = 5                 # số đoạn tài liệu đưa vào prompt
+CHUNK_CHARS = 1500        # cắt mỗi đoạn còn bấy nhiêu ký tự
+CONTEXT_CHARS = 6000      # tổng ngân sách cho toàn bộ tài liệu tham khảo
+HISTORY_CHARS = 300       # mỗi lượt hỏi-đáp cũ chỉ giữ bấy nhiêu ký tự
+MIN_SCORE = 0.25          # dưới ngưỡng này coi như không liên quan, bỏ đi
 
 CHANNEL_LEVEL = {"public": "public", "internal": "internal", "portal": "client"}
 
@@ -98,7 +114,7 @@ def get_history(conversation_id, channel, client_id=None, turns=None):
     if not conversation_id:
         return []
     if turns is None:
-        turns = settings.get_int("chat_history_turns", 6)
+        turns = settings.get_int("chat_history_turns", 3)
     if turns <= 0:
         return []
     level = CHANNEL_LEVEL[channel]
@@ -115,8 +131,30 @@ def get_history(conversation_id, channel, client_id=None, turns=None):
     return list(reversed(rows))
 
 
+def fit_context(chunks, chunk_chars=None, budget=None):
+    """Cắt danh sách đoạn cho vừa ngân sách ký tự, giữ nguyên thứ tự liên quan.
+
+    Mỗi đoạn bị cắt về `chunk_chars`, và dừng nhận thêm khi đã đủ `budget`. Đoạn
+    xếp trên là đoạn khớp nhất nên bị cắt sau cùng — cắt từ đuôi danh sách là
+    mất phần ít liên quan nhất.
+    """
+    chunk_chars = chunk_chars or settings.get_int("chunk_char_limit", CHUNK_CHARS)
+    budget = budget or settings.get_int("context_char_budget", CONTEXT_CHARS)
+    out, used = [], 0
+    for c in chunks:
+        if used >= budget:
+            break
+        content = (c.get("content") or "")[:chunk_chars]
+        room = budget - used
+        if len(content) > room:
+            content = content[:room].rstrip() + "…"
+        out.append({**c, "content": content})
+        used += len(content)
+    return out
+
+
 def build_prompt(question, chunks, temp_chunks=None, method=None,
-                 company="", history=None):
+                 company="", history=None, chunk_chars=None, budget=None):
     parts = []
     if method:
         parts.append(f"QUY TRÌNH PHÂN TÍCH (loại: {method['case_type']}):\n{method['steps']}\n"
@@ -128,9 +166,11 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
         parts.append("DIỄN BIẾN CUỘC TRAO ĐỔI TRƯỚC ĐÓ:")
         for role, content in history:
             who = "Người hỏi" if role == "user" else "Trợ lý"
-            parts.append(f"{who}: {(content or '')[:800]}")
+            parts.append(f"{who}: {(content or '')[:HISTORY_CHARS]}")
         parts.append("")
-    all_ctx = list(chunks) + list(temp_chunks or [])
+    # Ngân sách áp cho CẢ tài liệu trong kho lẫn file tạm đính kèm — nếu không,
+    # một file tải lên trong chat vẫn đủ sức thổi prompt lên quá cỡ.
+    all_ctx = fit_context(list(chunks) + list(temp_chunks or []), chunk_chars, budget)
     if all_ctx:
         parts.append("TÀI LIỆU THAM KHẢO:")
         for i, c in enumerate(all_ctx, 1):
@@ -224,6 +264,26 @@ def resolve_model(model_choice, question):
     return choice
 
 
+SLOW_MS = 20000   # trên mức này thì ghi log để soi lại, dưới thì im lặng
+
+
+def _log_slow(question, t):
+    """In một dòng chẩn đoán khi câu trả lời chậm bất thường.
+
+    Xem bằng:  sudo journalctl -u hds-ai-backend -n 200 | grep CHAM
+    Đọc dòng này là biết ngay chậm ở đâu: `doc` lớn nghĩa là prompt quá dài,
+    `nap` lớn nghĩa là model bị đẩy ra khỏi bộ nhớ và phải nạp lại từ ổ cứng,
+    `viet` lớn nghĩa là model quá nặng so với máy.
+    """
+    if t.get("ai_ms", 0) < SLOW_MS:
+        return
+    print(f"[CHAM] {t.get('ai_ms')}ms | model={t.get('model')} "
+          f"| prompt={t.get('prompt_tokens')} token, doc={t.get('prefill_ms')}ms "
+          f"| sinh={t.get('gen_tokens')} token, viet={t.get('gen_ms')}ms "
+          f"| nap={t.get('load_ms')}ms | tim={t.get('tim_kiem_ms')}ms "
+          f"| doan={t.get('so_doan')} | hoi={(question or '')[:60]!r}", flush=True)
+
+
 def answer(question, channel, user_id=None, client_id=None, conversation_id=None,
            prefer="local", use_temp=False, use_method=False,
            dept_ids=None, is_banqt=False, can_finance=False, role=None, model=None):
@@ -247,9 +307,27 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
     # Kênh nội bộ không giới hạn ở đây — quyền nội bộ nằm ở RLS và can_open_doc.
     doc_types = tier_doc_types(role) if (channel == "portal" and role) else None
 
+    # Đo từng chặng để biết chậm ở đâu — không đo thì chỉ đoán mò.
+    timings: dict = {}
+    clock = [time.time()]
+
+    def tick(key):
+        now = time.time()
+        timings[key] = int((now - clock[0]) * 1000)
+        clock[0] = now
+
     chunks = retrieve(question, channel, client_id, dept_ids=dept_ids, is_banqt=is_banqt,
                       top_k=_num("retrieval_top_k", TOP_K, int), can_finance=can_finance,
                       doc_types=doc_types)
+    # Đoạn điểm thấp là đoạn không liên quan tới câu hỏi: nó không giúp câu trả
+    # lời mà vẫn ngốn thời gian đọc prompt. Câu hỏi ngoài phạm vi kho tài liệu
+    # (vd hỏi về nhân sự công ty) nhờ vậy đi thẳng, không phải cõng 5 đoạn luật.
+    min_score = _num("min_relevance", MIN_SCORE, float)
+    kept = [c for c in chunks if c["score"] >= min_score]
+    timings["bo_qua_doan_yeu"] = len(chunks) - len(kept)
+    chunks = kept
+    tick("tim_kiem_ms")
+
     temp_chunks = get_temp_context(conversation_id, question) if (use_temp and conversation_id) else None
     method = find_method(question) if use_method else None
 
@@ -259,14 +337,26 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
                                     dept_ids=dept_ids, is_banqt=is_banqt,
                                     can_finance=can_finance)
     history = get_history(conversation_id, channel, client_id)
+    tick("du_lieu_cong_ty_ms")
 
+    # Truyền thẳng ngân sách đã đọc từ `cfg` — để build_prompt tự đọc lại thì
+    # mỗi câu hỏi phải mở thêm hai kết nối CSDL cho hai con số.
     prompt = build_prompt(question, chunks, temp_chunks, method,
-                          company=company, history=history)
+                          company=company, history=history,
+                          chunk_chars=_num("chunk_char_limit", CHUNK_CHARS, int),
+                          budget=_num("context_char_budget", CONTEXT_CHARS, int))
     system_prompt = cfg.get(f"prompt_{channel}") or settings.DEFAULTS.get(f"prompt_{channel}", "")
     chosen_model = resolve_model(model, question)
+    llm_stats: dict = {}
     text, latency = llm(prompt, system=system_prompt, prefer=prefer,
                         temperature=_num("llm_temperature", 0.2, float),
-                        model=chosen_model)
+                        model=chosen_model, stats=llm_stats)
+    timings["ai_ms"] = latency
+    timings.update({k: v for k, v in llm_stats.items()
+                    if k in ("prompt_tokens", "gen_tokens", "load_ms",
+                             "prefill_ms", "gen_ms", "num_ctx", "model")})
+    timings["so_doan"] = len(chunks)
+    _log_slow(question, timings)
 
     msg_id = None
     if conversation_id:
@@ -287,7 +377,7 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
             "sources": [{"n": i, "title": c["title"], "document_id": c.get("document_id"),
                          "score": round(c["score"], 3)} for i, c in enumerate(chunks, 1)],
             "used_method": method["case_type"] if method else None,
-            "latency_ms": latency, "message_id": msg_id}
+            "latency_ms": latency, "message_id": msg_id, "timings": timings}
 
 
 # =============================================================
