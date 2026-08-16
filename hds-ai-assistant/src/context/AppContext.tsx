@@ -54,7 +54,7 @@ interface AppContextType {
   // Ghi chú cá nhân trong khung chat
   notes: Note[];
   reloadNotes: () => Promise<void>;
-  saveNote: (content: string, sourceMessageId?: number | null) => Promise<void>;
+  saveNote: (content: string, sourceMessageId?: number | null) => Promise<Note>;
   removeNote: (id: number) => Promise<void>;
 
   // Thông báo
@@ -280,9 +280,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const saveNote = useCallback(
-    async (content: string, sourceMessageId?: number | null) => {
-      const created = await api.addNote({ content, source_message_id: sourceMessageId ?? null });
-      setNotes((prev) => [created as Note, ...prev]);
+    async (content: string, sourceMessageId?: number | null): Promise<Note> => {
+      const created = (await api.addNote({
+        content,
+        source_message_id: sourceMessageId ?? null,
+      })) as Note;
+      setNotes((prev) => [created, ...prev]);
+      return created;
     },
     []
   );

@@ -5,6 +5,7 @@ Không cần PyTorch, không lỗi CUDA trên card Blackwell.
 import os
 import re
 import time
+import unicodedata
 
 import requests
 from dotenv import load_dotenv
@@ -54,11 +55,62 @@ def effective_llm_model() -> str:
     return LLM_MODEL
 
 
-def llm_local(prompt: str, system: str = "", temperature: float = 0.2) -> tuple[str, int]:
+def _fold(s: str) -> str:
+    s = unicodedata.normalize("NFD", s or "")
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    return s.replace("đ", "d").replace("Đ", "d").lower()
+
+
+def _param_size(name: str) -> float:
+    """Số tham số (tỉ) đọc từ tên model: 'qwen3:8b' → 8, 'qwen2.5:14b' → 14.
+    Không đọc được thì coi là lớn để 'auto' không lỡ chọn model nặng."""
+    m = re.search(r"(\d+(?:\.\d+)?)\s*b\b", name.lower())
+    return float(m.group(1)) if m else 999.0
+
+
+def generation_models(names, embed_model=None) -> list:
+    """Danh sách model SINH câu trả lời (loại model tạo vector ra)."""
+    embed_base = (embed_model or EMBED_MODEL).split(":")[0]
+    return [n for n in names if n.split(":")[0] != embed_base]
+
+
+# Dấu hiệu câu hỏi phức tạp → 'auto' mới dùng model mạnh (mặc định của admin).
+_COMPLEX_WORDS = {
+    "phan tich", "soan", "du thao", "so sanh", "danh gia", "lap luan",
+    "chi tiet", "toan dien", "rui ro", "tu van", "du bao", "chien luoc",
+    "giai thich", "lap dan y", "du thao hop dong",
+}
+
+
+def auto_pick_model(question: str) -> str:
+    """'Tự động': câu ĐƠN GIẢN dùng model nhanh nhất; câu PHỨC TẠP dùng model
+    admin đã đặt. KHÔNG bao giờ chọn model nặng hơn mặc định → tránh chậm/524."""
+    configured = effective_llm_model()
+    up, names = check_ollama()
+    if not up or not names:
+        return configured
+    gens = generation_models(names)
+    if not gens:
+        return configured
+    q = _fold(question)
+    is_complex = len(q.split()) > 25 or any(w in q for w in _COMPLEX_WORDS)
+    if is_complex:
+        return configured
+    smallest = min(gens, key=_param_size)
+    # Chỉ hạ xuống model nhẹ hơn/bằng mặc định, không nâng lên nặng hơn.
+    return smallest if _param_size(smallest) <= _param_size(configured) else configured
+
+
+def llm_local(prompt: str, system: str = "", temperature: float = 0.2,
+              model: str | None = None) -> tuple[str, int]:
     t0 = time.time()
+    # num_predict chặn số token sinh ra → chặn TRẦN thời gian trả lời. Không có
+    # nó, model chậm có thể sinh cả nghìn token, vượt 100s và bị Cloudflare cắt
+    # (lỗi 524). Câu trả lời pháp lý gọn gàng hiếm khi cần quá ngần này.
     r = requests.post(f"{OLLAMA_URL}/api/generate", json={
-        "model": effective_llm_model(), "prompt": prompt, "system": system, "stream": False,
-        "options": {"temperature": temperature, "num_ctx": 8192}}, timeout=300)
+        "model": model or effective_llm_model(), "prompt": prompt, "system": system,
+        "stream": False,
+        "options": {"temperature": temperature, "num_ctx": 8192, "num_predict": 1024}}, timeout=300)
     r.raise_for_status()
     ans = r.json().get("response", "").strip()
     if "<think>" in ans:                       # Qwen3 chế độ suy nghĩ
@@ -81,10 +133,10 @@ def llm_openai(prompt: str, system: str = "", temperature: float = 0.2) -> tuple
     return r.json()["choices"][0]["message"]["content"].strip(), int((time.time() - t0) * 1000)
 
 
-def llm(prompt: str, system: str = "", prefer: str = "local", **kw):
+def llm(prompt: str, system: str = "", prefer: str = "local", model: str | None = None, **kw):
     if prefer == "cloud" and os.getenv("OPENAI_API_KEY"):
-        return llm_openai(prompt, system, **kw)
-    return llm_local(prompt, system, **kw)
+        return llm_openai(prompt, system, **kw)   # kênh đám mây dùng OPENAI_MODEL
+    return llm_local(prompt, system, model=model, **kw)
 
 
 def summarize(text: str, title: str = "") -> str:

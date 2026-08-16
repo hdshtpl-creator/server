@@ -203,7 +203,7 @@ export async function changePassword({ old_password, new_password }) {
 // ==================== 1. HỘI THOẠI ====================
 
 // POST /chat/internal — conversation_id phải là số hoặc bỏ hẳn
-export async function chatInternal({ question, conversation_id, use_temp, use_method }) {
+export async function chatInternal({ question, conversation_id, use_temp, use_method, model }) {
   return request('/chat/internal', {
     method: 'POST',
     body: JSON.stringify({
@@ -211,6 +211,7 @@ export async function chatInternal({ question, conversation_id, use_temp, use_me
       conversation_id: toIntOrNull(conversation_id),
       use_temp: Boolean(use_temp),
       use_method: Boolean(use_method),
+      model: model || undefined,
     }),
   });
 }
@@ -490,6 +491,11 @@ export async function sendFeedback({ message_id, rating, note }) {
       note: note || undefined,
     }),
   });
+}
+
+// DELETE /feedback/{id} — rút lại đánh giá vừa gửi (lỡ bấm nhầm)
+export async function retractFeedback(feedbackId) {
+  return request(`/feedback/${feedbackId}`, { method: 'DELETE' });
 }
 
 export async function getFeedbackPending() {
@@ -1343,6 +1349,7 @@ Với câu hỏi "${question}":
     return {
       ollama: true,
       available: ['qwen3:8b', 'qwen2.5:14b', 'llama3.1:8b', 'bge-m3'],
+      generation: ['qwen3:8b', 'qwen2.5:14b', 'llama3.1:8b'],
       current: mockState.settings.llm_model || 'qwen3:8b',
       current_ready: true,
       embed_model: 'bge-m3',
@@ -1351,6 +1358,12 @@ Với câu hỏi "${question}":
   }
 
   // ---------- Báo cáo chất lượng ----------
+  if (/^\/feedback\/\d+$/.test(endpoint) && method === 'DELETE') {
+    const fid = Number(endpoint.split('/')[2]);
+    mockState.feedback = mockState.feedback.filter((f) => f.id !== fid);
+    return { ok: true, id: fid };
+  }
+
   if (endpoint === '/feedback' && method === 'POST') {
     const item = {
       id: Date.now(),

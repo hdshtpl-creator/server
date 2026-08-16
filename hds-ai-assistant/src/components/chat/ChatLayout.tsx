@@ -6,7 +6,18 @@ import { FileUploadModal } from './FileUploadModal';
 import * as api from '../../api';
 import type { MethodTemplate } from '../../types';
 import { isClientRole } from '../../constants';
-import { Send, Upload, Sliders, FileText, X, Loader2, Sparkles, AlertCircle, Bot } from 'lucide-react';
+import {
+  Send,
+  Upload,
+  Sliders,
+  FileText,
+  X,
+  Loader2,
+  Sparkles,
+  AlertCircle,
+  Bot,
+  Cpu,
+} from 'lucide-react';
 
 const nowLabel = () =>
   new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
@@ -24,6 +35,9 @@ export const ChatLayout: React.FC = () => {
   const [inputQuestion, setInputQuestion] = useState('');
   const [useMethod, setUseMethod] = useState(false);
   const [methodTemplates, setMethodTemplates] = useState<MethodTemplate[]>([]);
+  const [genModels, setGenModels] = useState<string[]>([]);
+  // 'auto' = tự chọn model phù hợp; '' = mặc định máy chủ; hoặc tên model cụ thể
+  const [selectedModel, setSelectedModel] = useState('auto');
   const [isLoading, setIsLoading] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -48,6 +62,11 @@ export const ChatLayout: React.FC = () => {
       .getMethods()
       .then((templates) => setMethodTemplates(Array.isArray(templates) ? templates : []))
       .catch(() => setMethodTemplates([]));
+    // Danh sách model để chọn ngay ô chat (chỉ nhân viên nội bộ)
+    api
+      .getModels()
+      .then((m) => setGenModels(Array.isArray(m?.generation) ? m.generation : []))
+      .catch(() => setGenModels([]));
   }, [isClient]);
 
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -78,6 +97,7 @@ export const ChatLayout: React.FC = () => {
             conversation_id: serverConvId ?? null,
             use_temp: Boolean(tempFileName),
             use_method: useMethod,
+            model: selectedModel,
           });
 
       // Ghi nhớ mã hội thoại do backend cấp để các lượt sau nối đúng ngữ cảnh
@@ -317,17 +337,39 @@ export const ChatLayout: React.FC = () => {
             </div>
 
             <div className="flex items-center justify-between gap-3 text-[11px] text-slate-400 dark:text-slate-500 px-1">
-              <span className="flex items-center gap-1.5 min-w-0">
-                <span className="shrink-0">Chế độ:</span>
-                {activeConversation?.temp_file ? (
-                  <span className="text-amber-700 dark:text-amber-300 font-semibold bg-amber-50 dark:bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 truncate">
-                    Có tài liệu tạm đính kèm
-                  </span>
-                ) : (
-                  <span className="truncate">
-                    {isClient ? 'Cổng khách hàng' : 'Tra cứu kho tri thức nội bộ'}
+              <span className="flex items-center gap-2 min-w-0">
+                {/* Bộ chọn model — chỉ nhân viên nội bộ, khi máy chủ có model */}
+                {!isClient && genModels.length > 0 && (
+                  <span className="flex items-center gap-1 shrink-0">
+                    <Cpu className="w-3.5 h-3.5 text-hds-navy dark:text-blue-400" />
+                    <select
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      aria-label="Chọn mô hình AI"
+                      title="Mô hình trả lời — Tự động: câu đơn giản dùng model nhanh"
+                      className="bg-transparent text-slate-500 dark:text-slate-400 font-semibold border border-slate-200 dark:border-slate-700 rounded-lg px-1.5 py-0.5 focus:ring-2 focus:ring-hds-blue focus:outline-none cursor-pointer max-w-[130px]"
+                    >
+                      <option value="auto">⚡ Tự động</option>
+                      {genModels.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
                   </span>
                 )}
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="shrink-0">Chế độ:</span>
+                  {activeConversation?.temp_file ? (
+                    <span className="text-amber-700 dark:text-amber-300 font-semibold bg-amber-50 dark:bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 truncate">
+                      Có tài liệu tạm đính kèm
+                    </span>
+                  ) : (
+                    <span className="truncate">
+                      {isClient ? 'Cổng khách hàng' : 'Tra cứu kho nội bộ'}
+                    </span>
+                  )}
+                </span>
               </span>
               <span className="hidden sm:inline shrink-0">HDS Law Firm — Nền tảng AI Pháp lý</span>
             </div>

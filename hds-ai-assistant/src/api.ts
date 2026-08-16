@@ -60,6 +60,8 @@ export const chatInternal = ApiJs.chatInternal as (params: {
   conversation_id?: number | null;
   use_temp?: boolean;
   use_method?: boolean;
+  /** '' = mặc định máy chủ | 'auto' | tên model cụ thể */
+  model?: string;
 }) => Promise<ChatResponse>;
 
 export const chatPortal = ApiJs.chatPortal as (params: {
@@ -196,6 +198,10 @@ export const sendFeedback = ApiJs.sendFeedback as (params: {
   rating: 'good' | 'bad';
   note?: string;
 }) => Promise<{ ok?: boolean; feedback_id?: number }>;
+
+export const retractFeedback = ApiJs.retractFeedback as (
+  feedbackId: number
+) => Promise<{ ok?: boolean; id?: number }>;
 
 export const getFeedbackPending = ApiJs.getFeedbackPending as () => Promise<FeedbackItem[]>;
 

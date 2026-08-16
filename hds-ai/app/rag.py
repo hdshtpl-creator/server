@@ -210,9 +210,23 @@ def get_temp_context(conversation_id, question, top_k=5):
     return scored[:top_k]
 
 
+def resolve_model(model_choice, question):
+    """Từ lựa chọn của người dùng → tên model cụ thể (hoặc None = mặc định).
+      ''/None      → None (dùng model mặc định của máy chủ)
+      'auto'       → models.auto_pick_model (câu đơn giản chọn model nhanh)
+      '<tên model>'→ đúng model đó"""
+    choice = (model_choice or "").strip()
+    if not choice:
+        return None
+    if choice.lower() == "auto":
+        from app.models import auto_pick_model
+        return auto_pick_model(question)
+    return choice
+
+
 def answer(question, channel, user_id=None, client_id=None, conversation_id=None,
            prefer="local", use_temp=False, use_method=False,
-           dept_ids=None, is_banqt=False, can_finance=False, role=None):
+           dept_ids=None, is_banqt=False, can_finance=False, role=None, model=None):
     """Hàm chính — cả 3 kênh gọi hàm này."""
     if channel not in CHANNEL_LEVEL:
         raise ValueError(f"Kênh không hợp lệ: {channel}")
@@ -249,8 +263,10 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
     prompt = build_prompt(question, chunks, temp_chunks, method,
                           company=company, history=history)
     system_prompt = cfg.get(f"prompt_{channel}") or settings.DEFAULTS.get(f"prompt_{channel}", "")
+    chosen_model = resolve_model(model, question)
     text, latency = llm(prompt, system=system_prompt, prefer=prefer,
-                        temperature=_num("llm_temperature", 0.2, float))
+                        temperature=_num("llm_temperature", 0.2, float),
+                        model=chosen_model)
 
     msg_id = None
     if conversation_id:
@@ -262,7 +278,7 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
                 cur.execute("""INSERT INTO messages (conversation_id,role,content,sources,model_used,latency_ms)
                                VALUES (%s,'assistant',%s,%s,%s,%s) RETURNING id""",
                             (conversation_id, text, json.dumps([c["chunk_id"] for c in chunks]),
-                             prefer, latency))
+                             chosen_model or prefer, latency))
                 msg_id = cur.fetchone()[0]
             db.audit(conn, user_id, "chat_query", "conversation", conversation_id,
                      {"channel": channel, "n_sources": len(chunks), "used_method": bool(method)})

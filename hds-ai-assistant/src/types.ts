@@ -19,6 +19,8 @@ export interface ModelInfo {
   ollama: boolean;
   /** Tên mọi model Ollama đã cài trên server. */
   available: string[];
+  /** Chỉ model SINH câu trả lời (đã loại model tạo vector) — cho bộ chọn ô chat. */
+  generation?: string[];
   /** Model đang dùng để sinh câu trả lời (rỗng nếu theo mặc định .env). */
   current: string | null;
   /** Model đang chọn có thật sự tồn tại trên server không. */

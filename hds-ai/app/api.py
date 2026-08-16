@@ -232,6 +232,7 @@ class ChatIn(BaseModel):
     conversation_id: int | None = None
     use_temp: bool = False       # dùng file 'dùng xong bỏ' đã tải trong chat
     use_method: bool = False     # áp mẫu phương pháp phân tích
+    model: str | None = None     # '' = mặc định máy chủ | 'auto' | tên model cụ thể
 
 
 @app.post("/chat/public")
@@ -251,7 +252,7 @@ def chat_internal(body: ChatIn, user=Depends(current_user)):
     res = rag.answer(body.question, "internal", user_id=user["id"], conversation_id=conv,
                      use_temp=body.use_temp, use_method=body.use_method,
                      dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
-                     can_finance=user["can_finance"])
+                     can_finance=user["can_finance"], model=body.model)
     res["conversation_id"] = conv
     return res
 
@@ -925,18 +926,20 @@ def health():
 
 @app.get("/models")
 def models_list(user=Depends(current_user)):
-    """Model AI đang có trên máy chủ (Ollama) + model đang dùng để sinh câu trả lời.
+    """Model AI đang có trên máy chủ (Ollama) + model mặc định.
 
-    Dùng cho nút chọn model trong Cài đặt AI. Chỉ admin — đổi model ảnh hưởng
-    toàn hệ thống."""
-    require(user, {"admin"})
-    from app.models import check_models
+    Nội bộ đọc được để hiện bộ chọn model ngay ô chat. Việc ĐỔI model mặc định
+    toàn hệ thống vẫn chỉ admin (qua Cài đặt AI / PUT settings)."""
+    require(user, INTERNAL_ROLES)
+    from app.models import check_models, generation_models
     st = check_models()
     return {
         "ollama": st["ollama"],
         "available": st.get("models", []),   # tên mọi model đã cài trên server
-        "current": st.get("llm_model"),       # model sinh câu trả lời đang chọn
-        "current_ready": st.get("llm"),        # model đang chọn có thật sự tồn tại không
+        # chỉ model SINH câu trả lời (loại model tạo vector) — cho bộ chọn ở ô chat
+        "generation": generation_models(st.get("models", []), st.get("embed_model")),
+        "current": st.get("llm_model"),       # model mặc định đang dùng
+        "current_ready": st.get("llm"),        # model mặc định có thật sự tồn tại không
         "embed_model": st.get("embed_model"),  # model tạo vector — cố định, không đổi
         "embed_ready": st.get("embed"),
     }
@@ -1140,6 +1143,21 @@ def feedback_create(body: FeedbackIn, user=Depends(current_user)):
         db.audit(conn, user["id"], "send_feedback", "messages", body.message_id,
                  {"rating": body.rating})
     return {"ok": True, "feedback_id": fid}
+
+
+@app.delete("/feedback/{fid}")
+def feedback_retract(fid: int, user=Depends(current_user)):
+    """Rút lại đánh giá của CHÍNH mình (lỡ bấm nhầm like/báo cáo).
+    Chỉ rút được khi báo cáo còn 'pending' — admin chưa xử lý."""
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""DELETE FROM answer_feedback
+                            WHERE id=%s AND user_id=%s AND status='pending'""",
+                        (fid, user["id"]))
+            deleted = cur.rowcount
+    if not deleted:
+        raise HTTPException(404, "Không rút được (đã được xử lý hoặc không phải của bạn)")
+    return {"ok": True, "id": fid}
 
 
 @app.get("/feedback/pending")
