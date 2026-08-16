@@ -226,6 +226,34 @@ export async function chatPortal({ question, conversation_id }) {
   });
 }
 
+// GET /chat/history — lịch sử khung chat bền của người đang đăng nhập
+export async function getChatHistory(limit = 200) {
+  return request(`/chat/history?limit=${Number(limit) || 200}`, { method: 'GET' });
+}
+
+// GET /chat/search — tìm trong lịch sử chat của chính mình
+export async function searchChat(q, limit = 40) {
+  return request(`/chat/search?q=${encodeURIComponent(q)}&limit=${Number(limit) || 40}`, {
+    method: 'GET',
+  });
+}
+
+// ---------- Ghi chú cá nhân ----------
+export async function getNotes(limit = 100) {
+  return request(`/notes?limit=${Number(limit) || 100}`, { method: 'GET' });
+}
+
+export async function addNote({ content, source_message_id }) {
+  return request('/notes', {
+    method: 'POST',
+    body: JSON.stringify({ content, source_message_id: source_message_id ?? null }),
+  });
+}
+
+export async function deleteNote(noteId) {
+  return request(`/notes/${noteId}`, { method: 'DELETE' });
+}
+
 // POST /upload — backend yêu cầu conversation_id kiểu int (bắt buộc)
 export async function uploadFile({ conversation_id, filename, content, mode }) {
   const convId = toIntOrNull(conversation_id);
@@ -929,16 +957,32 @@ let mockState = {
   ],
   nextConversationId: 9000,
   nextMessageId: 8100,
+  // Khung chat bền (mô hình một-khung-mỗi-người) + ghi chú cá nhân
+  persistentConvId: 7001,
+  chatHistory: [
+    { id: 6001, role: 'user', content: 'Khách SUNGROUP đang có mấy vụ việc?', created_at: '2026-08-14 09:10' },
+    { id: 6002, role: 'assistant', content: 'Tập đoàn SunGroup hiện có 2 vụ việc đang xử lý: [M-2026-001] Tái cấu trúc vốn SunPhuQuoc (đã quá hạn 3 ngày) và [M-2026-014] Thuê đất thương mại (còn 5 ngày).', created_at: '2026-08-14 09:10' },
+    { id: 6003, role: 'user', content: 'Thời hiệu khởi kiện tranh chấp hợp đồng thương mại là bao lâu?', created_at: '2026-08-14 09:12' },
+    { id: 6004, role: 'assistant', content: 'Theo Điều 319 Luật Thương mại 2005, thời hiệu khởi kiện áp dụng đối với tranh chấp thương mại là 2 năm kể từ thời điểm quyền và lợi ích hợp pháp bị xâm phạm.', created_at: '2026-08-14 09:12' },
+  ],
+  notes: [
+    { id: 501, content: 'Thời hiệu khởi kiện tranh chấp thương mại: 2 năm (Điều 319 LTM 2005).', source_message_id: 6004, created_at: '2026-08-14 09:13' },
+    { id: 502, content: 'Nhắc SunGroup gia hạn vụ M-2026-001 — đã quá hạn.', source_message_id: null, created_at: '2026-08-14 09:15' },
+  ],
+  nextNoteId: 600,
 };
 
 async function handleMockRequest(endpoint, options, headers) {
   await new Promise((res) => setTimeout(res, 200));
-  // Chat thật mất nhiều giây (model suy nghĩ). Cho mock trễ thêm để bản demo
-  // giống thật và để thấy được chỉ báo "đang trả lời…".
-  if (endpoint.startsWith('/chat/')) {
+  const method = (options.method || 'GET').toUpperCase();
+  // Chỉ CÂU TRẢ LỜI (POST) mới cần trễ để giống model suy nghĩ và thấy chỉ báo
+  // "đang trả lời…". History/search/notes phải nhanh.
+  const isChatAnswer =
+    method === 'POST' &&
+    (endpoint === '/chat/internal' || endpoint === '/chat/portal' || endpoint === '/chat/public');
+  if (isChatAnswer) {
     await new Promise((res) => setTimeout(res, 1300));
   }
-  const method = (options.method || 'GET').toUpperCase();
   const body = options.body ? JSON.parse(options.body) : {};
 
   // ---------- Xác thực ----------
@@ -980,6 +1024,37 @@ async function handleMockRequest(endpoint, options, headers) {
   }
   if (endpoint.startsWith('/users') && me.role !== 'admin') {
     throw new Error('Không đủ quyền (403) — chỉ admin quản lý người dùng');
+  }
+
+  // ---------- Khung chat bền + tìm kiếm + ghi chú ----------
+  if (endpoint.startsWith('/chat/history')) {
+    return { conversation_id: mockState.persistentConvId, messages: [...mockState.chatHistory] };
+  }
+  if (endpoint.startsWith('/chat/search')) {
+    const q = decodeURIComponent((endpoint.split('q=')[1] || '').split('&')[0]).toLowerCase();
+    if (q.length < 2) return [];
+    return mockState.chatHistory
+      .filter((m) => m.content.toLowerCase().includes(q))
+      .slice()
+      .reverse();
+  }
+  if (endpoint.startsWith('/notes')) {
+    const noteId = endpoint.split('/')[2];
+    if (method === 'GET') return [...mockState.notes];
+    if (method === 'POST') {
+      const item = {
+        id: ++mockState.nextNoteId,
+        content: (body.content || '').trim(),
+        source_message_id: body.source_message_id ?? null,
+        created_at: new Date().toLocaleString('vi-VN'),
+      };
+      mockState.notes.unshift(item);
+      return { ok: true, ...item };
+    }
+    if (method === 'DELETE') {
+      mockState.notes = mockState.notes.filter((n) => String(n.id) !== String(noteId));
+      return { ok: true, id: Number(noteId) };
+    }
   }
 
   // ---------- Hội thoại ----------

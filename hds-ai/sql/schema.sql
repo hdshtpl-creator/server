@@ -451,3 +451,18 @@ CREATE TABLE IF NOT EXISTS answer_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_pending ON answer_feedback(status) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS idx_feedback_msg ON answer_feedback(message_id);
+
+-- =============================================================
+-- GHI CHÚ CÁ NHÂN (mỗi người tự ghi lại điều quan trọng trong khung chat)
+-- Có thể gắn với một câu trả lời của AI (source_message_id) để "lưu note" nhanh.
+-- =============================================================
+CREATE TABLE IF NOT EXISTS notes (
+  id                BIGSERIAL PRIMARY KEY,
+  user_id           INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  content           TEXT NOT NULL,
+  source_message_id BIGINT REFERENCES messages(id) ON DELETE SET NULL,
+  created_at        TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notes_user ON notes(user_id, created_at DESC);
+GRANT SELECT, INSERT, UPDATE, DELETE ON notes TO hds_app;
+GRANT USAGE, SELECT ON SEQUENCE notes_id_seq TO hds_app;

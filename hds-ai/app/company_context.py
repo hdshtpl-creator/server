@@ -132,6 +132,16 @@ ALERT_WORDS = {
     "vu nao gap", "viec gap", "treo lau", "ton dong", "sap toi han",
 }
 
+# Câu hỏi đếm/liệt kê khách nói chung ("có bao nhiêu công ty", "danh sách khách")
+# — không nhắc tên khách cụ thể nên phần nhận diện khách không bắt được, nhưng
+# đây là câu một thư ký phải trả lời được.
+ROSTER_WORDS = {
+    "bao nhieu khach", "bao nhieu cong ty", "bao nhieu cty", "bao nhieu doanh nghiep",
+    "may khach", "may cong ty", "may cty", "tong so khach", "so luong khach",
+    "danh sach khach", "danh sach cong ty", "co nhung khach nao", "nhung khach nao",
+    "liet ke khach", "cac khach hang", "khach hang nao",
+}
+
 DOC_TYPE_VN = {
     "law": "văn bản luật", "ban_an": "bản án", "an_le": "án lệ",
     "mau_hd": "mẫu hợp đồng", "nhan_hieu": "data nhãn hiệu",
@@ -146,11 +156,14 @@ DOC_TYPE_VN = {
 # Nhận diện khách / vụ việc được nhắc trong câu hỏi
 # ---------------------------------------------------------------
 def _visible_clients(cur, dept_ids, is_banqt):
-    """Khách mà người hỏi được phép thấy. Lọc theo phòng vì clients không có RLS."""
+    """Khách mà người hỏi được phép thấy. Lọc theo phòng vì clients không có RLS.
+    Khách chưa gán phòng (department_id NULL) coi như dùng chung — mọi nội bộ thấy,
+    khớp với cách RLS xử lý (app_in_dept trả true khi dept NULL)."""
     if is_banqt:
         cur.execute("SELECT id, name, code FROM clients")
     else:
-        cur.execute("SELECT id, name, code FROM clients WHERE department_id = ANY(%s)",
+        cur.execute("""SELECT id, name, code FROM clients
+                       WHERE department_id = ANY(%s) OR department_id IS NULL""",
                     (dept_ids or [-1],))
     return cur.fetchall()
 
@@ -183,7 +196,7 @@ def detect_clients_by_matter(cur, question, dept_ids, is_banqt):
         cur.execute("""SELECT DISTINCT c.id, c.name, c.code FROM matters m
                        JOIN clients c ON c.id = m.client_id
                        WHERE upper(m.code) = ANY(%s)
-                         AND c.department_id = ANY(%s)""",
+                         AND (c.department_id = ANY(%s) OR c.department_id IS NULL)""",
                     (list(codes), dept_ids or [-1]))
     return cur.fetchall()
 
@@ -191,6 +204,36 @@ def detect_clients_by_matter(cur, question, dept_ids, is_banqt):
 def _alert_intent(q_folded: str) -> bool:
     """Câu hỏi có đang hỏi về hạn chót / tiến độ nói chung hay không."""
     return any(w in q_folded for w in ALERT_WORDS)
+
+
+def _roster_intent(q_folded: str) -> bool:
+    """Câu hỏi kiểu đếm/liệt kê khách nói chung."""
+    return any(w in q_folded for w in ROSTER_WORDS)
+
+
+def _roster_block(cur, dept_ids, is_banqt, limit=60):
+    """Danh sách khách người hỏi được thấy — cho câu 'có bao nhiêu công ty'.
+
+    Lọc theo phòng ban vì bảng clients không có RLS (Ban QT thấy tất cả)."""
+    if is_banqt:
+        cur.execute("""SELECT c.name, c.code, d.name FROM clients c
+                       LEFT JOIN departments d ON d.id=c.department_id
+                       ORDER BY c.name LIMIT %s""", (limit,))
+    else:
+        cur.execute("""SELECT c.name, c.code, d.name FROM clients c
+                       LEFT JOIN departments d ON d.id=c.department_id
+                       WHERE c.department_id = ANY(%s) OR c.department_id IS NULL
+                       ORDER BY c.name LIMIT %s""", (dept_ids or [-1], limit))
+    rows = cur.fetchall()
+    if not rows:
+        return ["### Danh sách khách hàng: hệ thống chưa có khách nào trong phạm vi bạn phụ trách."]
+    out = [f"### Khách hàng trong hệ thống ({len(rows)} khách):"]
+    for name, code, dept in rows:
+        bits = f"  · {name}" + (f" [mã {code}]" if code else "")
+        if dept:
+            bits += f" — phòng {dept}"
+        out.append(bits)
+    return out
 
 
 def _alerts_block(cur, dept_ids, is_banqt, limit=15):
@@ -368,7 +411,10 @@ def build(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                 blocks = [_client_lines(cur, cid, name, code, internal=True,
                                        can_finance=can_finance)
                           for cid, name, code in found[:MAX_CLIENTS]]
-                if _alert_intent(_fold(question)):
+                q_folded = _fold(question)
+                if _roster_intent(q_folded):
+                    blocks.append(_roster_block(cur, dept_ids, is_banqt))
+                if _alert_intent(q_folded):
                     blocks.append(_alerts_block(cur, dept_ids, is_banqt))
                 if not blocks:
                     return ""

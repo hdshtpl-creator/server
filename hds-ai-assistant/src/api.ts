@@ -21,6 +21,8 @@ import type {
   DriveSyncStatus,
   MatterAlerts,
   ModelInfo,
+  ChatSearchHit,
+  Note,
 } from './types';
 
 export const setUserId = ApiJs.setUserId as (id: string | number) => void;
@@ -64,6 +66,26 @@ export const chatPortal = ApiJs.chatPortal as (params: {
   question: string;
   conversation_id?: number | null;
 }) => Promise<ChatResponse>;
+
+export const getChatHistory = ApiJs.getChatHistory as (
+  limit?: number
+) => Promise<{ conversation_id: number; messages: ChatSearchHit[] }>;
+
+export const searchChat = ApiJs.searchChat as (
+  q: string,
+  limit?: number
+) => Promise<ChatSearchHit[]>;
+
+export const getNotes = ApiJs.getNotes as (limit?: number) => Promise<Note[]>;
+
+export const addNote = ApiJs.addNote as (params: {
+  content: string;
+  source_message_id?: number | null;
+}) => Promise<Note & { ok?: boolean }>;
+
+export const deleteNote = ApiJs.deleteNote as (
+  noteId: number
+) => Promise<{ ok?: boolean; id?: number }>;
 
 export const uploadFile = ApiJs.uploadFile as (params: {
   conversation_id?: number | null;

@@ -155,6 +155,28 @@ def start_conversation(user_id, channel, client_id=None, title=None):
             return cur.fetchone()[0]
 
 
+def get_or_create_conversation(user_id, channel, client_id=None):
+    """MỖI NGƯỜI một hội thoại bền cho mỗi kênh (mô hình Messenger) — không mở
+    hội thoại mới mỗi lần. Nhờ vậy bot nắm được toàn bộ lịch sử và đóng vai thư
+    ký riêng của người đó. Kênh public (khách vãng lai) không có user_id nên vẫn
+    dùng start_conversation theo phiên."""
+    if not user_id:
+        return start_conversation(None, channel, client_id, title="Khách")
+    level = CHANNEL_LEVEL[channel]
+    with db.session(role=level, client_id=client_id) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id FROM conversations
+                            WHERE user_id=%s AND channel=%s ORDER BY id LIMIT 1""",
+                        (user_id, channel))
+            row = cur.fetchone()
+            if row:
+                return row[0]
+            cur.execute("""INSERT INTO conversations (user_id, channel, client_id, title)
+                           VALUES (%s,%s,%s,'Trợ lý') RETURNING id""",
+                        (user_id, channel, client_id))
+            return cur.fetchone()[0]
+
+
 def add_temp_file(conversation_id, user_id, filename, content):
     """Nạp file 'dùng xong bỏ' — cắt đoạn, tạo vector, lưu tạm (tự xóa sau 6h)."""
     from app.ingest import split_document

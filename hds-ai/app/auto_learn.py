@@ -76,6 +76,9 @@ ALLOWED = {".pdf", ".docx", ".doc", ".txt", ".md"}
 RE_CODE = re.compile(r"^\s*\[([A-Za-z0-9._\-]+)\]")
 # Bỏ số thứ tự đầu tên: "1. ", "2.3 ", "09) ", "1 - "
 RE_ORDINAL = re.compile(r"^\s*\d+(\.\d+)*\s*[.)\-–]?\s*")
+# Mã khách theo kiểu số đầu tên: "1729. Công ty..." → 1729 (≥3 chữ số để không
+# nhầm với số thứ tự mục "1.", "9." của cây thư mục chung).
+RE_CLIENT_NUM = re.compile(r"^\s*(\d{3,})\s*[.)\-–]?\s+(.*\S)")
 
 
 def _norm(name: str) -> str:
@@ -99,6 +102,25 @@ def _extract_code(name: str) -> str | None:
     """Lấy mã trong [ ] ở đầu tên thư mục, vd '[SUNGROUP] Tập đoàn SunGroup' → SUNGROUP."""
     m = RE_CODE.match(name or "")
     return m.group(1).strip() if m else None
+
+
+def _client_code_and_name(folder: str):
+    """Tách (mã khách, tên khách) từ tên thư mục khách. Hỗ trợ hai kiểu:
+
+        '[SUNGROUP] Tập đoàn SunGroup'   → ('SUNGROUP', 'Tập đoàn SunGroup')
+        '1729. Công ty Cổ phần Đại Hữu'  → ('1729', 'Công ty Cổ phần Đại Hữu')
+
+    Trả (None, None) nếu không tách được mã — khi đó bỏ qua để tránh gắn nhầm
+    hồ sơ sang khách khác."""
+    folder = (folder or "").strip()
+    m = RE_CODE.match(folder)
+    if m:
+        name = RE_CODE.sub("", folder).strip()
+        return m.group(1).strip(), (name or folder)
+    m = RE_CLIENT_NUM.match(folder)
+    if m:
+        return m.group(1), m.group(2).strip()
+    return None, None
 
 
 def _load_map():
@@ -157,16 +179,29 @@ def resolve_labels(parts):
         if len(parts) < 2:
             return None, "nằm ngay trong 'Hồ sơ khách hàng' — cần thêm thư mục của từng khách"
 
-        # Mã khách: ưu tiên [MÃ] trong tên; không có thì thử khớp cả tên thư mục với code
+        # Mã + tên khách từ tên thư mục: '[MÃ] Tên' hoặc 'số. Tên' (số đầu = mã).
         folder = parts[1].strip()
-        code = _extract_code(folder) or folder
+        code, cname = _client_code_and_name(folder)
+        if not code:
+            return None, (f"chưa tách được mã khách từ thư mục '{folder}'. "
+                          f"Đặt tên dạng '1729. Tên công ty' hoặc '[MÃ] Tên khách'")
         with db.session(role="internal", admin=True) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT id, department_id FROM clients WHERE upper(code)=upper(%s)", (code,))
                 row = cur.fetchone()
+                if not row:
+                    # Chưa có trong hệ thống → tự tạo bản ghi khách từ thư mục.
+                    # DO NOTHING để không ghi đè tên/phòng admin đã sửa tay.
+                    cur.execute(
+                        """INSERT INTO clients (name, code, note)
+                           VALUES (%s, %s, 'Tự tạo từ thư mục Drive — gán phòng phụ trách nếu cần')
+                           ON CONFLICT (code) DO NOTHING""",
+                        (cname or code, code))
+                    cur.execute("SELECT id, department_id FROM clients WHERE upper(code)=upper(%s)",
+                                (code,))
+                    row = cur.fetchone()
         if not row:
-            return None, (f"chưa xác định được khách từ thư mục '{folder}'. "
-                          f"Đặt tên dạng '[MÃ_KHÁCH] Tên khách' và tạo khách trong hệ thống trước")
+            return None, f"không tạo được bản ghi khách cho '{folder}'"
         client_id, dept_id = row
 
         # Loại giấy tờ: quét các thư mục con, lấy khớp SÂU NHẤT (cụ thể nhất)
@@ -214,10 +249,26 @@ def resolve_labels(parts):
 
 
 def existing(drive_id):
+    """(doc_id, checksum, doc_type, access_level, client_id, department_id, matter_id)
+    của tài liệu đã học từ file Drive này, hoặc None."""
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, checksum FROM documents WHERE drive_file_id=%s", (drive_id,))
+            cur.execute("""SELECT id, checksum, doc_type, access_level,
+                                  client_id, department_id, matter_id
+                             FROM documents WHERE drive_file_id=%s""", (drive_id,))
             return cur.fetchone()
+
+
+def relabel(doc_id, labels):
+    """Cập nhật NHÃN cho tài liệu mà không nạp lại nội dung (file không đổi, chỉ
+    đổi khách/loại). Trigger sync_chunk_labels tự lan nhãn xuống các chunk."""
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE documents SET doc_type=%s, access_level=%s, client_id=%s,
+                           department_id=%s, matter_id=%s, updated_at=now() WHERE id=%s""",
+                        (labels["doc_type"], labels["access_level"], labels["client_id"],
+                         labels["department_id"], labels.get("matter_id"), doc_id))
+        db.audit(conn, None, "auto_relabel", "documents", doc_id, {"labels": labels})
 
 
 def download(service, f, parts):
@@ -342,7 +393,21 @@ def run(dry_run=False):
         row = existing(f["id"])
         drive_md5 = f.get("md5Checksum")
         if row and drive_md5 and row[1] == drive_md5:
-            n_skip += 1
+            # Nội dung không đổi. Nhưng nếu NHÃN đã khác (vd trước đây chưa gắn
+            # được khách, giờ gắn được), thì cập nhật nhãn — không nạp lại nội dung.
+            cur_labels = (row[2], row[3], row[4], row[5], row[6])
+            new_labels = (labels["doc_type"], labels["access_level"], labels["client_id"],
+                          labels["department_id"], labels.get("matter_id"))
+            if cur_labels != new_labels:
+                if not dry_run:
+                    relabel(row[0], labels)
+                print(f"   [GẮN LẠI] {f['name']}  ← {loc}: cập nhật nhãn (khách/loại)")
+                updated_items.append({"name": f["name"], "location": loc,
+                                      "doc_type": labels["doc_type"],
+                                      "access_level": labels["access_level"]})
+                n_upd += 1
+            else:
+                n_skip += 1
             continue
 
         tag = f"{labels['access_level']}/{labels['doc_type']}"

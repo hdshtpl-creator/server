@@ -122,7 +122,7 @@ export const ChatLayout: React.FC = () => {
   const hasConversation = messages.length > 0;
 
   return (
-    <div className="flex flex-1 h-[calc(100dvh-4rem)] bg-hds-soft dark:bg-slate-950 overflow-hidden">
+    <div className="flex w-full h-[calc(100dvh-4rem)] bg-hds-soft dark:bg-slate-950 overflow-hidden">
       <ConversationSidebar />
 
       <main className="flex-1 flex flex-col h-full bg-white dark:bg-slate-900 min-w-0">

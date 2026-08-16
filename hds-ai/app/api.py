@@ -247,7 +247,7 @@ def chat_public(body: ChatIn):
 def chat_internal(body: ChatIn, user=Depends(current_user)):
     require(user, INTERNAL_ROLES)
     conv = (check_conversation(user, body.conversation_id, "internal")
-            if body.conversation_id else rag.start_conversation(user["id"], "internal"))
+            if body.conversation_id else rag.get_or_create_conversation(user["id"], "internal"))
     res = rag.answer(body.question, "internal", user_id=user["id"], conversation_id=conv,
                      use_temp=body.use_temp, use_method=body.use_method,
                      dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
@@ -267,7 +267,7 @@ def chat_portal(body: ChatIn, user=Depends(current_user)):
                                  f"Nâng cấp gói để hỏi thêm.")
     cid = user["client_id"]
     conv = (check_conversation(user, body.conversation_id, "portal")
-            if body.conversation_id else rag.start_conversation(user["id"], "portal", cid))
+            if body.conversation_id else rag.get_or_create_conversation(user["id"], "portal", cid))
     res = rag.answer(body.question, "portal", user_id=user["id"], client_id=cid,
                      conversation_id=conv, use_temp=body.use_temp,
                      role=user["role"])
@@ -278,6 +278,99 @@ def chat_portal(body: ChatIn, user=Depends(current_user)):
     res["quota"] = {"used": used + 1, "limit": quota}
     res["conversation_id"] = conv
     return res
+
+
+def _my_channel_conv(user):
+    """(channel, client_id, conversation_id) của khung chat bền của người đang đăng nhập."""
+    if user["role"] in CLIENT_ROLES:
+        channel, cid = "portal", user["client_id"]
+    else:
+        channel, cid = "internal", None
+    conv = rag.get_or_create_conversation(user["id"], channel, cid)
+    return channel, cid, conv
+
+
+@app.get("/chat/history")
+def chat_history(user=Depends(current_user), limit: int = 200):
+    """Lịch sử khung chat bền của người đang đăng nhập (mô hình một-khung-mỗi-người).
+    Nạp khi mở app để bot và người dùng thấy lại toàn bộ mạch trao đổi."""
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    _, _, conv = _my_channel_conv(user)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, role, content, created_at FROM messages
+                            WHERE conversation_id=%s ORDER BY id DESC LIMIT %s""",
+                        (conv, limit))
+            rows = cur.fetchall()
+    msgs = [{"id": r[0], "role": r[1], "content": r[2], "created_at": str(r[3])}
+            for r in reversed(rows)]
+    return {"conversation_id": conv, "messages": msgs}
+
+
+@app.get("/chat/search")
+def chat_search(q: str, user=Depends(current_user), limit: int = 40):
+    """Tìm trong lịch sử chat của CHÍNH người đang đăng nhập (tìm lại đoạn đã trao đổi)."""
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+    _, _, conv = _my_channel_conv(user)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, role, content, created_at FROM messages
+                            WHERE conversation_id=%s AND content ILIKE %s
+                            ORDER BY id DESC LIMIT %s""",
+                        (conv, f"%{q}%", limit))
+            rows = cur.fetchall()
+    return [{"id": r[0], "role": r[1], "content": r[2], "created_at": str(r[3])} for r in rows]
+
+
+class NoteIn(BaseModel):
+    content: str
+    source_message_id: int | None = None
+
+
+@app.get("/notes")
+def notes_list(user=Depends(current_user), limit: int = 100):
+    """Ghi chú cá nhân của người đang đăng nhập."""
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, content, source_message_id, created_at FROM notes
+                            WHERE user_id=%s ORDER BY created_at DESC LIMIT %s""",
+                        (user["id"], limit))
+            rows = cur.fetchall()
+    return [{"id": r[0], "content": r[1], "source_message_id": r[2],
+             "created_at": str(r[3])[:16]} for r in rows]
+
+
+@app.post("/notes")
+def notes_add(body: NoteIn, user=Depends(current_user)):
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(400, "Ghi chú không được để trống")
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO notes (user_id, content, source_message_id)
+                           VALUES (%s,%s,%s) RETURNING id, created_at""",
+                        (user["id"], content[:4000], body.source_message_id))
+            nid, created = cur.fetchone()
+    return {"ok": True, "id": nid, "content": content[:4000],
+            "source_message_id": body.source_message_id, "created_at": str(created)[:16]}
+
+
+@app.delete("/notes/{note_id}")
+def notes_delete(note_id: int, user=Depends(current_user)):
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            # Chỉ xoá ghi chú của chính mình
+            cur.execute("DELETE FROM notes WHERE id=%s AND user_id=%s", (note_id, user["id"]))
+            deleted = cur.rowcount
+    if not deleted:
+        raise HTTPException(404, "Không thấy ghi chú của bạn")
+    return {"ok": True, "id": note_id}
 
 
 # ---------- 2. UPLOAD FILE TRONG CHAT ----------
@@ -691,7 +784,8 @@ def clients_list(user=Depends(current_user)):
             else:
                 cur.execute("""SELECT c.id,c.name,c.code,d.name FROM clients c
                                LEFT JOIN departments d ON d.id=c.department_id
-                               WHERE c.department_id = ANY(%s) ORDER BY c.name""",
+                               WHERE c.department_id = ANY(%s) OR c.department_id IS NULL
+                               ORDER BY c.name""",
                             (user["dept_ids"] or [-1],))
             rows = cur.fetchall()
     return [{"id": r[0], "name": r[1], "code": r[2], "department": r[3]} for r in rows]
@@ -708,7 +802,9 @@ def client_dossier(client_id: int, user=Depends(current_user)):
     if not row:
         raise HTTPException(404, "Không thấy khách hàng")
     client_dept = row[0]
-    if not user["is_banqt"] and client_dept not in (user["dept_ids"] or []):
+    # Khách chưa gán phòng (NULL) coi như dùng chung — mọi nội bộ xem được.
+    if (not user["is_banqt"] and client_dept is not None
+            and client_dept not in (user["dept_ids"] or [])):
         raise HTTPException(403, "Khách hàng này thuộc phòng khác — không có quyền xem")
     dossier = rag.client_360(client_id, user["dept_ids"], user["is_banqt"])
     if not dossier:

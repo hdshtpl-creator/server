@@ -113,14 +113,19 @@ Nếu bạn muốn cả công ty đọc được công nợ thì cứ để chun
 
 ## Ba quy tắc bắt buộc
 
-**1. Thư mục khách phải có mã trong ngoặc vuông: `[MÃ_KHÁCH] Tên khách`**
+**1. Thư mục khách phải mang mã khách ở đầu tên — chấp nhận hai kiểu:**
 
-Mã phải khớp mã khách trong hệ thống (`SUNGROUP`, `VINAPHARMA`…). Tạo khách trên web
-trước, rồi mới thả file. Không xác định được khách → **bot bỏ qua file** và ghi rõ lý do.
-Thà thiếu còn hơn lộ hồ sơ khách này sang khách khác.
+- **Số đầu tên** (≥3 chữ số): `1729. Công ty Cổ phần Đại Hữu` → mã khách = `1729`.
+  Hợp với cách HDS đang đánh mã khách sẵn.
+- **Ngoặc vuông**: `[SUNGROUP] Tập đoàn SunGroup` → mã khách = `SUNGROUP`.
 
-> Thư mục hiện tại của bạn đang là `9. CHI NHÁNH CÔNG T...` — đó là số thứ tự, không phải
-> mã khách. Cần đổi thành `[MÃ] Tên khách`, ví dụ `[CNCTABC] Chi nhánh Công ty ABC`.
+Bot tự tách mã, và **tự tạo bản ghi khách** nếu chưa có (lấy tên từ thư mục, để
+trống phòng phụ trách — admin gán sau nếu cần). Không tách được mã (tên không có
+số đầu cũng không có ngoặc) → **bot bỏ qua** để tránh gắn nhầm hồ sơ sang khách khác.
+
+> Mã ở đây phải là **mã định danh khách**, không phải số thứ tự sắp xếp. `1729`,
+> `1696` là mã khách — đúng. Còn `1.`, `2.` (một chữ số) bị coi là số thứ tự mục,
+> không phải mã.
 
 **2. Vụ việc cũng dùng ngoặc vuông: `[MÃ_VỤ_VIỆC] Tên vụ việc`**
 

@@ -141,6 +141,22 @@ export interface Conversation {
   };
 }
 
+/** Kết quả tìm trong lịch sử chat của chính mình. */
+export interface ChatSearchHit {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
+/** Ghi chú cá nhân trong khung chat. */
+export interface Note {
+  id: number;
+  content: string;
+  source_message_id?: number | null;
+  created_at: string;
+}
+
 export interface PendingReviewDoc {
   id: number;
   title: string;

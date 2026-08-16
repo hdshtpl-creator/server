@@ -17,6 +17,7 @@ import {
   Send,
   CheckCircle2,
   Flag,
+  StickyNote,
 } from 'lucide-react';
 
 interface ChatMessageItemProps {
@@ -24,16 +25,28 @@ interface ChatMessageItemProps {
 }
 
 export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => {
-  const { showToast } = useApp();
+  const { showToast, saveNote } = useApp();
   const isUser = message.sender === 'user';
   const isError = Boolean(message.isError);
   const [showSources, setShowSources] = useState(true);
 
   const canReport = !isUser && !isError && typeof message.serverMessageId === 'number';
+  const canNote = !isUser && !isError;
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState('');
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
+  const [noted, setNoted] = useState(false);
+
+  const handleSaveNote = async () => {
+    try {
+      await saveNote(message.text.slice(0, 4000), message.serverMessageId ?? null);
+      setNoted(true);
+      showToast('Đã lưu vào ghi chú của bạn.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Không lưu được ghi chú.', 'error');
+    }
+  };
 
   const submitFeedback = async (rating: 'good' | 'bad', withNote = '') => {
     if (!message.serverMessageId || sending) return;
@@ -57,7 +70,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
 
   return (
     <div
-      className={`group py-5 px-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 ${rowBg}`}
+      id={message.serverMessageId ? `chatmsg-${message.serverMessageId}` : undefined}
+      className={`group py-5 px-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 rounded-lg transition-shadow ${rowBg}`}
     >
       <div className="max-w-3xl mx-auto flex items-start gap-3.5">
         <div
@@ -196,8 +210,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             </div>
           )}
 
-          {/* Báo cáo chất lượng câu trả lời */}
-          {canReport && (
+          {/* Hàng thao tác: lưu ghi chú + báo cáo chất lượng */}
+          {canNote && (
             <div className="pt-1">
               {sent ? (
                 <span className="inline-flex items-center gap-1 text-[11px] text-hds-green dark:text-emerald-400 font-medium">
@@ -206,27 +220,50 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                 </span>
               ) : (
                 <div className="flex items-center gap-1 opacity-40 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                  <span className="text-[10px] text-slate-400 dark:text-slate-500 mr-0.5">
-                    Câu trả lời này thế nào?
-                  </span>
+                  {/* Lưu câu trả lời này thành ghi chú */}
                   <button
-                    onClick={() => submitFeedback('good')}
-                    disabled={sending}
-                    title="Câu trả lời tốt"
-                    aria-label="Báo cáo: câu trả lời tốt"
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-hds-green hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                    onClick={handleSaveNote}
+                    disabled={noted}
+                    title="Lưu câu trả lời này vào ghi chú"
+                    aria-label="Lưu vào ghi chú"
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-500 dark:text-slate-400 hover:text-hds-navy dark:hover:text-blue-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-60"
                   >
-                    <ThumbsUp className="w-3.5 h-3.5" />
+                    {noted ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-hds-green" />
+                        Đã ghi chú
+                      </>
+                    ) : (
+                      <>
+                        <StickyNote className="w-3.5 h-3.5" />
+                        Lưu note
+                      </>
+                    )}
                   </button>
-                  <button
-                    onClick={() => setNoteOpen(true)}
-                    disabled={sending}
-                    title="Báo cáo câu trả lời chưa ổn"
-                    aria-label="Báo cáo: câu trả lời chưa tốt"
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-hds-red hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
-                  >
-                    <ThumbsDown className="w-3.5 h-3.5" />
-                  </button>
+
+                  {canReport && (
+                    <>
+                      <span className="w-px h-4 bg-slate-200 dark:bg-slate-700 mx-1" />
+                      <button
+                        onClick={() => submitFeedback('good')}
+                        disabled={sending}
+                        title="Câu trả lời tốt"
+                        aria-label="Báo cáo: câu trả lời tốt"
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-hds-green hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                      >
+                        <ThumbsUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setNoteOpen(true)}
+                        disabled={sending}
+                        title="Báo cáo câu trả lời chưa ổn"
+                        aria-label="Báo cáo: câu trả lời chưa tốt"
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-hds-red hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
+                      >
+                        <ThumbsDown className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>
