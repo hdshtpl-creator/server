@@ -30,6 +30,7 @@ MAX_MATTERS = 12          # số vụ việc liệt kê tối đa cho mỗi khá
 MAX_NOTE_CHARS = 700      # cắt ghi chú dài để prompt không phình
 MAX_SUMMARY_CHARS = 3000  # ngân sách ký tự cho file tổng hợp thông tin khách
 MAX_FINANCE_CHARS = 1500  # ngân sách ký tự cho tài liệu công nợ
+MAX_WORK_CHARS = 2500     # ngân sách ký tự cho nội dung hợp đồng/công việc của khách
 
 # Mã vụ việc theo quy ước [M-2026-001]
 RE_MATTER_CODE = re.compile(r"\b([A-Z]{1,3}-\d{4}-\d{1,4})\b", re.I)
@@ -247,6 +248,25 @@ def _staff_intent(q_folded: str) -> bool:
     return any(w in q_folded for w in STAFF_WORDS)
 
 
+# Từ khoá cho thấy câu hỏi muốn CHI TIẾT từng khách (dịch vụ, hợp đồng, tình
+# hình…), không phải chỉ đếm/liệt kê tên. "mấy khách VÀ dịch vụ cung cấp" cần
+# đọc hồ sơ từng khách, không được bỏ qua tài liệu.
+DETAIL_WORDS = {
+    "dich vu", "cung cap", "dang lam", "dang cung cap", "phi", "muc phi",
+    "hop dong", "cong viec", "chi tiet", "thong tin", "ho so", "tinh hinh",
+    "hop tac", "da dung", "su dung", "cong no", "da lam", "lam gi",
+}
+
+# Số khách tối đa được BUNG chi tiết cho câu "liệt kê khách kèm dịch vụ". Nhiều
+# hơn thì prompt quá dài — lúc đó chỉ liệt kê tên và mời hỏi từng khách.
+ROSTER_DETAIL_MAX = 5
+
+
+def _detail_intent(q_folded: str) -> bool:
+    """Câu hỏi có đòi CHI TIẾT (dịch vụ, hợp đồng, tình hình) từng khách không."""
+    return any(w in q_folded for w in DETAIL_WORDS)
+
+
 def is_directory_query(question: str) -> bool:
     """Câu hỏi ĐẾM / LIỆT KÊ danh bạ của chính công ty — bao nhiêu khách, bao
     nhiêu nhân viên, danh sách phòng ban…
@@ -256,10 +276,13 @@ def is_directory_query(question: str) -> bool:
     hợp đồng lao động, đơn nghỉ phép — vừa hiện làm 'nguồn' sai lệch, vừa dễ
     khiến model trả lời theo mớ tài liệu đó thay vì con số thật.
 
-    KHÔNG gộp câu hỏi về hạn/cảnh báo vào đây: câu về hạn đôi khi vẫn kèm chủ
-    đề cụ thể cần tài liệu (vd 'cảnh báo gì về hợp đồng thuê đất').
+    NHƯNG nếu câu hỏi còn đòi CHI TIẾT (dịch vụ, hợp đồng của từng khách) thì
+    KHÔNG bỏ tra tài liệu — lúc đó phải mở hồ sơ bên trong ra đọc. Chỉ câu ĐẾM
+    THUẦN mới bỏ. Cũng không gộp câu về hạn/cảnh báo vào đây.
     """
     q = _fold(question)
+    if _detail_intent(q):
+        return False
     return _roster_intent(q) or _staff_intent(q)
 
 
@@ -413,12 +436,17 @@ def _pinned_text(cur, cid, doc_types, budget):
     return out
 
 
-def _client_lines(cur, cid, name, code, internal, can_finance=False, share=1):
+def _client_lines(cur, cid, name, code, internal, can_finance=False, share=1,
+                  detail=False):
     """Một khối text gọn về khách. internal=False thì bỏ hết ghi chú nội bộ.
 
     `share` là số khách cùng được nhắc trong một câu hỏi: ngân sách file tổng
     hợp chia đều cho từng khách, để câu hỏi so sánh ba khách không dựng ra một
     prompt dài gấp ba rồi bị cắt mất phần đầu.
+
+    `detail=True` (câu hỏi đòi dịch vụ/hợp đồng cụ thể): ghim thêm NỘI DUNG hợp
+    đồng/thư tư vấn của khách, để bot đọc thẳng chi tiết bên trong thay vì chỉ
+    đếm số tài liệu.
     """
     lines = [f"### Khách hàng: {name}" + (f" [mã {code}]" if code else "")]
 
@@ -475,6 +503,18 @@ def _client_lines(cur, cid, name, code, internal, can_finance=False, share=1):
             lines.append("- FILE TỔNG HỢP THÔNG TIN KHÁCH (dịch vụ đã dùng, phí, hợp tác):")
             lines += pinned
 
+        if detail:
+            # Đọc thẳng nội dung hợp đồng / thư tư vấn / hồ sơ của khách — đây là
+            # nơi ghi rõ dịch vụ đang cung cấp. Gồm cả 'other' vì hợp đồng trong
+            # thư mục khách có thể chưa được gắn đúng loại. KHÔNG gồm cong_no
+            # (RLS đã chặn nếu không có quyền tài chính), ho_so_kh đã ghim ở trên.
+            work = _pinned_text(cur, cid,
+                                ["contract", "advisory", "mau_hd", "filing", "other"],
+                                MAX_WORK_CHARS // share)
+            if work:
+                lines.append("- NỘI DUNG HỢP ĐỒNG / CÔNG VIỆC ĐANG LÀM CHO KHÁCH:")
+                lines += work
+
         if can_finance:
             fin = _pinned_text(cur, cid, ["cong_no"], MAX_FINANCE_CHARS // share)
             if fin:
@@ -526,12 +566,29 @@ def build(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                     if c[0] not in seen:
                         found.append(c)
                         seen.add(c[0])
-                picked = found[:MAX_CLIENTS]
-                blocks = [_client_lines(cur, cid, name, code, internal=True,
-                                       can_finance=can_finance, share=len(picked))
-                          for cid, name, code in picked]
                 q_folded = _fold(question)
-                if _roster_intent(q_folded):
+
+                # "Liệt kê khách kèm dịch vụ/chi tiết" mà không nêu tên khách cụ
+                # thể: bung hồ sơ ĐẦY ĐỦ từng khách trong phạm vi (dịch vụ đã
+                # dùng, vụ việc, tài liệu) — miễn là ít khách. Nhờ vậy bot mở
+                # được thông tin bên trong thay vì chỉ đọc danh sách tên.
+                expand_all = False
+                if not found and _roster_intent(q_folded) and _detail_intent(q_folded):
+                    visible = _visible_clients(cur, dept_ids, is_banqt)
+                    if visible and len(visible) <= ROSTER_DETAIL_MAX:
+                        found = visible
+                        expand_all = True
+
+                cap = ROSTER_DETAIL_MAX if expand_all else MAX_CLIENTS
+                picked = found[:cap]
+                want_detail = _detail_intent(q_folded)
+                blocks = [_client_lines(cur, cid, name, code, internal=True,
+                                       can_finance=can_finance, share=len(picked),
+                                       detail=want_detail)
+                          for cid, name, code in picked]
+                # Danh sách tên thu gọn: chỉ thêm khi câu roster mà KHÔNG bung
+                # chi tiết (câu đếm thuần, hoặc quá nhiều khách để bung).
+                if _roster_intent(q_folded) and not expand_all:
                     blocks.append(_roster_block(cur, dept_ids, is_banqt))
                 if _staff_intent(q_folded):
                     blocks.append(_staff_block(cur, is_banqt))
