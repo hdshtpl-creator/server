@@ -230,8 +230,20 @@ def _roster_intent(q_folded: str) -> bool:
     return any(w in q_folded for w in ROSTER_WORDS)
 
 
+# Từ khoá cho thấy câu hỏi thật ra về TÀI LIỆU/HỢP ĐỒNG, không phải đếm đầu
+# người. "bao nhiêu người CÒN HỢP ĐỒNG" là hỏi về hợp đồng lao động — trả lời
+# bằng bộ đếm tài khoản là sai. Có mặt các từ này thì không coi là câu danh bạ.
+_DOC_TOPIC_WORDS = {"hop dong", "hd lao dong", "hdld", "hop dong lao dong",
+                    "con han", "het han", "gia han", "ky hop dong", "thanh ly"}
+
+
 def _staff_intent(q_folded: str) -> bool:
-    """Câu hỏi về quân số / cơ cấu nhân sự của chính HDS."""
+    """Câu hỏi về quân số / cơ cấu nhân sự của chính HDS.
+
+    Loại trừ câu về hợp đồng: 'bao nhiêu người còn hợp đồng' hỏi về hợp đồng
+    lao động, không phải số tài khoản — đếm tài khoản sẽ ra con số sai lệch."""
+    if any(w in q_folded for w in _DOC_TOPIC_WORDS):
+        return False
     return any(w in q_folded for w in STAFF_WORDS)
 
 

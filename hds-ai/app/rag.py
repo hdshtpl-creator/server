@@ -162,12 +162,6 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
     if company:
         # Số liệu thật trong CSDL, không phải trích từ tài liệu → không đánh [Nguồn n]
         parts.append(company + "\n")
-    if history:
-        parts.append("DIỄN BIẾN CUỘC TRAO ĐỔI TRƯỚC ĐÓ:")
-        for role, content in history:
-            who = "Người hỏi" if role == "user" else "Trợ lý"
-            parts.append(f"{who}: {(content or '')[:HISTORY_CHARS]}")
-        parts.append("")
     # Ngân sách áp cho CẢ tài liệu trong kho lẫn file tạm đính kèm — nếu không,
     # một file tải lên trong chat vẫn đủ sức thổi prompt lên quá cỡ.
     all_ctx = fit_context(list(chunks) + list(temp_chunks or []), chunk_chars, budget)
@@ -180,8 +174,18 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
         # đếm khách/nhân sự cố tình không tra tài liệu — lúc đó dòng này thừa và
         # dễ khiến model do dự dù đã có sẵn con số trong DỮ LIỆU CÔNG TY.
         parts.append("(Không tìm thấy tài liệu liên quan trong kho.)")
-    parts.append(f"\nCÂU HỎI: {question}\n"
-                 "Trả lời dựa trên tài liệu tham khảo, ghi rõ [Nguồn n] khi dùng thông tin.")
+    # Lịch sử đặt NGAY TRƯỚC câu hỏi (không phải sau phần dữ liệu công ty) để
+    # model nhỏ nhớ được lượt vừa rồi khi đọc câu mới. Câu nối tiếp kiểu "ý tôi
+    # là…" chỉ hiểu được khi lượt trước nằm sát ngay đây.
+    if history:
+        parts.append("DIỄN BIẾN CUỘC TRAO ĐỔI TRƯỚC ĐÓ (đọc để hiểu câu hỏi nối tiếp):")
+        for role, content in history:
+            who = "Người hỏi" if role == "user" else "Trợ lý"
+            parts.append(f"{who}: {(content or '')[:HISTORY_CHARS]}")
+        parts.append("")
+    parts.append(f"CÂU HỎI HIỆN TẠI: {question}\n"
+                 "Nếu đây là câu nói lại/chỉnh lại câu trước, hiểu theo diễn biến ở "
+                 "trên và trả lời luôn. Ghi rõ [Nguồn n] khi dùng thông tin từ tài liệu.")
     if company:
         parts.append("Phần DỮ LIỆU CÔNG TY là số liệu thực tế trong hệ thống — dùng trực tiếp, "
                      "không cần ghi [Nguồn]. Nêu rõ ngày/hạn khi trả lời về tiến độ vụ việc.")
