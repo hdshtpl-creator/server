@@ -92,7 +92,9 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
   const { showToast, saveNote, removeNote } = useApp();
   const isUser = message.sender === 'user';
   const isError = Boolean(message.isError);
-  const [showSources, setShowSources] = useState(true);
+  // Nguồn trích dẫn THU GỌN mặc định — người dùng bung ra khi cần kiểm chứng,
+  // để câu trả lời gọn gàng chứ không bị danh sách nguồn đẩy dài màn hình.
+  const [showSources, setShowSources] = useState(false);
   const [showTiming, setShowTiming] = useState(false);
 
   const canReport = !isUser && !isError && typeof message.serverMessageId === 'number';
@@ -286,7 +288,9 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             </div>
           )}
 
-          {!isUser && message.sources && message.sources.length > 0 && (
+          {/* Ẩn nguồn trong lúc đang đọc/soạn — lúc đó chỉ hiện đúng một dòng
+              "đang đọc tài liệu…". Nguồn chỉ hiện khi câu trả lời đã xong. */}
+          {!isUser && !message.isStreaming && message.sources && message.sources.length > 0 && (
             <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
               <button
                 onClick={() => setShowSources(!showSources)}
