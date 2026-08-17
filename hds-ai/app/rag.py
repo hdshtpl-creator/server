@@ -51,7 +51,7 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
         top_k = settings.get_int("retrieval_top_k", TOP_K)
     qjson = json.dumps(embed(question))
     level = CHANNEL_LEVEL[channel]
-    sql = """SELECT c.id, c.content, c.document_id, d.title,
+    sql = """SELECT c.id, c.content, c.document_id, d.title, d.drive_file_id,
                     1 - (c.embedding <=> %s::vector) AS score
                FROM chunks c JOIN documents d ON d.id=c.document_id
               WHERE c.embedding IS NOT NULL AND d.approved AND d.label_verified"""
@@ -67,7 +67,7 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
             cur.execute(sql, params)
             rows = cur.fetchall()
     return [{"chunk_id": r[0], "content": r[1], "document_id": r[2], "title": r[3],
-             "score": float(r[4])} for r in rows]
+             "drive_file_id": r[4], "score": float(r[5])} for r in rows]
 
 
 def tier_doc_types(role_level):
@@ -392,7 +392,11 @@ def prepare(question, channel, client_id=None, conversation_id=None,
 
 
 def format_sources(chunks):
+    """Danh sách nguồn cho giao diện. Giữ ĐÚNG THỨ TỰ chunk trong prompt để số
+    [Nguồn n] trong câu trả lời khớp với nguồn hiển thị. Kèm document_id (để tải)
+    và drive_file_id (để mở bản gốc trên Drive)."""
     return [{"n": i, "title": c["title"], "document_id": c.get("document_id"),
+             "drive_file_id": c.get("drive_file_id"),
              "score": round(c["score"], 3)} for i, c in enumerate(chunks, 1)]
 
 

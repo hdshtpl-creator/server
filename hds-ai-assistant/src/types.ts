@@ -120,6 +120,10 @@ export interface Stats {
 export interface Source {
   title: string;
   relevance_score?: number;
+  /** Mã tài liệu trong CSDL — để tải bản gốc qua /files/{id}/download. */
+  document_id?: number | null;
+  /** ID file trên Google Drive — để mở bản gốc trên Drive (kiểu NotebookLM). */
+  drive_file_id?: string | null;
   doc_id?: string | number;
   snippet?: string;
 }
@@ -211,12 +215,23 @@ export interface ChatStreamEvent {
   message?: string;
 }
 
+/** Một hội thoại trong danh sách bên trái (mô hình ChatGPT). */
+export interface ConversationSummary {
+  id: number;
+  title: string;
+  updated_at: string;
+  message_count: number;
+}
+
 /** Kết quả tìm trong lịch sử chat của chính mình. */
 export interface ChatSearchHit {
   id: number;
   role: 'user' | 'assistant';
   content: string;
   created_at: string;
+  /** Hội thoại chứa đoạn này — để mở đúng hội thoại rồi nhảy tới. */
+  conversation_id?: number;
+  conversation_title?: string;
 }
 
 /** Ghi chú cá nhân trong khung chat. */

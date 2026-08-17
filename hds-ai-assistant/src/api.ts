@@ -24,6 +24,7 @@ import type {
   BenchmarkResult,
   ChatSearchHit,
   ChatStreamEvent,
+  ConversationSummary,
   Note,
 } from './types';
 
@@ -83,8 +84,22 @@ export const chatPortal = ApiJs.chatPortal as (params: {
 }) => Promise<ChatResponse>;
 
 export const getChatHistory = ApiJs.getChatHistory as (
+  conversationId?: number | null,
   limit?: number
-) => Promise<{ conversation_id: number; messages: ChatSearchHit[] }>;
+) => Promise<{ conversation_id: number | null; messages: ChatSearchHit[] }>;
+
+export const listConversations = ApiJs.listConversations as (
+  limit?: number
+) => Promise<ConversationSummary[]>;
+
+export const renameConversation = ApiJs.renameConversation as (
+  convId: number,
+  title: string
+) => Promise<{ ok?: boolean; id?: number; title?: string }>;
+
+export const deleteConversation = ApiJs.deleteConversation as (
+  convId: number
+) => Promise<{ ok?: boolean; id?: number }>;
 
 export const searchChat = ApiJs.searchChat as (
   q: string,

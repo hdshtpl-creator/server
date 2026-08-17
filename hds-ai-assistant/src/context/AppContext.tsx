@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import type { User, Conversation, ChatMessage, Note } from '../types';
+import type { User, Conversation, ChatMessage, Note, ConversationSummary } from '../types';
 import * as api from '../api';
 
 interface Toast {
@@ -40,10 +40,16 @@ interface AppContextType {
   isSidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
 
-  // Hội thoại — MỖI NGƯỜI MỘT KHUNG chat bền (như Messenger), không mở mới nhiều cuộc
+  // Hội thoại — NHIỀU cuộc trò chuyện như ChatGPT/Claude
   activeConvId: string;
   activeConversation: Conversation | null;
   isHistoryLoading: boolean;
+  conversations: ConversationSummary[];
+  loadConversations: () => Promise<ConversationSummary[]>;
+  newConversation: () => void;
+  selectConversation: (serverId: number, jumpToMessageId?: number) => Promise<void>;
+  renameConversation: (serverId: number, title: string) => Promise<void>;
+  deleteConversation: (serverId: number) => Promise<void>;
   addMessageToConv: (convId: string, msg: ChatMessage) => void;
   updateMessage: (msgId: string, patch: (prev: ChatMessage) => ChatMessage) => void;
   setConvServerId: (convId: string, serverId: number) => void;
@@ -69,10 +75,6 @@ const AppContext = createContext<AppContextType | null>(null);
 const WELCOME_TEXT =
   'Xin chào! Tôi là Trợ lý AI của HDS Law Firm. Hãy đặt câu hỏi pháp lý hoặc tải tài liệu lên để bắt đầu tra cứu và phân tích.';
 
-// Một người chỉ có MỘT khung chat bền. 'main' là mã cục bộ; mã thật (server_id)
-// do backend cấp và được nạp cùng lịch sử khi đăng nhập.
-const LOCAL_CONV_ID = 'main';
-
 const welcomeMessage = (): ChatMessage => ({
   id: `welcome-${Date.now()}`,
   sender: 'ai',
@@ -80,18 +82,24 @@ const welcomeMessage = (): ChatMessage => ({
   timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
 });
 
+// Một "cuộc trò chuyện mới" chưa có mã máy chủ (server_id) — mã đó do backend
+// cấp ở tin nhắn đầu tiên. Mã cục bộ đổi mỗi lần tạo mới để React dựng lại sạch.
 const freshConversation = (): Conversation => ({
-  id: LOCAL_CONV_ID,
-  title: 'Trợ lý HDS',
+  id: `new-${Date.now()}`,
+  title: 'Cuộc trò chuyện mới',
   created_at: new Date().toISOString(),
   messages: [welcomeMessage()],
 });
 
-/** '2026-08-14 09:10' → '09:10' cho gọn ô tin nhắn. */
-const shortTime = (iso: string): string => {
-  const m = /\b(\d{1,2}:\d{2})/.exec(iso || '');
-  return m ? m[1] : '';
-};
+/** Chuyển tin nhắn từ server (getChatHistory) sang dạng khung chat. */
+const mapServerMessages = (rows: { id: number; role: string; content: string; created_at: string }[]): ChatMessage[] =>
+  (rows || []).map((m) => ({
+    id: `h-${m.id}`,
+    sender: m.role === 'user' ? 'user' : 'ai',
+    text: m.content,
+    timestamp: /\b(\d{1,2}:\d{2})/.exec(m.created_at || '')?.[1] || '',
+    serverMessageId: m.id,
+  }));
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('hds_access_token'));
@@ -118,6 +126,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isSidebarOpen, setSidebarOpen] = useState<boolean>(false);
 
   const [conversation, setConversation] = useState<Conversation>(freshConversation);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
 
@@ -178,6 +187,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     api.setAccessToken('');
     setActiveView('chat');
     setConversation(freshConversation());
+    setConversations([]);
     setNotes([]);
     showToast('Đã đăng xuất khỏi hệ thống.', 'info');
   }, [showToast]);
@@ -250,9 +260,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (Array.isArray(fetched)) setUsers(fetched);
   }, []);
 
-  /* ---------------- Hội thoại (một khung/người) ---------------- */
+  /* ---------------- Hội thoại (nhiều cuộc, kiểu ChatGPT) ---------------- */
 
   const activeConversation = conversation;
+
+  const loadConversations = useCallback(async (): Promise<ConversationSummary[]> => {
+    try {
+      const list = await api.listConversations();
+      const arr = Array.isArray(list) ? list : [];
+      setConversations(arr);
+      return arr;
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const newConversation = useCallback(() => {
+    setConversation(freshConversation());
+    setSidebarOpen(false);
+  }, []);
+
+  const selectConversation = useCallback(
+    async (serverId: number, jumpToMessageId?: number) => {
+      setIsHistoryLoading(true);
+      try {
+        const res = await api.getChatHistory(serverId);
+        const msgs = mapServerMessages(res.messages as any);
+        setConversations((prev) => {
+          const summary = prev.find((c) => c.id === serverId);
+          setConversation({
+            id: `srv-${serverId}`,
+            server_id: serverId,
+            title: summary?.title || 'Cuộc trò chuyện',
+            created_at: new Date().toISOString(),
+            messages: msgs.length ? msgs : [welcomeMessage()],
+          });
+          return prev;
+        });
+        setSidebarOpen(false);
+        if (jumpToMessageId) {
+          // Đợi khung chat dựng xong rồi cuộn tới đúng đoạn
+          setTimeout(() => {
+            const el = document.getElementById(`chatmsg-${jumpToMessageId}`);
+            if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              el.classList.add('ring-2', 'ring-hds-gold');
+              setTimeout(() => el.classList.remove('ring-2', 'ring-hds-gold'), 1600);
+            }
+          }, 250);
+        }
+      } finally {
+        setIsHistoryLoading(false);
+      }
+    },
+    []
+  );
+
+  const renameConversation = useCallback(async (serverId: number, title: string) => {
+    await api.renameConversation(serverId, title);
+    setConversations((prev) => prev.map((c) => (c.id === serverId ? { ...c, title } : c)));
+    setConversation((c) => (c.server_id === serverId ? { ...c, title } : c));
+  }, []);
+
+  const deleteConversation = useCallback(async (serverId: number) => {
+    await api.deleteConversation(serverId);
+    setConversations((prev) => prev.filter((c) => c.id !== serverId));
+    // Đang xem đúng cuộc bị xoá → chuyển về một cuộc mới trống
+    setConversation((c) => (c.server_id === serverId ? freshConversation() : c));
+  }, []);
 
   const addMessageToConv = useCallback((_convId: string, msg: ChatMessage) => {
     setConversation((c) => ({ ...c, messages: [...c.messages, msg] }));
@@ -276,9 +351,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     []
   );
 
-  const setConvServerId = useCallback((_convId: string, serverId: number) => {
-    setConversation((c) => (c.server_id ? c : { ...c, server_id: serverId }));
-  }, []);
+  // Tin nhắn đầu của "cuộc trò chuyện mới" → backend cấp mã. Ghi mã vào cuộc
+  // đang mở, rồi làm mới danh sách để cuộc mới hiện ở cột trái với tiêu đề
+  // backend tự đặt từ câu hỏi.
+  const setConvServerId = useCallback(
+    (_convId: string, serverId: number) => {
+      setConversation((c) =>
+        c.server_id ? c : { ...c, id: `srv-${serverId}`, server_id: serverId }
+      );
+      // Làm mới danh sách sau MỖI lượt: cuộc mới xuất hiện, cuộc đang mở nhảy
+      // lên đầu (mới hoạt động nhất), và cập nhật tiêu đề backend tự đặt. Không
+      // dựa vào cờ đọc-ngay-sau-setState vì updater của React chạy trễ.
+      loadConversations().then((list) => {
+        const summary = list.find((c) => c.id === serverId);
+        if (summary) {
+          setConversation((c) =>
+            c.server_id === serverId && c.title !== summary.title
+              ? { ...c, title: summary.title }
+              : c
+          );
+        }
+      });
+    },
+    [loadConversations]
+  );
 
   const setConvTempFile = useCallback(
     (_convId: string, tempFile: { filename: string; content: string } | undefined) => {
@@ -315,28 +411,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotes((prev) => prev.filter((n) => n.id !== id));
   }, []);
 
+  // Khi đăng nhập: nạp DANH SÁCH hội thoại + mở cuộc mới hoạt động gần nhất
+  // (để tải lại trang là thấy lại đúng chỗ đang dở), kèm ghi chú.
   useEffect(() => {
     if (!currentUser) return;
     let cancelled = false;
     setIsHistoryLoading(true);
     (async () => {
       try {
+        const list = await loadConversations();
         const res = await api.getChatHistory();
         if (cancelled) return;
-        const msgs: ChatMessage[] = (res.messages || []).map((m) => ({
-          id: `h-${m.id}`,
-          sender: m.role === 'user' ? 'user' : 'ai',
-          text: m.content,
-          timestamp: shortTime(m.created_at),
-          // Mã tin nhắn thật để: nhảy tới từ ô tìm kiếm/ghi chú (cả 2 vai) và
-          // gửi báo cáo (chỉ tin của AI — nút báo cáo tự lọc theo !isUser).
-          serverMessageId: m.id,
-        }));
-        setConversation((c) => ({
-          ...c,
-          server_id: res.conversation_id,
-          messages: msgs.length ? msgs : [welcomeMessage()],
-        }));
+        const msgs = mapServerMessages(res.messages as any);
+        if (res.conversation_id) {
+          const summary = list.find((c) => c.id === res.conversation_id);
+          setConversation({
+            id: `srv-${res.conversation_id}`,
+            server_id: res.conversation_id,
+            title: summary?.title || 'Cuộc trò chuyện',
+            created_at: new Date().toISOString(),
+            messages: msgs.length ? msgs : [welcomeMessage()],
+          });
+        } else {
+          setConversation(freshConversation());
+        }
       } catch {
         /* giữ màn chào nếu không tải được lịch sử */
       } finally {
@@ -374,9 +472,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleDarkMode,
         isSidebarOpen,
         setSidebarOpen,
-        activeConvId: LOCAL_CONV_ID,
+        activeConvId: conversation.id,
         activeConversation,
         isHistoryLoading,
+        conversations,
+        loadConversations,
+        newConversation,
+        selectConversation,
+        renameConversation,
+        deleteConversation,
         addMessageToConv,
         updateMessage,
         setConvServerId,

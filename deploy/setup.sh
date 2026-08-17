@@ -78,8 +78,13 @@ c_info "2/8  Cài gói hệ thống cần thiết"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq ca-certificates curl gnupg openssl \
-  python3-venv python3-pip postgresql-client nginx >/dev/null
-c_ok "python3-venv, nginx, postgresql-client, openssl"
+  python3-venv python3-pip postgresql-client nginx \
+  tesseract-ocr tesseract-ocr-vie poppler-utils >/dev/null
+# tesseract + poppler: BẮT BUỘC để đọc PDF SCAN (kết quả vụ việc, giấy tờ có dấu).
+# Thiếu chúng thì pytesseract/pdf2image (đã cài qua pip) vẫn lỗi khi chạy, và mọi
+# file scan bị bỏ qua vì "không trích được nội dung". tesseract-ocr-vie là gói
+# tiếng Việt — không có nó thì OCR ra chữ sai đầy dấu.
+c_ok "python3-venv, nginx, postgresql-client, openssl, tesseract(vie)+poppler"
 
 # Docker
 if ! command -v docker >/dev/null 2>&1; then

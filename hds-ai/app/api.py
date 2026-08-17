@@ -143,6 +143,21 @@ def require_reviewer(user):
         raise HTTPException(403, "Chỉ admin hoặc người được cấp quyền duyệt mới thực hiện được")
 
 
+def _conv_title(question: str) -> str:
+    """Tiêu đề hội thoại đặt từ câu hỏi đầu (kiểu ChatGPT)."""
+    t = " ".join((question or "").split())[:60].strip()
+    return t or "Cuộc trò chuyện mới"
+
+
+def _resolve_conv(user, body, channel, cid=None):
+    """Mã hội thoại cho lượt hỏi: nối tiếp id client gửi (đã kiểm chủ sở hữu),
+    hoặc TẠO HỘI THOẠI MỚI kèm tiêu đề nếu chưa có id — mô hình nhiều hội thoại
+    như ChatGPT (mỗi 'cuộc trò chuyện mới' là một conversation riêng)."""
+    if body.conversation_id:
+        return check_conversation(user, body.conversation_id, channel)
+    return rag.start_conversation(user["id"], channel, cid, title=_conv_title(body.question))
+
+
 def check_conversation(user, conversation_id, channel):
     """Xác nhận cuộc trao đổi này thuộc về người đang hỏi.
 
@@ -247,8 +262,7 @@ def chat_public(body: ChatIn):
 @app.post("/chat/internal")
 def chat_internal(body: ChatIn, user=Depends(current_user)):
     require(user, INTERNAL_ROLES)
-    conv = (check_conversation(user, body.conversation_id, "internal")
-            if body.conversation_id else rag.get_or_create_conversation(user["id"], "internal"))
+    conv = _resolve_conv(user, body, "internal")
     res = rag.answer(body.question, "internal", user_id=user["id"], conversation_id=conv,
                      use_temp=body.use_temp, use_method=body.use_method,
                      dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
@@ -267,8 +281,7 @@ def chat_portal(body: ChatIn, user=Depends(current_user)):
         raise HTTPException(429, f"Đã hết lượt hỏi trong tháng ({used}/{quota}). "
                                  f"Nâng cấp gói để hỏi thêm.")
     cid = user["client_id"]
-    conv = (check_conversation(user, body.conversation_id, "portal")
-            if body.conversation_id else rag.get_or_create_conversation(user["id"], "portal", cid))
+    conv = _resolve_conv(user, body, "portal", cid)
     res = rag.answer(body.question, "portal", user_id=user["id"], client_id=cid,
                      conversation_id=conv, use_temp=body.use_temp,
                      role=user["role"])
@@ -313,10 +326,9 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
         channel, cid = "internal", None
 
     # Kiểm quyền hội thoại TRƯỚC khi mở dòng: lỗi ở đây phải là mã HTTP thật,
-    # không phải một sự kiện lỗi lọt vào giữa dòng dữ liệu.
-    conv = (check_conversation(user, body.conversation_id, channel)
-            if body.conversation_id
-            else rag.get_or_create_conversation(user["id"], channel, cid))
+    # không phải một sự kiện lỗi lọt vào giữa dòng dữ liệu. Không có id thì đây
+    # là "cuộc trò chuyện mới" → tạo conversation riêng kèm tiêu đề.
+    conv = _resolve_conv(user, body, channel, cid)
 
     def events():
         yield _sse({"type": "start", "conversation_id": conv})
@@ -387,22 +399,83 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
     })
 
 
-def _my_channel_conv(user):
-    """(channel, client_id, conversation_id) của khung chat bền của người đang đăng nhập."""
-    if user["role"] in CLIENT_ROLES:
-        channel, cid = "portal", user["client_id"]
-    else:
-        channel, cid = "internal", None
-    conv = rag.get_or_create_conversation(user["id"], channel, cid)
-    return channel, cid, conv
+def _user_channel(user):
+    """Kênh của người đang đăng nhập (nhân viên → internal, khách → portal)."""
+    return "portal" if user["role"] in CLIENT_ROLES else "internal"
+
+
+@app.get("/conversations")
+def conversations_list(user=Depends(current_user), limit: int = 100):
+    """Danh sách hội thoại của người đang đăng nhập, mới hoạt động xếp trước —
+    để dựng cột 'cuộc trò chuyện' bên trái (mô hình ChatGPT)."""
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    channel = _user_channel(user)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT c.id, c.title, c.started_at,
+                                  coalesce(max(m.created_at), c.started_at) AS last_at,
+                                  count(m.id) AS n
+                             FROM conversations c
+                             LEFT JOIN messages m ON m.conversation_id = c.id
+                            WHERE c.user_id=%s AND c.channel=%s
+                            GROUP BY c.id
+                            ORDER BY last_at DESC
+                            LIMIT %s""", (user["id"], channel, limit))
+            rows = cur.fetchall()
+    return [{"id": r[0], "title": r[1] or "Cuộc trò chuyện",
+             "updated_at": str(r[3]), "message_count": r[4]} for r in rows]
+
+
+class ConvPatch(BaseModel):
+    title: str
+
+
+@app.patch("/conversations/{conv_id}")
+def conversation_rename(conv_id: int, body: ConvPatch, user=Depends(current_user)):
+    """Đổi tên một hội thoại (chỉ chủ sở hữu)."""
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    check_conversation(user, conv_id, _user_channel(user))
+    title = " ".join((body.title or "").split())[:120].strip() or "Cuộc trò chuyện"
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE conversations SET title=%s WHERE id=%s", (title, conv_id))
+    return {"ok": True, "id": conv_id, "title": title}
+
+
+@app.delete("/conversations/{conv_id}")
+def conversation_delete(conv_id: int, user=Depends(current_user)):
+    """Xoá một hội thoại và toàn bộ tin nhắn của nó (messages có ON DELETE CASCADE)."""
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    check_conversation(user, conv_id, _user_channel(user))
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM conversations WHERE id=%s", (conv_id,))
+        db.audit(conn, user["id"], "delete_conversation", "conversations", conv_id, {})
+    return {"ok": True, "id": conv_id}
 
 
 @app.get("/chat/history")
-def chat_history(user=Depends(current_user), limit: int = 200):
-    """Lịch sử khung chat bền của người đang đăng nhập (mô hình một-khung-mỗi-người).
-    Nạp khi mở app để bot và người dùng thấy lại toàn bộ mạch trao đổi."""
+def chat_history(user=Depends(current_user), conversation_id: int | None = None,
+                 limit: int = 300):
+    """Tin nhắn của MỘT hội thoại cụ thể. Không truyền conversation_id thì trả
+    hội thoại mới hoạt động gần nhất (mở app là thấy lại chỗ đang dở)."""
     require(user, INTERNAL_ROLES | CLIENT_ROLES)
-    _, _, conv = _my_channel_conv(user)
+    channel = _user_channel(user)
+    if conversation_id:
+        conv = check_conversation(user, conversation_id, channel)
+    else:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT c.id FROM conversations c
+                                LEFT JOIN messages m ON m.conversation_id=c.id
+                               WHERE c.user_id=%s AND c.channel=%s
+                               GROUP BY c.id
+                               ORDER BY coalesce(max(m.created_at), c.started_at) DESC
+                               LIMIT 1""", (user["id"], channel))
+                row = cur.fetchone()
+        conv = row[0] if row else None
+    if not conv:
+        return {"conversation_id": None, "messages": []}
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT id, role, content, created_at FROM messages
@@ -416,20 +489,25 @@ def chat_history(user=Depends(current_user), limit: int = 200):
 
 @app.get("/chat/search")
 def chat_search(q: str, user=Depends(current_user), limit: int = 40):
-    """Tìm trong lịch sử chat của CHÍNH người đang đăng nhập (tìm lại đoạn đã trao đổi)."""
+    """Tìm trong TẤT CẢ hội thoại của chính người đang đăng nhập. Trả kèm
+    conversation_id để giao diện mở đúng hội thoại rồi nhảy tới đoạn."""
     require(user, INTERNAL_ROLES | CLIENT_ROLES)
     q = (q or "").strip()
     if len(q) < 2:
         return []
-    _, _, conv = _my_channel_conv(user)
+    channel = _user_channel(user)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("""SELECT id, role, content, created_at FROM messages
-                            WHERE conversation_id=%s AND content ILIKE %s
-                            ORDER BY id DESC LIMIT %s""",
-                        (conv, f"%{q}%", limit))
+            cur.execute("""SELECT m.id, m.role, m.content, m.created_at,
+                                  m.conversation_id, c.title
+                             FROM messages m JOIN conversations c ON c.id=m.conversation_id
+                            WHERE c.user_id=%s AND c.channel=%s AND m.content ILIKE %s
+                            ORDER BY m.id DESC LIMIT %s""",
+                        (user["id"], channel, f"%{q}%", limit))
             rows = cur.fetchall()
-    return [{"id": r[0], "role": r[1], "content": r[2], "created_at": str(r[3])} for r in rows]
+    return [{"id": r[0], "role": r[1], "content": r[2], "created_at": str(r[3]),
+             "conversation_id": r[4], "conversation_title": r[5] or "Cuộc trò chuyện"}
+            for r in rows]
 
 
 class NoteIn(BaseModel):

@@ -19,6 +19,8 @@ import {
   Flag,
   StickyNote,
   Undo2,
+  ExternalLink,
+  Download,
 } from 'lucide-react';
 
 const fmtSec = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
@@ -115,6 +117,14 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
       showToast('Đã lưu vào ghi chú của bạn.', 'success');
     } catch (err: any) {
       showToast(err?.message || 'Không lưu được ghi chú.', 'error');
+    }
+  };
+
+  const downloadSource = async (docId: number, title: string) => {
+    try {
+      await api.downloadDocument(docId, title);
+    } catch (err: any) {
+      showToast(err?.message || 'Không tải được tài liệu này.', 'error');
     }
   };
 
@@ -327,11 +337,30 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                             <span className="font-semibold text-slate-800 dark:text-slate-100 block break-words">
                               {src.title}
                             </span>
-                            {src.doc_id && (
-                              <span className="text-[10px] font-mono text-slate-400 dark:text-slate-500 block mt-0.5">
-                                Mã tài liệu: {src.doc_id}
-                              </span>
-                            )}
+                            {/* Mở bản gốc trên Drive + tải về — như kho tài liệu / NotebookLM */}
+                            <span className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
+                              {src.drive_file_id && (
+                                <a
+                                  href={`https://drive.google.com/file/d/${src.drive_file_id}/view`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-hds-navy dark:text-blue-300 hover:underline"
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                  Mở bản gốc
+                                </a>
+                              )}
+                              {typeof src.document_id === 'number' && (
+                                <button
+                                  type="button"
+                                  onClick={() => downloadSource(src.document_id!, src.title)}
+                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-hds-navy dark:text-blue-300 hover:underline"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  Tải về
+                                </button>
+                              )}
+                            </span>
                           </div>
                         </div>
 

@@ -436,6 +436,14 @@ def run(dry_run=False):
                     n_upd += 1
                 else:
                     n_new += 1
+            else:
+                # learn_one bỏ qua vì không đọc được nội dung. Trước đây file này
+                # biến mất không dấu vết — admin tưởng đã học. Giờ đưa vào danh
+                # sách lỗi để thấy trên dashboard và biết đường xử lý.
+                error_items.append({
+                    "name": f["name"], "location": loc,
+                    "error": "không đọc được nội dung — nếu là PDF scan cần cài OCR "
+                             "(tesseract-ocr-vie, poppler-utils) rồi học lại"})
         except Exception as e:
             print(f"     [LỖI] {f['name']}: {e}")
             error_items.append({"name": f["name"], "location": loc, "error": str(e)})

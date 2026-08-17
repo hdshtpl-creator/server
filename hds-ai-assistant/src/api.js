@@ -310,8 +310,28 @@ export async function chatPortal({ question, conversation_id }) {
 }
 
 // GET /chat/history — lịch sử khung chat bền của người đang đăng nhập
-export async function getChatHistory(limit = 200) {
-  return request(`/chat/history?limit=${Number(limit) || 200}`, { method: 'GET' });
+// GET /chat/history — tin nhắn của MỘT hội thoại (không truyền id thì lấy hội
+// thoại mới hoạt động gần nhất).
+export async function getChatHistory(conversationId = null, limit = 300) {
+  const qs = new URLSearchParams({ limit: String(Number(limit) || 300) });
+  if (conversationId) qs.set('conversation_id', String(conversationId));
+  return request(`/chat/history?${qs.toString()}`, { method: 'GET' });
+}
+
+// ---------- Nhiều hội thoại (kiểu ChatGPT) ----------
+export async function listConversations(limit = 100) {
+  return request(`/conversations?limit=${Number(limit) || 100}`, { method: 'GET' });
+}
+
+export async function renameConversation(convId, title) {
+  return request(`/conversations/${convId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function deleteConversation(convId) {
+  return request(`/conversations/${convId}`, { method: 'DELETE' });
 }
 
 // GET /chat/search — tìm trong lịch sử chat của chính mình
@@ -1058,13 +1078,26 @@ let mockState = {
   ],
   nextConversationId: 9000,
   nextMessageId: 8100,
-  // Khung chat bền (mô hình một-khung-mỗi-người) + ghi chú cá nhân
-  persistentConvId: 7001,
-  chatHistory: [
-    { id: 6001, role: 'user', content: 'Khách SUNGROUP đang có mấy vụ việc?', created_at: '2026-08-14 09:10' },
-    { id: 6002, role: 'assistant', content: 'Tập đoàn SunGroup hiện có 2 vụ việc đang xử lý: [M-2026-001] Tái cấu trúc vốn SunPhuQuoc (đã quá hạn 3 ngày) và [M-2026-014] Thuê đất thương mại (còn 5 ngày).', created_at: '2026-08-14 09:10' },
-    { id: 6003, role: 'user', content: 'Thời hiệu khởi kiện tranh chấp hợp đồng thương mại là bao lâu?', created_at: '2026-08-14 09:12' },
-    { id: 6004, role: 'assistant', content: 'Theo Điều 319 Luật Thương mại 2005, thời hiệu khởi kiện áp dụng đối với tranh chấp thương mại là 2 năm kể từ thời điểm quyền và lợi ích hợp pháp bị xâm phạm.', created_at: '2026-08-14 09:12' },
+  // Nhiều hội thoại (mô hình ChatGPT). Mỗi hội thoại có lịch sử riêng.
+  conversations: [
+    {
+      id: 7001,
+      title: 'Vụ việc SunGroup',
+      updated_at: '2026-08-14 09:12',
+      messages: [
+        { id: 6001, role: 'user', content: 'Khách SUNGROUP đang có mấy vụ việc?', created_at: '2026-08-14 09:10' },
+        { id: 6002, role: 'assistant', content: 'Tập đoàn SunGroup hiện có 2 vụ việc đang xử lý: [M-2026-001] Tái cấu trúc vốn SunPhuQuoc (đã quá hạn 3 ngày) và [M-2026-014] Thuê đất thương mại (còn 5 ngày).', created_at: '2026-08-14 09:10' },
+      ],
+    },
+    {
+      id: 7002,
+      title: 'Thời hiệu khởi kiện thương mại',
+      updated_at: '2026-08-13 15:02',
+      messages: [
+        { id: 6003, role: 'user', content: 'Thời hiệu khởi kiện tranh chấp hợp đồng thương mại là bao lâu?', created_at: '2026-08-13 15:00' },
+        { id: 6004, role: 'assistant', content: 'Theo Điều 319 Luật Thương mại 2005, thời hiệu khởi kiện áp dụng đối với tranh chấp thương mại là 2 năm kể từ thời điểm quyền và lợi ích hợp pháp bị xâm phạm.', created_at: '2026-08-13 15:02' },
+      ],
+    },
   ],
   notes: [
     { id: 501, content: 'Thời hiệu khởi kiện tranh chấp thương mại: 2 năm (Điều 319 LTM 2005).', source_message_id: 6004, created_at: '2026-08-14 09:13' },
@@ -1079,7 +1112,21 @@ let mockState = {
  */
 async function mockChatStream(payload, onEvent) {
   const wait = (ms) => new Promise((res) => setTimeout(res, ms));
-  const conv = toIntOrNull(payload.conversation_id) ?? mockState.persistentConvId;
+  // Không có conversation_id → "cuộc trò chuyện mới": tạo hội thoại mới, đặt
+  // tiêu đề từ câu hỏi, đúng như backend thật.
+  let convObj = mockState.conversations.find(
+    (c) => c.id === toIntOrNull(payload.conversation_id)
+  );
+  if (!convObj) {
+    convObj = {
+      id: ++mockState.nextConversationId,
+      title: (payload.question || 'Cuộc trò chuyện mới').slice(0, 60),
+      updated_at: new Date().toISOString().replace('T', ' ').slice(0, 16),
+      messages: [],
+    };
+    mockState.conversations.unshift(convObj);
+  }
+  const conv = convObj.id;
 
   onEvent?.({ type: 'start', conversation_id: conv });
   await wait(1200); // giai đoạn model đọc ngữ cảnh — im lặng, chưa có chữ nào
@@ -1087,7 +1134,7 @@ async function mockChatStream(payload, onEvent) {
   onEvent?.({
     type: 'meta',
     sources: [
-      { n: 1, title: 'Luật Doanh nghiệp số 59/2020/QH14 (Điều 12, Điều 15)', score: 0.94, document_id: 1 },
+      { n: 1, title: 'Luật Doanh nghiệp số 59/2020/QH14 (Điều 12, Điều 15)', score: 0.94, document_id: 1, drive_file_id: '1AbCdEfGhIjKmock' },
       { n: 2, title: 'Nghị định 01/2021/NĐ-CP về Đăng ký Doanh nghiệp', score: 0.89, document_id: 9 },
     ],
     used_method: null,
@@ -1127,6 +1174,13 @@ async function mockChatStream(payload, onEvent) {
       bo_qua_doan_yeu: 3,
     },
   };
+  // Ghi vào hội thoại mock để lịch sử + danh sách phản ánh đúng
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 16);
+  convObj.messages.push(
+    { id: ++mockState.nextMessageId, role: 'user', content: payload.question, created_at: now },
+    { id: done.message_id, role: 'assistant', content: text, created_at: now }
+  );
+  convObj.updated_at = now;
   onEvent?.(done);
   return done;
 }
@@ -1185,17 +1239,48 @@ async function handleMockRequest(endpoint, options, headers) {
     throw new Error('Không đủ quyền (403) — chỉ admin quản lý người dùng');
   }
 
-  // ---------- Khung chat bền + tìm kiếm + ghi chú ----------
+  // ---------- Nhiều hội thoại + tìm kiếm + ghi chú ----------
+  if (endpoint.startsWith('/conversations')) {
+    const convId = toIntOrNull(endpoint.split('/')[2]);
+    if (method === 'GET') {
+      return mockState.conversations.map((c) => ({
+        id: c.id,
+        title: c.title,
+        updated_at: c.updated_at,
+        message_count: c.messages.length,
+      }));
+    }
+    if (method === 'PATCH') {
+      const c = mockState.conversations.find((x) => x.id === convId);
+      if (c) c.title = (body.title || 'Cuộc trò chuyện').slice(0, 120);
+      return { ok: true, id: convId, title: c ? c.title : '' };
+    }
+    if (method === 'DELETE') {
+      mockState.conversations = mockState.conversations.filter((x) => x.id !== convId);
+      return { ok: true, id: convId };
+    }
+  }
   if (endpoint.startsWith('/chat/history')) {
-    return { conversation_id: mockState.persistentConvId, messages: [...mockState.chatHistory] };
+    const params = new URLSearchParams((endpoint.split('?')[1] || ''));
+    const wantId = toIntOrNull(params.get('conversation_id'));
+    const c =
+      mockState.conversations.find((x) => x.id === wantId) || mockState.conversations[0] || null;
+    return c
+      ? { conversation_id: c.id, messages: [...c.messages] }
+      : { conversation_id: null, messages: [] };
   }
   if (endpoint.startsWith('/chat/search')) {
     const q = decodeURIComponent((endpoint.split('q=')[1] || '').split('&')[0]).toLowerCase();
     if (q.length < 2) return [];
-    return mockState.chatHistory
-      .filter((m) => m.content.toLowerCase().includes(q))
-      .slice()
-      .reverse();
+    const hits = [];
+    for (const c of mockState.conversations) {
+      for (const m of c.messages) {
+        if (m.content.toLowerCase().includes(q)) {
+          hits.push({ ...m, conversation_id: c.id, conversation_title: c.title });
+        }
+      }
+    }
+    return hits.reverse();
   }
   if (endpoint.startsWith('/notes')) {
     const noteId = endpoint.split('/')[2];
