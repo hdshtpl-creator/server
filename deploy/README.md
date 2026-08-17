@@ -248,6 +248,14 @@ còn chỗ nào đó đang đệm — kiểm `proxy_buffering` trong
 Ba kênh cũ (`/chat/internal`, `/chat/portal`, `/chat/public`) vẫn giữ nguyên, trả
 một cục như trước — dành cho khách gọi qua API.
 
+**Cái bẫy prefill (đã xử lý).** Ngay cả khi streaming, vẫn có một khoảng lặng dài
+NGAY SAU khi hiện nguồn trích dẫn: model đang ĐỌC toàn bộ prompt (prefill), trên
+máy CPU mất cả trăm giây và không đẩy byte nào ra. Cloudflare thấy kết nối im quá
+~100 giây liền cắt → "network error" trước khi có chữ. `/chat/stream` gửi "nhịp
+tim" vô hình mỗi 15 giây trong quãng này để giữ kết nối sống. Nếu vẫn thấy network
+error sau khi hiện nguồn, kiểm tra `proxy_read_timeout` (phải ≥ 320s) và bảo đảm
+`proxy_buffering off` — nginx gom byte thì nhịp tim cũng bị chặn.
+
 ### Nạp lại model — cái bẫy hay bị bỏ sót
 
 Mỗi câu hỏi dùng **hai** model: `bge-m3` hiểu câu hỏi, rồi model kia viết câu trả

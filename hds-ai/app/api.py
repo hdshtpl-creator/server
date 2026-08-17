@@ -320,27 +320,65 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
 
     def events():
         yield _sse({"type": "start", "conversation_id": conv})
-        try:
-            for ev in rag.answer_stream(
-                    body.question, channel, user_id=user["id"], client_id=cid,
-                    conversation_id=conv, use_temp=body.use_temp,
-                    use_method=body.use_method and not is_client,
-                    dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
-                    can_finance=user["can_finance"],
-                    role=user["role"] if is_client else None,
-                    model=None if is_client else body.model):
-                if ev.get("type") == "done" and is_client:
-                    with db.session(role="internal", admin=True) as conn:
-                        with conn.cursor() as cur:
-                            cur.execute("UPDATE users SET used_this_month=used_this_month+1 "
-                                        "WHERE id=%s", (user["id"],))
-                    ev["quota"] = {"used": (user.get("used_this_month") or 0) + 1,
-                                   "limit": user.get("monthly_quota") or 0}
-                yield _sse(ev)
-        except Exception as e:
-            # Dòng đã mở nên không trả mã lỗi HTTP được nữa; báo bằng sự kiện để
-            # giao diện hiện đúng thông báo thay vì treo im lặng.
-            yield _sse({"type": "error", "message": str(e)})
+
+        # NHỊP TIM chống lỗi 524 khi máy chậm.
+        #
+        # Cái bẫy: sau sự kiện 'meta' (nguồn trích dẫn), model bước vào giai đoạn
+        # ĐỌC toàn bộ prompt. Trên máy CPU việc này mất cả trăm giây, và trong
+        # suốt quãng đó KHÔNG có byte nào chảy ra. Cloudflare thấy kết nối im quá
+        # ~100 giây liền cắt → 'network error', trước cả khi chữ đầu tiên xuất
+        # hiện. Chỉ gửi 'meta' sớm là chưa đủ — khoảng lặng nằm ở SAU 'meta'.
+        #
+        # Cách chữa: chạy phần sinh câu trả lời trong một luồng riêng, đẩy sự
+        # kiện qua hàng đợi; luồng chính chờ tối đa HEARTBEAT_SEC giây, hết giờ
+        # mà chưa có gì thì phát một dòng chú thích SSE (': hb'). Byte đó vô hình
+        # với trình duyệt nhưng đủ để Cloudflare coi kết nối vẫn sống.
+        import queue as _queue
+        import threading
+
+        HEARTBEAT_SEC = 15
+        q: "_queue.Queue" = _queue.Queue()
+        DONE = object()
+
+        def produce():
+            try:
+                for ev in rag.answer_stream(
+                        body.question, channel, user_id=user["id"], client_id=cid,
+                        conversation_id=conv, use_temp=body.use_temp,
+                        use_method=body.use_method and not is_client,
+                        dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
+                        can_finance=user["can_finance"],
+                        role=user["role"] if is_client else None,
+                        model=None if is_client else body.model):
+                    q.put(("event", ev))
+            except Exception as e:  # noqa: BLE001 - báo lỗi qua dòng, không để luồng chết câm
+                q.put(("error", str(e)))
+            finally:
+                q.put((DONE, None))
+
+        worker = threading.Thread(target=produce, daemon=True)
+        worker.start()
+
+        while True:
+            try:
+                kind, payload = q.get(timeout=HEARTBEAT_SEC)
+            except _queue.Empty:
+                yield ": hb\n\n"          # đang đọc tài liệu — giữ kết nối sống
+                continue
+            if kind is DONE:
+                break
+            if kind == "error":
+                yield _sse({"type": "error", "message": payload})
+                continue
+            ev = payload
+            if ev.get("type") == "done" and is_client:
+                with db.session(role="internal", admin=True) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE users SET used_this_month=used_this_month+1 "
+                                    "WHERE id=%s", (user["id"],))
+                ev["quota"] = {"used": (user.get("used_this_month") or 0) + 1,
+                               "limit": user.get("monthly_quota") or 0}
+            yield _sse(ev)
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache",

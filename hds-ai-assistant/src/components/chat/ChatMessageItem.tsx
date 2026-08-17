@@ -255,22 +255,36 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             </div>
           )}
 
-          <div
-            className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${
-              isError
-                ? 'text-red-800 dark:text-red-200 font-medium'
-                : 'text-slate-800 dark:text-slate-200'
-            }`}
-          >
-            {message.text}
-            {/* Con trỏ nhấp nháy trong lúc chữ còn đang chảy về */}
-            {message.isStreaming && (
-              <span
-                className="inline-block w-[2px] h-[1em] align-text-bottom ml-0.5 bg-hds-navy dark:bg-blue-400 animate-pulse"
-                aria-label="Đang viết"
-              />
-            )}
-          </div>
+          {/* Giai đoạn ĐỌC tài liệu: đã có nguồn nhưng model chưa viết chữ nào.
+              Trên máy CPU quãng này dài cả trăm giây; hiện lời nhắc động để
+              người dùng biết hệ thống đang chạy chứ không treo. */}
+          {message.isStreaming && !message.text ? (
+            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <span>Đang đọc tài liệu và soạn câu trả lời</span>
+              <span className="flex gap-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-hds-navy dark:bg-blue-400 animate-bounce [animation-delay:-0.3s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-hds-navy dark:bg-blue-400 animate-bounce [animation-delay:-0.15s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-hds-navy dark:bg-blue-400 animate-bounce" />
+              </span>
+            </div>
+          ) : (
+            <div
+              className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                isError
+                  ? 'text-red-800 dark:text-red-200 font-medium'
+                  : 'text-slate-800 dark:text-slate-200'
+              }`}
+            >
+              {message.text}
+              {/* Con trỏ nhấp nháy trong lúc chữ còn đang chảy về */}
+              {message.isStreaming && (
+                <span
+                  className="inline-block w-[2px] h-[1em] align-text-bottom ml-0.5 bg-hds-navy dark:bg-blue-400 animate-pulse"
+                  aria-label="Đang viết"
+                />
+              )}
+            </div>
+          )}
 
           {!isUser && message.sources && message.sources.length > 0 && (
             <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">

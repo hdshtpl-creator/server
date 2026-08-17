@@ -1093,6 +1093,8 @@ async function mockChatStream(payload, onEvent) {
     used_method: null,
   });
 
+  await wait(900); // mô phỏng giai đoạn đọc tài liệu — hiện chỉ báo "đang đọc…"
+
   const text =
     `Với câu hỏi "${payload.question}": theo Điều 12 Luật Doanh nghiệp 2020 ` +
     'và Nghị định 01/2021/NĐ-CP, doanh nghiệp phải thông báo thay đổi tới Cơ quan ' +
