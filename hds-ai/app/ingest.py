@@ -40,9 +40,47 @@ def extract_text(path: Path) -> str:
             text = ocr_pdf(path)
         return text
     if ext == ".doc":
-        print(f"  [!] {path.name} .doc cũ — convert trước: libreoffice --headless --convert-to docx")
-        return ""
+        return extract_doc(path)
     return ""
+
+
+def extract_doc(path: Path) -> str:
+    """Đọc file .doc (Word 97-2003) bằng cách nhờ LibreOffice chuyển sang .docx
+    trong thư mục tạm rồi đọc lại. Rất nhiều tài liệu cũ của HDS ở định dạng
+    này; không đọc được chúng thì bot thiếu hẳn một mảng dữ liệu lớn.
+
+    Cần gói hệ thống 'libreoffice' trên máy chủ (deploy/setup.sh đã cài).
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    soffice = shutil.which("libreoffice") or shutil.which("soffice")
+    if not soffice:
+        print(f"  [!] {path.name}: chưa cài LibreOffice để đọc .doc "
+              f"(sudo apt install -y libreoffice)")
+        return ""
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            # UserInstallation riêng để nhiều lần gọi liên tiếp không khoá hồ sơ nhau
+            subprocess.run(
+                [soffice, f"-env:UserInstallation=file://{tmp}/profile",
+                 "--headless", "--convert-to", "docx", "--outdir", tmp, str(path)],
+                check=True, timeout=120,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            out = Path(tmp) / (path.stem + ".docx")
+            if not out.exists():
+                return ""
+            from docx import Document as Docx
+            d = Docx(str(out))
+            parts = [p.text for p in d.paragraphs]
+            for tbl in d.tables:
+                for row in tbl.rows:
+                    parts.append(" | ".join(c.text for c in row.cells))
+            return "\n".join(parts)
+    except Exception as e:
+        print(f"  [!] {path.name}: không chuyển được .doc → docx: {e}")
+        return ""
 
 
 def ocr_pdf(path: Path) -> str:
