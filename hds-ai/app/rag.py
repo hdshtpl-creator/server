@@ -284,10 +284,18 @@ def _log_slow(question, t):
           f"| doan={t.get('so_doan')} | hoi={(question or '')[:60]!r}", flush=True)
 
 
-def answer(question, channel, user_id=None, client_id=None, conversation_id=None,
-           prefer="local", use_temp=False, use_method=False,
-           dept_ids=None, is_banqt=False, can_finance=False, role=None, model=None):
-    """Hàm chính — cả 3 kênh gọi hàm này."""
+def prepare(question, channel, client_id=None, conversation_id=None,
+            use_temp=False, use_method=False, dept_ids=None, is_banqt=False,
+            can_finance=False, role=None, model=None):
+    """Dựng đủ nguyên liệu cho một lượt trả lời, DỪNG NGAY TRƯỚC khi gọi model.
+
+    Tách riêng vì có hai cách sinh câu trả lời — trả một cục (answer) và trả
+    theo dòng (answer_stream) — nhưng toàn bộ phần trước đó phải giống hệt
+    nhau. Nhân đôi đoạn này là nhân đôi cả logic phân quyền, sớm muộn hai bản
+    sẽ lệch và một bên hở dữ liệu.
+
+    Trả về dict: prompt, system, model, temperature, chunks, method, timings.
+    """
     if channel not in CHANNEL_LEVEL:
         raise ValueError(f"Kênh không hợp lệ: {channel}")
     if channel == "portal" and client_id is None:
@@ -345,39 +353,121 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
                           company=company, history=history,
                           chunk_chars=_num("chunk_char_limit", CHUNK_CHARS, int),
                           budget=_num("context_char_budget", CONTEXT_CHARS, int))
-    system_prompt = cfg.get(f"prompt_{channel}") or settings.DEFAULTS.get(f"prompt_{channel}", "")
-    chosen_model = resolve_model(model, question)
+    timings["so_doan"] = len(chunks)
+    return {
+        "prompt": prompt,
+        "system": cfg.get(f"prompt_{channel}") or settings.DEFAULTS.get(f"prompt_{channel}", ""),
+        "model": resolve_model(model, question),
+        "temperature": _num("llm_temperature", 0.2, float),
+        "chunks": chunks,
+        "method": method,
+        "timings": timings,
+    }
+
+
+def format_sources(chunks):
+    return [{"n": i, "title": c["title"], "document_id": c.get("document_id"),
+             "score": round(c["score"], 3)} for i, c in enumerate(chunks, 1)]
+
+
+def save_turn(question, text, chunks, conversation_id, channel, client_id=None,
+              user_id=None, model_used=None, latency=0, method=None):
+    """Ghi cặp hỏi-đáp vào CSDL, trả về mã tin nhắn của câu trả lời.
+
+    Ghi SAU khi đã có câu trả lời đầy đủ — kể cả ở luồng chảy dần. Nhờ vậy lịch
+    sử hội thoại không bao giờ chứa câu trả lời dở dang, và mã tin nhắn chỉ được
+    cấp cho nội dung đã hoàn tất (nút báo cáo/ghi chú luôn trỏ vào bản đầy đủ).
+    """
+    if not conversation_id:
+        return None
+    level = CHANNEL_LEVEL[channel]
+    with db.session(role=level, client_id=client_id) as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO messages (conversation_id,role,content) VALUES (%s,'user',%s)",
+                        (conversation_id, question))
+            cur.execute("""INSERT INTO messages (conversation_id,role,content,sources,model_used,latency_ms)
+                           VALUES (%s,'assistant',%s,%s,%s,%s) RETURNING id""",
+                        (conversation_id, text, json.dumps([c["chunk_id"] for c in chunks]),
+                         model_used, latency))
+            msg_id = cur.fetchone()[0]
+        db.audit(conn, user_id, "chat_query", "conversation", conversation_id,
+                 {"channel": channel, "n_sources": len(chunks), "used_method": bool(method)})
+    return msg_id
+
+
+def answer(question, channel, user_id=None, client_id=None, conversation_id=None,
+           prefer="local", use_temp=False, use_method=False,
+           dept_ids=None, is_banqt=False, can_finance=False, role=None, model=None):
+    """Trả lời MỘT CỤC — dùng cho kênh website, API khách và các lời gọi nội bộ."""
+    p = prepare(question, channel, client_id=client_id, conversation_id=conversation_id,
+                use_temp=use_temp, use_method=use_method, dept_ids=dept_ids,
+                is_banqt=is_banqt, can_finance=can_finance, role=role, model=model)
+    timings, chunks, method = p["timings"], p["chunks"], p["method"]
+
     llm_stats: dict = {}
-    text, latency = llm(prompt, system=system_prompt, prefer=prefer,
-                        temperature=_num("llm_temperature", 0.2, float),
-                        model=chosen_model, stats=llm_stats)
+    text, latency = llm(p["prompt"], system=p["system"], prefer=prefer,
+                        temperature=p["temperature"], model=p["model"], stats=llm_stats)
     timings["ai_ms"] = latency
     timings.update({k: v for k, v in llm_stats.items()
                     if k in ("prompt_tokens", "gen_tokens", "load_ms",
                              "prefill_ms", "gen_ms", "num_ctx", "model")})
-    timings["so_doan"] = len(chunks)
     _log_slow(question, timings)
 
-    msg_id = None
-    if conversation_id:
-        level = CHANNEL_LEVEL[channel]
-        with db.session(role=level, client_id=client_id) as conn:
-            with conn.cursor() as cur:
-                cur.execute("INSERT INTO messages (conversation_id,role,content) VALUES (%s,'user',%s)",
-                            (conversation_id, question))
-                cur.execute("""INSERT INTO messages (conversation_id,role,content,sources,model_used,latency_ms)
-                               VALUES (%s,'assistant',%s,%s,%s,%s) RETURNING id""",
-                            (conversation_id, text, json.dumps([c["chunk_id"] for c in chunks]),
-                             chosen_model or prefer, latency))
-                msg_id = cur.fetchone()[0]
-            db.audit(conn, user_id, "chat_query", "conversation", conversation_id,
-                     {"channel": channel, "n_sources": len(chunks), "used_method": bool(method)})
+    msg_id = save_turn(question, text, chunks, conversation_id, channel,
+                       client_id=client_id, user_id=user_id,
+                       model_used=p["model"] or prefer, latency=latency, method=method)
 
-    return {"answer": text,
-            "sources": [{"n": i, "title": c["title"], "document_id": c.get("document_id"),
-                         "score": round(c["score"], 3)} for i, c in enumerate(chunks, 1)],
+    return {"answer": text, "sources": format_sources(chunks),
             "used_method": method["case_type"] if method else None,
             "latency_ms": latency, "message_id": msg_id, "timings": timings}
+
+
+def answer_stream(question, channel, user_id=None, client_id=None, conversation_id=None,
+                  use_temp=False, use_method=False, dept_ids=None, is_banqt=False,
+                  can_finance=False, role=None, model=None):
+    """Trả lời THEO DÒNG — generator sinh ra các sự kiện dict:
+
+        {"type": "meta",  "sources": [...]}        gửi ngay khi biết nguồn
+        {"type": "delta", "text": "…"}             từng mẩu chữ
+        {"type": "done",  "message_id": .., "timings": {...}}
+
+    Người gọi (api.py) chỉ việc đóng gói thành SSE.
+    """
+    from app.models import llm_stream
+
+    p = prepare(question, channel, client_id=client_id, conversation_id=conversation_id,
+                use_temp=use_temp, use_method=use_method, dept_ids=dept_ids,
+                is_banqt=is_banqt, can_finance=can_finance, role=role, model=model)
+    timings, chunks, method = p["timings"], p["chunks"], p["method"]
+
+    # Nguồn trích dẫn đã biết trước khi model viết chữ nào — gửi ngay để giao
+    # diện có cái hiển thị, và để trình duyệt nhận byte đầu tiên sớm nhất.
+    yield {"type": "meta", "sources": format_sources(chunks),
+           "used_method": method["case_type"] if method else None}
+
+    llm_stats: dict = {}
+    t0 = time.time()
+    parts = []
+    for piece in llm_stream(p["prompt"], system=p["system"],
+                            temperature=p["temperature"], model=p["model"],
+                            stats=llm_stats):
+        parts.append(piece)
+        yield {"type": "delta", "text": piece}
+
+    text = "".join(parts).strip()
+    latency = int((time.time() - t0) * 1000)
+    timings["ai_ms"] = latency
+    timings.update({k: v for k, v in llm_stats.items()
+                    if k in ("prompt_tokens", "gen_tokens", "load_ms",
+                             "prefill_ms", "gen_ms", "num_ctx", "model")})
+    _log_slow(question, timings)
+
+    msg_id = save_turn(question, text, chunks, conversation_id, channel,
+                       client_id=client_id, user_id=user_id,
+                       model_used=p["model"] or "local", latency=latency, method=method)
+
+    yield {"type": "done", "message_id": msg_id, "latency_ms": latency,
+           "timings": timings}
 
 
 # =============================================================

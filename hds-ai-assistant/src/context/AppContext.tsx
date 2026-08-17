@@ -45,6 +45,7 @@ interface AppContextType {
   activeConversation: Conversation | null;
   isHistoryLoading: boolean;
   addMessageToConv: (convId: string, msg: ChatMessage) => void;
+  updateMessage: (msgId: string, patch: (prev: ChatMessage) => ChatMessage) => void;
   setConvServerId: (convId: string, serverId: number) => void;
   setConvTempFile: (
     convId: string,
@@ -257,6 +258,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setConversation((c) => ({ ...c, messages: [...c.messages, msg] }));
   }, []);
 
+  /**
+   * Sửa một tin nhắn đã có, tìm theo mã cục bộ.
+   *
+   * Cần cho câu trả lời chảy dần: mỗi mẩu chữ về là một lần cập nhật đúng tin
+   * nhắn đó, thay vì thêm tin nhắn mới. `patch` nhận tin nhắn hiện tại để nối
+   * thêm chữ vào phần đã có — dùng dạng hàm nên không bị đè khi nhiều mẩu về
+   * dồn dập trong cùng một nhịp dựng hình.
+   */
+  const updateMessage = useCallback(
+    (msgId: string, patch: (prev: ChatMessage) => ChatMessage) => {
+      setConversation((c) => ({
+        ...c,
+        messages: c.messages.map((m) => (m.id === msgId ? patch(m) : m)),
+      }));
+    },
+    []
+  );
+
   const setConvServerId = useCallback((_convId: string, serverId: number) => {
     setConversation((c) => (c.server_id ? c : { ...c, server_id: serverId }));
   }, []);
@@ -359,6 +378,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeConversation,
         isHistoryLoading,
         addMessageToConv,
+        updateMessage,
         setConvServerId,
         setConvTempFile,
         notes,

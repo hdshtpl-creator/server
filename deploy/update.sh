@@ -47,6 +47,24 @@ run_as "cd '$FRONTEND_DIR' && { [ -f package-lock.json ] && npm ci || npm instal
 c_ok "Đã build"
 
 c_info "4/4  Khởi động lại dịch vụ"
+
+# Máy cài từ bản cũ có cấu hình nginx chưa tắt đệm. Không vá thì nginx gom cả
+# câu trả lời rồi mới gửi, và tính năng trả lời chảy dần mất sạch tác dụng —
+# FastAPI vẫn đẩy chữ ra đúng nhịp nhưng người dùng không thấy gì tới lúc xong.
+NGINX_SITE="/etc/nginx/sites-available/hds-ai"
+if [ -f "$NGINX_SITE" ] && ! grep -q "proxy_buffering" "$NGINX_SITE"; then
+  cp "$NGINX_SITE" "$NGINX_SITE.bak.$(date +%Y%m%d%H%M%S)"
+  sed -i '/proxy_send_timeout 320s;/a\        # Trả lời theo dòng (SSE): tắt đệm để chữ tới trình duyệt ngay.\n        proxy_buffering off;\n        proxy_cache off;' "$NGINX_SITE"
+  if nginx -t >/dev/null 2>&1; then
+    c_ok "Đã tắt đệm nginx cho tính năng trả lời chảy dần"
+  else
+    # Sai cú pháp thì trả lại nguyên trạng — thà không có streaming còn hơn
+    # sập cả web vì nginx không khởi động được.
+    cp "$(ls -t "$NGINX_SITE".bak.* | head -1)" "$NGINX_SITE"
+    c_info "Không vá được nginx tự động — hãy thêm 'proxy_buffering off;' vào khối location /api/"
+  fi
+fi
+
 systemctl restart hds-ai-backend
 systemctl reload nginx
 sleep 2

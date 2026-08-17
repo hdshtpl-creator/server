@@ -23,6 +23,7 @@ import type {
   ModelInfo,
   BenchmarkResult,
   ChatSearchHit,
+  ChatStreamEvent,
   Note,
 } from './types';
 
@@ -64,6 +65,17 @@ export const chatInternal = ApiJs.chatInternal as (params: {
   /** '' = mặc định máy chủ | 'auto' | tên model cụ thể */
   model?: string;
 }) => Promise<ChatResponse>;
+
+export const chatStream = ApiJs.chatStream as (
+  params: {
+    question: string;
+    conversation_id?: number | null;
+    use_temp?: boolean;
+    use_method?: boolean;
+    model?: string;
+  },
+  onEvent: (evt: ChatStreamEvent) => void
+) => Promise<ChatStreamEvent | null>;
 
 export const chatPortal = ApiJs.chatPortal as (params: {
   question: string;

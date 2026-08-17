@@ -311,6 +311,10 @@ server {
         # Tra cứu RAG gọi Ollama có thể mất tới ~300s.
         proxy_read_timeout 320s;
         proxy_send_timeout 320s;
+        # Trả lời theo dòng (SSE): nginx mặc định gom hết rồi mới gửi, làm mất
+        # sạch tác dụng của streaming. Tắt đệm để chữ tới trình duyệt ngay.
+        proxy_buffering off;
+        proxy_cache off;
     }
 
     # SPA: mọi đường dẫn khác trả về index.html để React tự định tuyến.

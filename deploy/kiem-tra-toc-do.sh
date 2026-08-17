@@ -101,9 +101,40 @@ echo "  Model đo được         : $MODEL"
 echo "  Nạp model vào bộ nhớ  : $(awk -v m="$LOAD_MS" 'BEGIN{printf "%.1f", m/1000}')s"
 echo "  Tốc độ ĐỌC ngữ cảnh   : ${READ_TOK_S} token/giây  (đọc $PROMPT_TOKENS token)"
 echo "  Tốc độ VIẾT trả lời   : ${WRITE_TOK_S} token/giây  (viết $GEN_TOKENS token)"
+if [ "$GEN_TOKENS" -lt 20 ] 2>/dev/null; then
+  warn "Model sinh quá ít token — con số tốc độ viết ở trên không đáng tin."
+fi
 
 # --------------------------------------------------------------
-head_ "4. Kết luận"
+head_ "4. RAM có chứa nổi CẢ HAI model cùng lúc không"
+# --------------------------------------------------------------
+# Mỗi câu hỏi dùng 2 model: bge-m3 hiểu câu hỏi, rồi model kia viết câu trả lời.
+# Nếu bộ nhớ chỉ chứa được một, Ollama phải đẩy cái này ra để nạp cái kia — và
+# lặp lại y hệt ở câu hỏi tiếp theo. Khi đó đặt keep_alive bao lâu cũng vô ích.
+EMBED_MODEL="$(grep -E '^EMBED_MODEL=' "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")"
+EMBED_MODEL="${EMBED_MODEL:-bge-m3}"
+
+curl -fsS --max-time 120 -X POST "$OLLAMA_URL/api/embed" \
+     -H 'Content-Type: application/json' \
+     -d "{\"model\":\"$EMBED_MODEL\",\"input\":\"kiem tra\",\"keep_alive\":\"30m\"}" \
+     >/dev/null 2>&1
+
+if command -v ollama >/dev/null 2>&1; then
+  RESIDENT="$(ollama ps 2>/dev/null | tail -n +2 | grep -c .)"
+  echo "  Sau khi dùng cả hai model, số model còn nằm trong bộ nhớ: $RESIDENT"
+  ollama ps 2>/dev/null | sed 's/^/    /'
+  if [ "$RESIDENT" -ge 2 ]; then
+    ok "Cả hai cùng nằm trong bộ nhớ — không phải nạp lại giữa các câu hỏi."
+  else
+    bad "Chỉ giữ được MỘT model → mỗi câu hỏi phải nạp lại model từ ổ cứng."
+    echo "     Đây thường là nguyên nhân lớn nhất và không sửa được bằng cài đặt."
+    echo "     Cách xử lý: dùng model sinh câu trả lời nhỏ hơn (qwen3:4b) để cả"
+    echo "     hai cùng vừa bộ nhớ, hoặc lắp thêm RAM/VRAM."
+  fi
+fi
+
+# --------------------------------------------------------------
+head_ "5. Kết luận"
 # --------------------------------------------------------------
 # 4000 token ≈ ngân sách mặc định: 6000 ký tự tài liệu, cộng hồ sơ công ty,
 # 3 lượt hội thoại cũ và câu hỏi. 700 token ≈ trần độ dài câu trả lời.
@@ -111,15 +142,28 @@ EST=$(awk -v r="$READ_TOK_S" -v w="$WRITE_TOK_S" \
       'BEGIN{ if (r>0 && w>0) printf "%.0f", 4000/r + 700/w; else print 999 }')
 echo "  Ước tính một câu hỏi có đầy đủ ngữ cảnh: khoảng ${EST} giây."
 
+READ_SHARE=$(awk -v r="$READ_TOK_S" 'BEGIN{printf "%.0f", r>0 ? 4000/r : 0}')
+WRITE_SHARE=$(awk -v w="$WRITE_TOK_S" 'BEGIN{printf "%.0f", w>0 ? 700/w : 0}')
+echo "    trong đó ĐỌC ngữ cảnh ${READ_SHARE}s · VIẾT trả lời ${WRITE_SHARE}s"
+
 if [ "$EST" -gt 90 ]; then
   bad "VƯỢT mốc 100 giây của Cloudflare → sẽ gặp lỗi 524."
   echo "     Cách xử lý, xếp theo hiệu quả:"
   echo "       1. Model nhẹ hơn:  ollama pull qwen3:4b"
   echo "          rồi web → Quản trị → Cài đặt AI → Model AI → chọn qwen3:4b"
-  echo "       2. Giảm 'Trần ký tự tài liệu' 7000 → 4000  (Cài đặt AI → Tham số)"
-  echo "       3. Giảm 'Trần độ dài câu trả lời' 700 → 400"
-  [ "$HAS_GPU" -eq 0 ] && \
-  echo "       4. Về lâu dài: lắp GPU — đổi CPU mạnh hơn chỉ nhanh hơn được vài lần"
+  echo "          (mỗi lần giảm một nửa số tham số thì nhanh lên khoảng gấp đôi)"
+  echo "       2. Cài đặt AI → Tham số, đặt lại cho máy chậm:"
+  echo "            Trần ký tự tài liệu   6000 → 2500"
+  echo "            Số đoạn tham chiếu       5 → 3"
+  echo "            Cắt mỗi đoạn          1500 → 900"
+  echo "            Số lượt hội thoại cũ     3 → 2"
+  echo "            Trần độ dài trả lời    700 → 400"
+  echo "            Cửa sổ ngữ cảnh       8192 → 4096"
+  [ "$HAS_GPU" -eq 0 ] && {
+  echo "       3. Thử đặt 'Số luồng CPU cho model' = số nhân của máy ($CORES),"
+  echo "          rồi chạy lại script này xem tốc độ ĐỌC có tăng không."
+  echo "       4. Về lâu dài: lắp GPU. Đây là khác biệt bậc thang, không phải"
+  echo "          vài phần trăm — CPU mạnh hơn cũng chỉ hơn được vài lần."; }
 elif [ "$EST" -gt 45 ]; then
   warn "Chạy được nhưng còn chậm. Cân nhắc model nhẹ hơn hoặc giảm trần ký tự tài liệu."
 else

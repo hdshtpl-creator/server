@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Depends, File, Form, UploadFile
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -279,6 +279,74 @@ def chat_portal(body: ChatIn, user=Depends(current_user)):
     res["quota"] = {"used": used + 1, "limit": quota}
     res["conversation_id"] = conv
     return res
+
+
+def _sse(payload: dict) -> str:
+    """Một sự kiện Server-Sent Events. Hai dấu xuống dòng là dấu hết sự kiện."""
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+@app.post("/chat/stream")
+def chat_stream(body: ChatIn, user=Depends(current_user)):
+    """Trả lời THEO DÒNG cho cả nhân viên nội bộ lẫn khách đã đăng nhập.
+
+    Vì sao cần: máy chủ chạy CPU mất hàng chục giây mới viết xong câu trả lời.
+    Trả một cục thì người dùng nhìn màn hình trống suốt quãng đó, và nếu quá 100
+    giây thì Cloudflare cắt kết nối (lỗi 524). Trả theo dòng đẩy được byte đầu
+    tiên đi ngay khi model đọc xong ngữ cảnh — hết 524, và người dùng đọc được
+    phần đầu trong lúc phần sau đang viết.
+
+    Toàn bộ phần chuẩn bị ngữ cảnh và phân quyền dùng chung với /chat/internal
+    và /chat/portal qua rag.prepare — không có bản sao thứ hai để lệch nhau.
+    """
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    is_client = user["role"] in CLIENT_ROLES
+
+    if is_client:
+        quota = user.get("monthly_quota") or 0
+        used = user.get("used_this_month") or 0
+        if quota > 0 and used >= quota:
+            raise HTTPException(429, f"Đã hết lượt hỏi trong tháng ({used}/{quota}). "
+                                     f"Nâng cấp gói để hỏi thêm.")
+        channel, cid = "portal", user["client_id"]
+    else:
+        channel, cid = "internal", None
+
+    # Kiểm quyền hội thoại TRƯỚC khi mở dòng: lỗi ở đây phải là mã HTTP thật,
+    # không phải một sự kiện lỗi lọt vào giữa dòng dữ liệu.
+    conv = (check_conversation(user, body.conversation_id, channel)
+            if body.conversation_id
+            else rag.get_or_create_conversation(user["id"], channel, cid))
+
+    def events():
+        yield _sse({"type": "start", "conversation_id": conv})
+        try:
+            for ev in rag.answer_stream(
+                    body.question, channel, user_id=user["id"], client_id=cid,
+                    conversation_id=conv, use_temp=body.use_temp,
+                    use_method=body.use_method and not is_client,
+                    dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
+                    can_finance=user["can_finance"],
+                    role=user["role"] if is_client else None,
+                    model=None if is_client else body.model):
+                if ev.get("type") == "done" and is_client:
+                    with db.session(role="internal", admin=True) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("UPDATE users SET used_this_month=used_this_month+1 "
+                                        "WHERE id=%s", (user["id"],))
+                    ev["quota"] = {"used": (user.get("used_this_month") or 0) + 1,
+                                   "limit": user.get("monthly_quota") or 0}
+                yield _sse(ev)
+        except Exception as e:
+            # Dòng đã mở nên không trả mã lỗi HTTP được nữa; báo bằng sự kiện để
+            # giao diện hiện đúng thông báo thay vì treo im lặng.
+            yield _sse({"type": "error", "message": str(e)})
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        # Bảo nginx đừng gom phản hồi rồi mới gửi — gom là mất sạch tác dụng.
+        "X-Accel-Buffering": "no",
+    })
 
 
 def _my_channel_conv(user):
@@ -938,6 +1006,8 @@ def models_list(user=Depends(current_user)):
         "available": st.get("models", []),   # tên mọi model đã cài trên server
         # chỉ model SINH câu trả lời (loại model tạo vector) — cho bộ chọn ở ô chat
         "generation": generation_models(st.get("models", []), st.get("embed_model")),
+        # Model đang nằm sẵn trong bộ nhớ → chọn nó thì không mất thời gian nạp.
+        "loaded": st.get("loaded", []),
         "current": st.get("llm_model"),       # model mặc định đang dùng
         "current_ready": st.get("llm"),        # model mặc định có thật sự tồn tại không
         "embed_model": st.get("embed_model"),  # model tạo vector — cố định, không đổi

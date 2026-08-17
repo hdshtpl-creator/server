@@ -21,6 +21,8 @@ export interface ModelInfo {
   available: string[];
   /** Chỉ model SINH câu trả lời (đã loại model tạo vector) — cho bộ chọn ô chat. */
   generation?: string[];
+  /** Model đang nằm sẵn trong bộ nhớ — chọn nó thì không mất thời gian nạp. */
+  loaded?: string[];
   /** Model đang dùng để sinh câu trả lời (rỗng nếu theo mặc định .env). */
   current: string | null;
   /** Model đang chọn có thật sự tồn tại trên server không. */
@@ -174,6 +176,8 @@ export interface ChatMessage {
   serverMessageId?: number;
   /** Phân tích thời gian, hiện khi bấm vào đồng hồ cạnh câu trả lời. */
   timings?: ChatTimings;
+  /** Đang chảy chữ về — hiện con trỏ nhấp nháy, ẩn các nút thao tác. */
+  isStreaming?: boolean;
 }
 
 export interface Conversation {
@@ -190,6 +194,21 @@ export interface Conversation {
     filename: string;
     content: string;
   };
+}
+
+/** Một sự kiện trên dòng trả lời chảy dần (/chat/stream). */
+export interface ChatStreamEvent {
+  type: 'start' | 'meta' | 'delta' | 'done' | 'error';
+  conversation_id?: number;
+  sources?: Source[];
+  used_method?: string | null;
+  /** Mẩu chữ mới, chỉ có ở type 'delta'. */
+  text?: string;
+  message_id?: number;
+  latency_ms?: number;
+  timings?: ChatTimings;
+  quota?: { used: number; limit: number };
+  message?: string;
 }
 
 /** Kết quả tìm trong lịch sử chat của chính mình. */

@@ -216,6 +216,88 @@ export async function chatInternal({ question, conversation_id, use_temp, use_me
   });
 }
 
+/**
+ * POST /chat/stream — hỏi và nhận câu trả lời CHẢY DẦN (Server-Sent Events).
+ *
+ * Dùng cho cả nhân viên nội bộ lẫn khách đã đăng nhập; máy chủ tự chọn kênh
+ * theo vai của tài khoản. `onEvent` được gọi cho từng sự kiện:
+ *   {type:'start', conversation_id}      mở dòng
+ *   {type:'meta',  sources}              nguồn trích dẫn, biết trước khi viết
+ *   {type:'delta', text}                 một mẩu chữ
+ *   {type:'done',  message_id, timings}  viết xong, đã lưu
+ *   {type:'error', message}              lỗi giữa chừng
+ *
+ * Trả về sự kiện 'done' cuối cùng để nơi gọi dùng tiếp.
+ */
+export async function chatStream(
+  { question, conversation_id, use_temp, use_method, model },
+  onEvent
+) {
+  const payload = {
+    question,
+    conversation_id: toIntOrNull(conversation_id),
+    use_temp: Boolean(use_temp),
+    use_method: Boolean(use_method),
+    model: model || undefined,
+  };
+
+  if (useMockBackend) return mockChatStream(payload, onEvent);
+
+  let response;
+  try {
+    response = await fetch(`${apiBaseUrl}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': currentUserId,
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.warn('[HDS AI] Không kết nối được /chat/stream. Chuyển sang giả lập.', err);
+    const wasLive = !useMockBackend;
+    useMockBackend = true;
+    if (wasLive && fallbackListener) fallbackListener(apiBaseUrl);
+    return mockChatStream(payload, onEvent);
+  }
+
+  if (!response.ok || !response.body) {
+    const rawText = await response.text().catch(() => '');
+    throw new Error(parseErrorBody(rawText, response.status));
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let last = null;
+
+  // Một sự kiện SSE kết thúc bằng dòng trống. Mẩu dữ liệu từ mạng có thể cắt
+  // ngang giữa sự kiện nên phải gom đệm rồi mới tách.
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sep;
+    while ((sep = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, sep).trim();
+      buffer = buffer.slice(sep + 2);
+      if (!raw.startsWith('data:')) continue;
+      let evt;
+      try {
+        evt = JSON.parse(raw.slice(5).trim());
+      } catch {
+        continue;
+      }
+      if (evt.type === 'error') throw new Error(evt.message || 'Máy chủ báo lỗi giữa chừng.');
+      onEvent?.(evt);
+      last = evt;
+    }
+  }
+  return last;
+}
+
 // POST /chat/portal (dành cho khách hàng)
 export async function chatPortal({ question, conversation_id }) {
   return request('/chat/portal', {
@@ -865,6 +947,7 @@ let mockState = {
     min_relevance: '0.25',
     llm_num_ctx: '8192',
     llm_num_predict: '700',
+    llm_num_thread: '0',
     chat_history_turns: '3',
     llm_model: '',
     drive_map: JSON.stringify(
@@ -989,6 +1072,62 @@ let mockState = {
   ],
   nextNoteId: 600,
 };
+
+/**
+ * Giả lập luồng chảy dần: nhả từng chữ với nhịp gần giống model chạy CPU.
+ * Nhờ có bản này mà giao diện chảy chữ kiểm chứng được khi backend chưa chạy.
+ */
+async function mockChatStream(payload, onEvent) {
+  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+  const conv = toIntOrNull(payload.conversation_id) ?? mockState.persistentConvId;
+
+  onEvent?.({ type: 'start', conversation_id: conv });
+  await wait(1200); // giai đoạn model đọc ngữ cảnh — im lặng, chưa có chữ nào
+
+  onEvent?.({
+    type: 'meta',
+    sources: [
+      { n: 1, title: 'Luật Doanh nghiệp số 59/2020/QH14 (Điều 12, Điều 15)', score: 0.94, document_id: 1 },
+      { n: 2, title: 'Nghị định 01/2021/NĐ-CP về Đăng ký Doanh nghiệp', score: 0.89, document_id: 9 },
+    ],
+    used_method: null,
+  });
+
+  const text =
+    `Với câu hỏi "${payload.question}": theo Điều 12 Luật Doanh nghiệp 2020 ` +
+    'và Nghị định 01/2021/NĐ-CP, doanh nghiệp phải thông báo thay đổi tới Cơ quan ' +
+    'Đăng ký Kinh doanh trong thời hạn luật định [Nguồn 1]. Cần rà soát biên bản họp ' +
+    'và quyết định của Hội đồng thành viên trước khi nộp [Nguồn 2]. ' +
+    'Đây là bản nháp — luật sư phụ trách cần kiểm chứng lại trước khi gửi khách.';
+
+  const words = text.split(' ');
+  for (let i = 0; i < words.length; i += 1) {
+    onEvent?.({ type: 'delta', text: (i ? ' ' : '') + words[i] });
+    await wait(45);
+  }
+
+  const done = {
+    type: 'done',
+    message_id: ++mockState.nextMessageId,
+    latency_ms: 1200 + words.length * 45,
+    timings: {
+      tim_kiem_ms: 240,
+      du_lieu_cong_ty_ms: 60,
+      ai_ms: 1200 + words.length * 45,
+      load_ms: 0,
+      prefill_ms: 1200,
+      gen_ms: words.length * 45,
+      prompt_tokens: 1840,
+      gen_tokens: words.length,
+      num_ctx: 8192,
+      model: mockState.settings.llm_model || 'qwen3:8b',
+      so_doan: 2,
+      bo_qua_doan_yeu: 3,
+    },
+  };
+  onEvent?.(done);
+  return done;
+}
 
 async function handleMockRequest(endpoint, options, headers) {
   await new Promise((res) => setTimeout(res, 200));
@@ -1394,6 +1533,7 @@ Với câu hỏi "${question}":
       ollama: true,
       available: ['qwen3:8b', 'qwen2.5:14b', 'llama3.1:8b', 'bge-m3'],
       generation: ['qwen3:8b', 'qwen2.5:14b', 'llama3.1:8b'],
+      loaded: ['qwen3:8b', 'bge-m3'],
       current: mockState.settings.llm_model || 'qwen3:8b',
       current_ready: true,
       embed_model: 'bge-m3',

@@ -96,7 +96,9 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
   const [showTiming, setShowTiming] = useState(false);
 
   const canReport = !isUser && !isError && typeof message.serverMessageId === 'number';
-  const canNote = !isUser && !isError;
+  // Chỉ cho ghi chú / báo cáo khi câu trả lời đã viết xong — lưu bản dở dang
+  // vào ghi chú thì vô nghĩa.
+  const canNote = !isUser && !isError && !message.isStreaming;
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState('');
   const [sent, setSent] = useState<null | 'good' | 'bad'>(null);
@@ -261,6 +263,13 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             }`}
           >
             {message.text}
+            {/* Con trỏ nhấp nháy trong lúc chữ còn đang chảy về */}
+            {message.isStreaming && (
+              <span
+                className="inline-block w-[2px] h-[1em] align-text-bottom ml-0.5 bg-hds-navy dark:bg-blue-400 animate-pulse"
+                aria-label="Đang viết"
+              />
+            )}
           </div>
 
           {!isUser && message.sources && message.sources.length > 0 && (

@@ -221,8 +221,53 @@ Lượng tài liệu đã học **không** nằm trong công thức: tra cứu v
 đúng `top_k` đoạn, nên kho phình từ 100 lên 1 triệu tài liệu cũng không làm câu
 trả lời chậm thêm.
 
+### Trả lời chảy dần (streaming)
+
+Khung chat hiện chữ ngay khi model viết ra, thay vì chờ xong cả bài. Không làm
+máy nhanh hơn một mili-giây nào, nhưng đổi hẳn cảm giác chờ — và **chấm dứt lỗi
+524**, vì Cloudflare tính giờ từ byte đầu tiên của phản hồi chứ không phải byte
+cuối.
+
+Đường đi: `POST /chat/stream` (Server-Sent Events) → nginx → Cloudflare → trình
+duyệt. Mắt xích dễ hỏng nhất là **nginx gom phản hồi**; `deploy/update.sh` tự vá
+`proxy_buffering off` vào cấu hình cũ, có sao lưu và tự hoàn tác nếu `nginx -t`
+báo sai.
+
+Kiểm tra streaming có thật sự tới trình duyệt không:
+
+```bash
+curl -N -X POST https://app.diginix.io.vn/api/chat/stream \
+  -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
+  -d '{"question":"thời hiệu khởi kiện là bao lâu"}'
+```
+
+Chữ phải hiện dần từng dòng `data: {...}`. Nếu im lặng rồi đổ ra một lượt thì
+còn chỗ nào đó đang đệm — kiểm `proxy_buffering` trong
+`/etc/nginx/sites-available/hds-ai`.
+
+Ba kênh cũ (`/chat/internal`, `/chat/portal`, `/chat/public`) vẫn giữ nguyên, trả
+một cục như trước — dành cho khách gọi qua API.
+
+### Nạp lại model — cái bẫy hay bị bỏ sót
+
+Mỗi câu hỏi dùng **hai** model: `bge-m3` hiểu câu hỏi, rồi model kia viết câu trả
+lời. Nếu bộ nhớ không chứa nổi cả hai, Ollama đẩy cái này ra để nạp cái kia — và
+lặp lại ở câu sau. Khi đó `keep_alive` đặt bao lâu cũng vô nghĩa. Mục 4 của script
+kiểm tra đúng điều này.
+
+Ứng dụng gửi `keep_alive=30m` mỗi lần gọi nên model nằm lại 30 phút sau lần dùng
+cuối. Muốn giữ lâu hơn (máy dư RAM), đặt biến môi trường trước khi chạy backend:
+
+```bash
+OLLAMA_KEEP_ALIVE=-1   # giữ mãi, chỉ nên dùng khi RAM chứa được cả hai model
+```
+
+Trong ô chọn model ở khung chat, `●` là model đang nằm sẵn (trả lời được ngay),
+`○` là model phải nạp từ ổ cứng trước.
+
 Trong khung chat, bấm vào con số thời gian cạnh mỗi câu trả lời để xem thời gian
-đi vào chặng nào. Xem lại các câu chậm đã qua:
+đi vào chặng nào — dòng **Nạp model** chính là chi phí nạp lại. Xem lại các câu
+chậm đã qua:
 
 ```bash
 sudo journalctl -u hds-ai-backend -n 200 | grep CHAM

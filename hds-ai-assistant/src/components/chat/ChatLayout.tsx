@@ -27,6 +27,7 @@ export const ChatLayout: React.FC = () => {
     activeConversation,
     activeConvId,
     addMessageToConv,
+    updateMessage,
     setConvServerId,
     setConvTempFile,
     currentUser,
@@ -36,6 +37,7 @@ export const ChatLayout: React.FC = () => {
   const [useMethod, setUseMethod] = useState(false);
   const [methodTemplates, setMethodTemplates] = useState<MethodTemplate[]>([]);
   const [genModels, setGenModels] = useState<string[]>([]);
+  const [warmModels, setWarmModels] = useState<string[]>([]);
   // 'auto' = tự chọn model phù hợp; '' = mặc định máy chủ; hoặc tên model cụ thể
   const [selectedModel, setSelectedModel] = useState('auto');
   const [isLoading, setIsLoading] = useState(false);
@@ -65,8 +67,14 @@ export const ChatLayout: React.FC = () => {
     // Danh sách model để chọn ngay ô chat (chỉ nhân viên nội bộ)
     api
       .getModels()
-      .then((m) => setGenModels(Array.isArray(m?.generation) ? m.generation : []))
-      .catch(() => setGenModels([]));
+      .then((m) => {
+        setGenModels(Array.isArray(m?.generation) ? m.generation : []);
+        setWarmModels(Array.isArray(m?.loaded) ? m.loaded : []);
+      })
+      .catch(() => {
+        setGenModels([]);
+        setWarmModels([]);
+      });
   }, [isClient]);
 
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -89,43 +97,76 @@ export const ChatLayout: React.FC = () => {
     });
 
     setIsLoading(true);
+    // Ô trống cho câu trả lời, chữ sẽ chảy dần vào đây.
+    const aiMsgId = `ai-${Date.now()}`;
+    let opened = false;
+
     try {
-      const response = isClient
-        ? await api.chatPortal({ question: questionText, conversation_id: serverConvId ?? null })
-        : await api.chatInternal({
-            question: questionText,
-            conversation_id: serverConvId ?? null,
-            use_temp: Boolean(tempFileName),
-            use_method: useMethod,
-            model: selectedModel,
-          });
-
-      // Ghi nhớ mã hội thoại do backend cấp để các lượt sau nối đúng ngữ cảnh
-      if (response.conversation_id) {
-        setConvServerId(activeConvId, response.conversation_id);
-      }
-      if (response.quota) setQuota(response.quota);
-
-      addMessageToConv(activeConvId, {
-        id: `ai-${Date.now()}`,
-        sender: 'ai',
-        text: response.answer,
-        sources: response.sources,
-        timestamp: nowLabel(),
-        latency_ms: response.latency_ms,
-        serverMessageId: response.message_id,
-        timings: response.timings,
-      });
+      await api.chatStream(
+        {
+          question: questionText,
+          conversation_id: serverConvId ?? null,
+          use_temp: Boolean(tempFileName),
+          use_method: useMethod && !isClient,
+          model: isClient ? undefined : selectedModel,
+        },
+        (evt) => {
+          if (evt.type === 'start' && evt.conversation_id) {
+            // Ghi nhớ mã hội thoại do backend cấp để các lượt sau nối đúng ngữ cảnh
+            setConvServerId(activeConvId, evt.conversation_id);
+            return;
+          }
+          if (evt.type === 'meta') {
+            // Chữ đầu tiên sắp tới: dựng bong bóng và tắt chỉ báo "đang trả lời"
+            addMessageToConv(activeConvId, {
+              id: aiMsgId,
+              sender: 'ai',
+              text: '',
+              sources: evt.sources,
+              timestamp: nowLabel(),
+              isStreaming: true,
+            });
+            opened = true;
+            setIsLoading(false);
+            return;
+          }
+          if (evt.type === 'delta' && evt.text) {
+            const piece = evt.text;
+            updateMessage(aiMsgId, (m) => ({ ...m, text: m.text + piece }));
+            return;
+          }
+          if (evt.type === 'done') {
+            if (evt.quota) setQuota(evt.quota);
+            updateMessage(aiMsgId, (m) => ({
+              ...m,
+              isStreaming: false,
+              latency_ms: evt.latency_ms,
+              serverMessageId: evt.message_id,
+              timings: evt.timings,
+            }));
+          }
+        }
+      );
     } catch (err: any) {
       const errMsg = err?.message || 'Có lỗi xảy ra khi hỏi AI.';
       setErrorMessage(errMsg);
-      addMessageToConv(activeConvId, {
-        id: `err-${Date.now()}`,
-        sender: 'ai',
-        text: errMsg,
-        timestamp: nowLabel(),
-        isError: true,
-      });
+      if (opened) {
+        // Đứt giữa chừng: giữ lại phần đã viết, ghi rõ là chưa trọn vẹn — xoá
+        // đi thì người dùng mất luôn phần nội dung có thể vẫn dùng được.
+        updateMessage(aiMsgId, (m) => ({
+          ...m,
+          isStreaming: false,
+          text: `${m.text}\n\n_(Câu trả lời bị ngắt giữa chừng: ${errMsg})_`,
+        }));
+      } else {
+        addMessageToConv(activeConvId, {
+          id: `err-${Date.now()}`,
+          sender: 'ai',
+          text: errMsg,
+          timestamp: nowLabel(),
+          isError: true,
+        });
+      }
     } finally {
       setIsLoading(false);
       textareaRef.current?.focus();
@@ -347,13 +388,15 @@ export const ChatLayout: React.FC = () => {
                       value={selectedModel}
                       onChange={(e) => setSelectedModel(e.target.value)}
                       aria-label="Chọn mô hình AI"
-                      title="Mô hình trả lời — Tự động: câu đơn giản dùng model nhanh"
-                      className="bg-transparent text-slate-500 dark:text-slate-400 font-semibold border border-slate-200 dark:border-slate-700 rounded-lg px-1.5 py-0.5 focus:ring-2 focus:ring-hds-blue focus:outline-none cursor-pointer max-w-[130px]"
+                      title="Mô hình trả lời — Tự động ưu tiên model đang sẵn trong bộ nhớ"
+                      className="bg-transparent text-slate-500 dark:text-slate-400 font-semibold border border-slate-200 dark:border-slate-700 rounded-lg px-1.5 py-0.5 focus:ring-2 focus:ring-hds-blue focus:outline-none cursor-pointer max-w-[190px]"
                     >
                       <option value="auto">⚡ Tự động</option>
+                      {/* Dấu ● = model đang nằm sẵn trong bộ nhớ, trả lời được
+                          ngay. Dấu ○ = phải nạp vài GB từ ổ cứng trước đã. */}
                       {genModels.map((m) => (
                         <option key={m} value={m}>
-                          {m}
+                          {warmModels.includes(m) ? `● ${m}` : `○ ${m} (phải nạp)`}
                         </option>
                       ))}
                     </select>

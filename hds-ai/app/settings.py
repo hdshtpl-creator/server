@@ -62,6 +62,9 @@ DEFAULTS = {
     #                     ≈ 4000 token → 8192 là vừa đủ thoáng.
     "llm_num_ctx": "8192",
     "llm_num_predict": "700",        # trần số token sinh ra = trần thời gian
+    # Số luồng CPU cho model. 0 = để Ollama tự quyết (đúng cho máy có GPU).
+    # Máy chạy CPU đôi khi nhanh hơn khi khai đúng số nhân — thử rồi đo lại.
+    "llm_num_thread": "0",
     # Số lượt hỏi-đáp cũ đưa lại vào ngữ cảnh để bot hiểu "vụ đó", "khách kia".
     # Đặt 0 là tắt bộ nhớ hội thoại (mỗi câu hỏi độc lập).
     "chat_history_turns": "3",

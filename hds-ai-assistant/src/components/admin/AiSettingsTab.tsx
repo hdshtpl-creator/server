@@ -353,6 +353,14 @@ const PARAM_FIELDS: FieldDef[] = [
     max: 32768,
     step: 1024,
   },
+  {
+    key: 'llm_num_thread',
+    label: 'Số luồng CPU cho model',
+    hint: 'Chỉ có tác dụng với máy chạy CPU. 0 = để Ollama tự quyết. Đổi xong hãy Đo tốc độ lại để biết có nhanh hơn thật không.',
+    kind: 'number',
+    min: 0,
+    max: 128,
+  },
 ];
 
 export const AiSettingsTab: React.FC = () => {
