@@ -34,11 +34,25 @@ RAM_FREE=$(awk '/MemAvailable/ {printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev
 echo "  CPU: $CORES nhân · RAM: ${RAM_GB}GB (còn trống ${RAM_FREE}GB)"
 
 HAS_GPU=0
+# Phân biệt ba trạng thái: (a) GPU chạy tốt, (b) CÓ card nhưng driver hỏng —
+# sửa được, không cần mua, (c) không có card nào. Nhầm (b) thành (c) là bỏ lỡ
+# cú tăng tốc lớn nhất mà lại miễn phí.
+GPU_HW="$(lspci 2>/dev/null | grep -iE 'vga|3d|display' | grep -i nvidia || true)"
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
   HAS_GPU=1
-  ok "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | paste -sd'; ')"
+  ok "GPU NVIDIA hoạt động: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | paste -sd'; ')"
+elif [ -n "$GPU_HW" ]; then
+  bad "CÓ card NVIDIA nhưng DRIVER ĐANG LỖI — model buộc chạy CPU (chậm)."
+  echo "     Phần cứng phát hiện được: $GPU_HW"
+  echo "     Đây là lỗi driver phần mềm, KHÔNG phải thiếu GPU. Sửa xong sẽ nhanh"
+  echo "     gấp hàng chục lần mà không tốn tiền mua card. Thử theo thứ tự:"
+  echo "       1. Khởi động lại (rẻ nhất, thường đủ):   sudo reboot"
+  echo "       2. Còn lỗi thì cài lại driver:            sudo ubuntu-drivers autoinstall && sudo reboot"
+  echo "       3. Secure Boot chặn driver không:         mokutil --sb-state"
+  echo "       4. Xem lỗi cụ thể của card:               sudo dmesg | grep -i nvidia | tail"
+  echo "     Sau khi nvidia-smi chạy được, Ollama TỰ dùng GPU — không cần chỉnh gì."
 else
-  bad "KHÔNG có GPU NVIDIA dùng được → model chạy bằng CPU."
+  bad "KHÔNG tìm thấy card NVIDIA nào → model chạy bằng CPU."
   echo "     Đây thường là nguyên nhân gốc của mọi thứ chậm bên dưới."
 fi
 

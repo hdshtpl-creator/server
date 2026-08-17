@@ -10,6 +10,7 @@ Hỗ trợ thêm:
 """
 import json
 import time
+from datetime import date
 
 from app import company_context, db, settings
 from app.models import embed, llm
@@ -155,7 +156,12 @@ def fit_context(chunks, chunk_chars=None, budget=None):
 
 def build_prompt(question, chunks, temp_chunks=None, method=None,
                  company="", history=None, chunk_chars=None, budget=None):
-    parts = []
+    # Model KHÔNG tự biết hôm nay là ngày nào. Không nói cho nó thì nó đọc "hợp
+    # đồng đến 01/08/2024" mà tưởng còn hiệu lực, dù thực tế đã qua 2 năm. Đây
+    # là mốc để nó phán đoán còn hạn / đã hết hạn / quá hạn.
+    parts = [f"HÔM NAY LÀ NGÀY {date.today().isoformat()}. Mọi so sánh về thời "
+             "hạn, ngày hết hạn, còn hiệu lực hay đã quá hạn đều lấy ngày này "
+             "làm hiện tại: ngày kết thúc đã trôi qua nghĩa là ĐÃ HẾT HẠN.\n"]
     if method:
         parts.append(f"QUY TRÌNH PHÂN TÍCH (loại: {method['case_type']}):\n{method['steps']}\n"
                      "Hãy phân tích theo đúng quy trình trên.\n")
@@ -185,7 +191,11 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
         parts.append("")
     parts.append(f"CÂU HỎI HIỆN TẠI: {question}\n"
                  "Nếu đây là câu nói lại/chỉnh lại câu trước, hiểu theo diễn biến ở "
-                 "trên và trả lời luôn. Ghi rõ [Nguồn n] khi dùng thông tin từ tài liệu.")
+                 "trên và trả lời luôn. Ghi rõ [Nguồn n] khi dùng thông tin từ tài liệu. "
+                 "Khi câu hỏi liên quan hiệu lực/thời hạn (hợp đồng còn hạn không, ai "
+                 "còn hợp đồng, vụ nào quá hạn), TỰ so từng ngày kết thúc trong tài liệu "
+                 "với HÔM NAY ở đầu prompt: ngày kết thúc đã qua = ĐÃ HẾT HẠN, ĐỪNG coi "
+                 "là còn hiệu lực. Nói rõ hợp đồng nào còn, hợp đồng nào đã hết và hết từ khi nào.")
     if company:
         parts.append("Phần DỮ LIỆU CÔNG TY là số liệu thực tế trong hệ thống — dùng trực tiếp, "
                      "không cần ghi [Nguồn]. Nêu rõ ngày/hạn khi trả lời về tiến độ vụ việc.")
