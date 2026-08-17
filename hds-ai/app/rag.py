@@ -175,7 +175,10 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
         parts.append("TÀI LIỆU THAM KHẢO:")
         for i, c in enumerate(all_ctx, 1):
             parts.append(f"[Nguồn {i}] {c.get('title','')}\n{c['content']}\n")
-    else:
+    elif not company:
+        # Chỉ báo "không có tài liệu" khi cũng KHÔNG có dữ liệu công ty. Câu hỏi
+        # đếm khách/nhân sự cố tình không tra tài liệu — lúc đó dòng này thừa và
+        # dễ khiến model do dự dù đã có sẵn con số trong DỮ LIỆU CÔNG TY.
         parts.append("(Không tìm thấy tài liệu liên quan trong kho.)")
     parts.append(f"\nCÂU HỎI: {question}\n"
                  "Trả lời dựa trên tài liệu tham khảo, ghi rõ [Nguồn n] khi dùng thông tin.")
@@ -324,17 +327,26 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         timings[key] = int((now - clock[0]) * 1000)
         clock[0] = now
 
-    chunks = retrieve(question, channel, client_id, dept_ids=dept_ids, is_banqt=is_banqt,
-                      top_k=_num("retrieval_top_k", TOP_K, int), can_finance=can_finance,
-                      doc_types=doc_types)
-    # Đoạn điểm thấp là đoạn không liên quan tới câu hỏi: nó không giúp câu trả
-    # lời mà vẫn ngốn thời gian đọc prompt. Câu hỏi ngoài phạm vi kho tài liệu
-    # (vd hỏi về nhân sự công ty) nhờ vậy đi thẳng, không phải cõng 5 đoạn luật.
-    min_score = _num("min_relevance", MIN_SCORE, float)
-    kept = [c for c in chunks if c["score"] >= min_score]
-    timings["bo_qua_doan_yeu"] = len(chunks) - len(kept)
-    chunks = kept
-    tick("tim_kiem_ms")
+    # Câu hỏi ĐẾM/LIỆT KÊ danh bạ công ty (mấy khách, bao nhiêu nhân viên) trả
+    # lời hoàn toàn từ CSDL — bỏ hẳn bước tra tài liệu. Không bỏ thì vector kéo
+    # về hợp đồng lao động, đơn nghỉ phép… vừa hiện làm 'nguồn' sai, vừa làm
+    # chậm. Bỏ được khâu này cũng khiến loại câu hỏi này trả lời gần như tức thì.
+    if channel == "internal" and company_context.is_directory_query(question):
+        chunks = []
+        timings["bo_qua_doan_yeu"] = 0
+        timings["bo_tra_tai_lieu"] = True
+        tick("tim_kiem_ms")
+    else:
+        chunks = retrieve(question, channel, client_id, dept_ids=dept_ids, is_banqt=is_banqt,
+                          top_k=_num("retrieval_top_k", TOP_K, int), can_finance=can_finance,
+                          doc_types=doc_types)
+        # Đoạn điểm thấp là đoạn không liên quan tới câu hỏi: nó không giúp câu
+        # trả lời mà vẫn ngốn thời gian đọc prompt.
+        min_score = _num("min_relevance", MIN_SCORE, float)
+        kept = [c for c in chunks if c["score"] >= min_score]
+        timings["bo_qua_doan_yeu"] = len(chunks) - len(kept)
+        chunks = kept
+        tick("tim_kiem_ms")
 
     temp_chunks = get_temp_context(conversation_id, question) if (use_temp and conversation_id) else None
     method = find_method(question) if use_method else None

@@ -235,6 +235,22 @@ def _staff_intent(q_folded: str) -> bool:
     return any(w in q_folded for w in STAFF_WORDS)
 
 
+def is_directory_query(question: str) -> bool:
+    """Câu hỏi ĐẾM / LIỆT KÊ danh bạ của chính công ty — bao nhiêu khách, bao
+    nhiêu nhân viên, danh sách phòng ban…
+
+    Loại câu này trả lời hoàn toàn từ dữ liệu có cấu trúc trong CSDL. Đưa thêm
+    tài liệu tìm bằng vector vào chỉ có hại: câu 'HDS có mấy khách' sẽ lôi về
+    hợp đồng lao động, đơn nghỉ phép — vừa hiện làm 'nguồn' sai lệch, vừa dễ
+    khiến model trả lời theo mớ tài liệu đó thay vì con số thật.
+
+    KHÔNG gộp câu hỏi về hạn/cảnh báo vào đây: câu về hạn đôi khi vẫn kèm chủ
+    đề cụ thể cần tài liệu (vd 'cảnh báo gì về hợp đồng thuê đất').
+    """
+    q = _fold(question)
+    return _roster_intent(q) or _staff_intent(q)
+
+
 def _staff_block(cur, is_banqt):
     """Quân số và cơ cấu phòng ban của HDS.
 
@@ -304,9 +320,12 @@ def _roster_block(cur, dept_ids, is_banqt, limit=60):
                        WHERE c.department_id = ANY(%s) OR c.department_id IS NULL
                        ORDER BY c.name LIMIT %s""", (dept_ids or [-1], limit))
     rows = cur.fetchall()
+    # Ban QT thấy toàn công ty; người khác chỉ thấy khách phòng mình. Ghi rõ
+    # phạm vi để bot không trả lời con số của một phòng như thể là của cả HDS.
+    scope = "toàn công ty" if is_banqt else "trong phạm vi phòng bạn phụ trách"
     if not rows:
-        return ["### Danh sách khách hàng: hệ thống chưa có khách nào trong phạm vi bạn phụ trách."]
-    out = [f"### Khách hàng trong hệ thống ({len(rows)} khách):"]
+        return [f"### Danh sách khách hàng: chưa có khách nào {scope}."]
+    out = [f"### Khách hàng ({scope}) — {len(rows)} khách:"]
     for name, code, dept in rows:
         bits = f"  · {name}" + (f" [mã {code}]" if code else "")
         if dept:
