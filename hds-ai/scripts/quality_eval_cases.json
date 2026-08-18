@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "offline": {
+    "intents": [
+      {
+        "id": "intent_staff_nv",
+        "question": "hds có bao nhiêu nv",
+        "expected": "staff_directory"
+      },
+      {
+        "id": "intent_staff_company_people",
+        "question": "cty tôi có mấy người",
+        "expected": "staff_directory"
+      },
+      {
+        "id": "intent_employment_contract",
+        "question": "có bao nhiêu người trong HDS còn hợp đồng",
+        "expected": "employment_contract"
+      },
+      {
+        "id": "intent_software_accounts",
+        "question": "HDS có bao nhiêu tài khoản nội bộ đang hoạt động",
+        "expected": "account_directory"
+      },
+      {
+        "id": "intent_client_roster",
+        "question": "HDS đang có bao nhiêu khách hàng",
+        "expected": "client_roster"
+      },
+      {
+        "id": "intent_document_question_not_forced",
+        "question": "Phân tích Điều 12 Luật Doanh nghiệp",
+        "expected": null
+      }
+    ],
+    "followups": [
+      {
+        "id": "followup_staff_from_state",
+        "question": "chi tiết từng cá nhân",
+        "state": {
+          "intent": "staff_directory",
+          "last_question": "cty tôi có mấy người"
+        },
+        "expected_intent": "staff_directory"
+      },
+      {
+        "id": "followup_staff_from_history",
+        "question": "còn ai nữa",
+        "history": [
+          ["user", "HDS có bao nhiêu nhân viên"],
+          ["assistant", "Đang trả lời về sổ nhân sự HDS."]
+        ],
+        "expected_intent": "staff_directory"
+      },
+      {
+        "id": "followup_contract_correction_from_state",
+        "question": "tôi hỏi người còn hợp đồng mà",
+        "state": {
+          "intent": "employment_contract",
+          "last_question": "có bao nhiêu người trong HDS còn hợp đồng"
+        },
+        "expected_intent": "employment_contract"
+      },
+      {
+        "id": "followup_retrieval_rewrite",
+        "question": "chi tiết từng cá nhân",
+        "history": [
+          ["user", "cty tôi có mấy người"],
+          ["assistant", "Hệ thống chưa có sổ nhân sự."]
+        ],
+        "rewrite_contains": [
+          "cty tôi có mấy người",
+          "chi tiết từng cá nhân"
+        ]
+      },
+      {
+        "id": "new_question_not_polluted",
+        "question": "Phân tích Điều 12 Luật Doanh nghiệp",
+        "history": [
+          ["user", "khách SUNGROUP có vụ nào"]
+        ],
+        "rewrite_equals_question": true
+      }
+    ],
+    "citations": [
+      {
+        "id": "citation_valid",
+        "text": "Điều 1 quy định nội dung A. [Nguồn 1]",
+        "source_count": 2,
+        "answer_mode": "grounded",
+        "strict": true,
+        "expected_status": "verified",
+        "output_contains": ["[Nguồn 1]"]
+      },
+      {
+        "id": "citation_fake_is_blocked",
+        "text": "Nội dung tự tạo. [Nguồn 9]",
+        "source_count": 2,
+        "answer_mode": "grounded",
+        "strict": true,
+        "expected_status": "uncited_blocked",
+        "output_excludes": ["Nguồn 9"]
+      },
+      {
+        "id": "citation_missing_is_blocked",
+        "text": "Một kết luận không có nguồn.",
+        "source_count": 2,
+        "answer_mode": "grounded",
+        "strict": true,
+        "expected_status": "uncited_blocked",
+        "output_contains": ["đã chặn"]
+      },
+      {
+        "id": "citation_structured_not_required",
+        "text": "Có 3 khách hàng.",
+        "source_count": 0,
+        "answer_mode": "structured",
+        "strict": true,
+        "expected_status": "verified",
+        "output_equals_input": true
+      },
+      {
+        "id": "citation_mixed_missing_is_flagged",
+        "text": "Thông tin kết hợp nhưng chưa gắn nguồn.",
+        "source_count": 2,
+        "answer_mode": "mixed",
+        "strict": true,
+        "expected_status": "uncited"
+      }
+    ]
+  },
+  "live": {
+    "direct": [
+      {
+        "id": "live_client_count",
+        "question": "HDS đang có bao nhiêu khách hàng?",
+        "expected_modes": ["structured"],
+        "expected_grounding": ["verified"],
+        "answer_contains_any": ["khách hàng"],
+        "source_locator_contains_any": ["clients"]
+      },
+      {
+        "id": "live_staff_count",
+        "question": "HDS có bao nhiêu nhân viên?",
+        "expected_modes": ["structured", "insufficient_evidence"],
+        "expected_grounding": ["verified", "insufficient"],
+        "answer_contains_any": ["nhân sự", "người lao động", "sổ nhân sự"],
+        "source_locator_contains_any": ["employees"]
+      },
+      {
+        "id": "live_employment_contract_count",
+        "question": "Có bao nhiêu người trong HDS còn hợp đồng lao động?",
+        "expected_modes": ["structured", "insufficient_evidence"],
+        "expected_grounding": ["verified", "insufficient"],
+        "answer_contains_any": ["hđlđ", "hợp đồng", "sổ nhân sự"],
+        "source_locator_contains_any": ["employment_contracts", "employees"]
+      },
+      {
+        "id": "live_active_software_accounts",
+        "question": "Hệ thống có bao nhiêu tài khoản nội bộ đang hoạt động?",
+        "expected_modes": ["structured"],
+        "expected_grounding": ["verified"],
+        "answer_contains_any": ["tài khoản"],
+        "source_locator_contains_any": ["users.active"]
+      }
+    ],
+    "followup": {
+      "id": "live_staff_followup",
+      "first_question": "HDS có bao nhiêu nhân viên?",
+      "followup_question": "chi tiết từng cá nhân",
+      "expected_modes": ["structured", "insufficient_evidence"],
+      "expected_grounding": ["verified", "insufficient"],
+      "answer_contains_any": ["nhân sự", "người lao động", "sổ nhân sự"],
+      "source_locator_contains_any": ["employees"]
+    },
+    "retrieval": {
+      "id": "live_selected_source_retrieval",
+      "question_template": "Dựa riêng trên tài liệu đã chọn, hãy tóm tắt 3 ý chính của tài liệu “{title}” và gắn nguồn cho từng ý.",
+      "expected_modes": ["grounded", "mixed"],
+      "expected_grounding": ["verified"]
+    }
+  }
+}

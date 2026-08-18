@@ -39,25 +39,38 @@ def is_thinking_model(name: str) -> bool:
     return any(k in (name or "").lower() for k in THINKING_MODELS)
 
 
-def embed(texts, batch_size: int = 16):
+def embed(texts, batch_size: int = 16, stats: dict | None = None):
     single = isinstance(texts, str)
     if single:
         texts = [texts]
     if not texts:
         return []
     out = []
+    load_ns = total_ns = prompt_tokens = 0
     for i in range(0, len(texts), batch_size):
         r = requests.post(f"{OLLAMA_URL}/api/embed",
                           json={"model": EMBED_MODEL, "input": texts[i:i + batch_size],
                                 "keep_alive": KEEP_ALIVE}, timeout=300)
         r.raise_for_status()
-        vecs = r.json().get("embeddings")
+        data = r.json()
+        vecs = data.get("embeddings")
         if not vecs:
             raise RuntimeError(f"Ollama không trả vector. Tải model: ollama pull {EMBED_MODEL}")
         out.extend(vecs)
+        load_ns += data.get("load_duration") or 0
+        total_ns += data.get("total_duration") or 0
+        prompt_tokens += data.get("prompt_eval_count") or 0
     if out and len(out[0]) != EMBED_DIM:
         raise RuntimeError(f"Model trả {len(out[0])} chiều, cấu hình EMBED_DIM={EMBED_DIM}. "
                            f"Sửa .env và cột vector({EMBED_DIM}) trong schema.sql cho khớp.")
+    if stats is not None:
+        stats.update({
+            "embed_model": EMBED_MODEL,
+            "embed_load_ms": int(load_ns / 1_000_000),
+            "embed_total_ms": int(total_ns / 1_000_000),
+            "embed_tokens": prompt_tokens,
+            "embed_batches": (len(texts) + batch_size - 1) // batch_size,
+        })
     return out[0] if single else out
 
 
@@ -119,7 +132,8 @@ def loaded_models() -> list:
         return []
 
 
-def auto_pick_model(question: str) -> str:
+def auto_pick_model(question: str, configured_model: str | None = None,
+                    quality_required: bool = False) -> str:
     """'Tự động' — chọn model theo hai nguyên tắc, xếp theo thứ tự ưu tiên:
 
     1. ƯU TIÊN MODEL ĐANG NÓNG. Đổi model tốn một lần nạp lại từ ổ cứng (vài
@@ -132,7 +146,13 @@ def auto_pick_model(question: str) -> str:
 
     Câu hỏi phức tạp luôn dùng đúng model admin đã đặt, chấp nhận nạp lại nếu cần.
     """
-    configured = effective_llm_model()
+    configured = configured_model or effective_llm_model()
+    # Các câu đếm/chào hỏi đã được fast-path trả trực tiếp trước khi tới đây.
+    # Phần còn lại là tra cứu/phân tích tài liệu, nơi tự hạ 8B xuống 4B làm tăng
+    # nguy cơ bỏ citation và hiểu sai điều khoản. Auto lúc này ưu tiên chất lượng
+    # đã được admin kiểm thử; người dùng vẫn có thể chọn tay model nhẹ nếu muốn.
+    if quality_required:
+        return configured
     up, names = check_ollama()
     if not up or not names:
         return configured

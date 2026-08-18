@@ -102,6 +102,11 @@ hồ sơ 360° và cho Lớp 3 sau này (thời hiệu, timeline, án lệ).
 - **Học câu trả lời hay:** dashboard → Duyệt hội thoại → "Đạt".
 - **Học cách phân tích:** dashboard → Mẫu phương pháp. Hỏi kèm `use_method:true`.
 
+Đồng bộ Drive nhận PDF, DOCX, DOC, TXT, MD, XLSX, CSV và Google Docs/Sheets. File
+mới mặc định chờ duyệt; chỉ bật `AUTO_LEARN_AUTO_APPROVE=1` sau khi đã kiểm tra chất
+lượng trích xuất. File có cảnh báo (OCR, nội dung quá ngắn, bảng bị giới hạn, sheet ẩn)
+vẫn chờ duyệt để không đưa dữ liệu thiếu/sai vào câu trả lời.
+
 ---
 
 ## Hạn mức khách

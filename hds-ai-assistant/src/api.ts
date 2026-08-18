@@ -26,6 +26,9 @@ import type {
   ChatStreamEvent,
   ConversationSummary,
   Note,
+  DraftDocument,
+  DraftCreateInput,
+  DraftTemplate,
 } from './types';
 
 export const setUserId = ApiJs.setUserId as (id: string | number) => void;
@@ -38,7 +41,7 @@ export const getDefaultApiBaseUrl = ApiJs.getDefaultApiBaseUrl as () => string;
 export const setUseMockMode = ApiJs.setUseMockMode as (enabled: boolean) => void;
 export const getUseMockMode = ApiJs.getUseMockMode as () => boolean;
 
-/** Được gọi khi api.js tự rơi về chế độ giả lập vì không kết nối được backend. */
+/** Báo lỗi kết nối; api.js không tự chuyển sang dữ liệu giả lập. */
 export const onMockFallback = ApiJs.onMockFallback as (
   listener: ((baseUrl: string) => void) | null
 ) => void;
@@ -65,6 +68,7 @@ export const chatInternal = ApiJs.chatInternal as (params: {
   use_method?: boolean;
   /** '' = mặc định máy chủ | 'auto' | tên model cụ thể */
   model?: string;
+  source_document_ids?: number[];
 }) => Promise<ChatResponse>;
 
 export const chatStream = ApiJs.chatStream as (
@@ -74,6 +78,7 @@ export const chatStream = ApiJs.chatStream as (
     use_temp?: boolean;
     use_method?: boolean;
     model?: string;
+    source_document_ids?: number[];
   },
   onEvent: (evt: ChatStreamEvent) => void
 ) => Promise<ChatStreamEvent | null>;
@@ -246,6 +251,44 @@ export const reviewFeedback = ApiJs.reviewFeedback as (
     access_level?: string;
   }
 ) => Promise<{ ok?: boolean; feedback_id?: number; action?: string; document_id?: number }>;
+
+// ---------- Soạn tài liệu ----------
+export const listDrafts = ApiJs.listDrafts as () => Promise<DraftDocument[]>;
+
+export const listDraftTemplates = ApiJs.listDraftTemplates as () => Promise<DraftTemplate[]>;
+
+export const getDraft = ApiJs.getDraft as (draftId: number) => Promise<DraftDocument>;
+
+export const createDraft = ApiJs.createDraft as (
+  data: DraftCreateInput
+) => Promise<DraftDocument & { ok?: boolean; draft_id?: number }>;
+
+export const generateDraft = ApiJs.generateDraft as (
+  draftId: number,
+  data?: { instructions?: string }
+) => Promise<DraftDocument & { ok?: boolean }>;
+
+export const reviseDraft = ApiJs.reviseDraft as (
+  draftId: number,
+  data: {
+    instructions?: string;
+    content_markdown?: string;
+    source_document_ids?: number[];
+    input_data?: Record<string, unknown>;
+    model?: string;
+    change_note?: string;
+  }
+) => Promise<DraftDocument & { ok?: boolean }>;
+
+export const approveDraft = ApiJs.approveDraft as (
+  draftId: number,
+  data?: { note?: string; allow_placeholders?: boolean; confirm_needs_review?: boolean }
+) => Promise<DraftDocument & { ok?: boolean }>;
+
+export const exportDraft = ApiJs.exportDraft as (
+  draftId: number,
+  filename?: string
+) => Promise<void>;
 
 // ---------- Tệp ----------
 export const uploadDocument = ApiJs.uploadDocument as (params: {

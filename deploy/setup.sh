@@ -162,6 +162,12 @@ OLLAMA_URL=http://localhost:11434
 LLM_MODEL=qwen3:8b
 EMBED_MODEL=bge-m3
 EMBED_DIM=1024
+OLLAMA_KEEP_ALIVE=30m
+
+DB_POOL_MAX=12
+DB_ADMIN_POOL_MAX=4
+DB_POOL_TIMEOUT=10
+SETTINGS_CACHE_SECONDS=2
 
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
@@ -199,9 +205,11 @@ c_info "5/8  Cài thư viện Python & nạp CSDL"
 if [ ! -f "$BACKEND_DIR/requirements.txt" ]; then
   cat > "$BACKEND_DIR/requirements.txt" <<'REQ'
 psycopg[binary]==3.2.3
+psycopg_pool==3.2.4
 python-dotenv==1.0.1
 requests==2.32.3
 python-docx==1.1.2
+openpyxl==3.1.5
 pypdf==5.1.0
 pdfplumber==0.11.4
 pytesseract==0.3.13

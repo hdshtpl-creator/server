@@ -2,6 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import type { User, Conversation, ChatMessage, Note, ConversationSummary } from '../types';
 import * as api from '../api';
 
+const MOCK_MODE_ALLOWED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_MOCK_MODE === 'true';
+
 interface Toast {
   id: string;
   type: 'success' | 'error' | 'info';
@@ -23,8 +25,8 @@ interface AppContextType {
   reloadUsers: () => Promise<void>;
 
   // Điều hướng
-  activeView: 'chat' | 'admin';
-  setActiveView: (view: 'chat' | 'admin') => void;
+  activeView: 'chat' | 'drafts' | 'admin';
+  setActiveView: (view: 'chat' | 'drafts' | 'admin') => void;
   adminTab: string;
   setAdminTab: (tab: string) => void;
 
@@ -57,6 +59,9 @@ interface AppContextType {
     convId: string,
     tempFile: { filename: string; content: string } | undefined
   ) => void;
+  /** Khoá mọi lượt gửi mới cho tới khi backend phát sự kiện `done`. */
+  isChatStreaming: boolean;
+  setChatStreaming: (streaming: boolean) => void;
 
   // Ghi chú cá nhân trong khung chat
   notes: Note[];
@@ -92,13 +97,25 @@ const freshConversation = (): Conversation => ({
 });
 
 /** Chuyển tin nhắn từ server (getChatHistory) sang dạng khung chat. */
-const mapServerMessages = (rows: { id: number; role: string; content: string; created_at: string }[]): ChatMessage[] =>
+const mapServerMessages = (rows: Array<{
+  id: number;
+  role: string;
+  content: string;
+  created_at: string;
+  sources?: ChatMessage['sources'];
+  evidence?: ChatMessage['sources'];
+  grounding_status?: ChatMessage['grounding_status'];
+  answer_mode?: string;
+}>): ChatMessage[] =>
   (rows || []).map((m) => ({
     id: `h-${m.id}`,
     sender: m.role === 'user' ? 'user' : 'ai',
     text: m.content,
     timestamp: /\b(\d{1,2}:\d{2})/.exec(m.created_at || '')?.[1] || '',
     serverMessageId: m.id,
+    sources: m.evidence ?? m.sources,
+    grounding_status: m.grounding_status,
+    answer_mode: m.answer_mode,
   }));
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -110,14 +127,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     Boolean(localStorage.getItem('hds_access_token'))
   );
 
-  const [activeView, setActiveView] = useState<'chat' | 'admin'>('chat');
+  const [activeView, setActiveView] = useState<'chat' | 'drafts' | 'admin'>('chat');
   const [adminTab, setAdminTab] = useState<string>('overview');
 
   const [apiBaseUrl, setApiBaseUrlState] = useState<string>(
     () => localStorage.getItem('hds_api_base_url') || api.getDefaultApiBaseUrl()
   );
   const [isMockMode, setIsMockModeState] = useState<boolean>(
-    () => localStorage.getItem('hds_mock_mode') === '1'
+    () => MOCK_MODE_ALLOWED && localStorage.getItem('hds_mock_mode') === '1'
   );
 
   const [isDarkMode, setIsDarkMode] = useState<boolean>(
@@ -129,6 +146,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
+  const [isChatStreaming, setChatStreaming] = useState(false);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -165,9 +183,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const handleSetIsMockMode = useCallback((enabled: boolean) => {
-    setIsMockModeState(enabled);
-    api.setUseMockMode(enabled);
-    localStorage.setItem('hds_mock_mode', enabled ? '1' : '0');
+    const safeEnabled = MOCK_MODE_ALLOWED && enabled;
+    setIsMockModeState(safeEnabled);
+    api.setUseMockMode(safeEnabled);
+    localStorage.setItem('hds_mock_mode', safeEnabled ? '1' : '0');
   }, []);
 
   /* ---------------- Xác thực ---------------- */
@@ -189,6 +208,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setConversation(freshConversation());
     setConversations([]);
     setNotes([]);
+    setChatStreaming(false);
     showToast('Đã đăng xuất khỏi hệ thống.', 'info');
   }, [showToast]);
 
@@ -207,18 +227,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Nạp cấu hình đã lưu vào lớp api ngay khi khởi động
   useEffect(() => {
     api.setApiBaseUrl(apiBaseUrl);
-    api.setUseMockMode(isMockMode);
+    api.setUseMockMode(MOCK_MODE_ALLOWED && isMockMode);
+    if (!MOCK_MODE_ALLOWED) localStorage.removeItem('hds_mock_mode');
     if (token) api.setAccessToken(token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Backend tắt giữa chừng thì api.js tự dùng dữ liệu mẫu — phải báo cho người
-  // dùng biết, nếu không họ tưởng đang xem số liệu thật.
+  // Lỗi mạng phải fail-closed: báo lỗi và giữ nguyên chế độ dữ liệu.
+  // Tuyệt đối không bật Mock Mode vì người dùng có thể nhầm dữ liệu mẫu là thật.
   useEffect(() => {
     api.onMockFallback((baseUrl: string) => {
-      setIsMockModeState(true);
       showToast(
-        `Không kết nối được backend tại ${baseUrl}. Hệ thống đang hiển thị dữ liệu giả lập.`,
+        `Mất kết nối backend tại ${baseUrl}. Hệ thống không chuyển sang dữ liệu giả lập.`,
         'error'
       );
     });
@@ -485,6 +505,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateMessage,
         setConvServerId,
         setConvTempFile,
+        isChatStreaming,
+        setChatStreaming,
         notes,
         reloadNotes,
         saveNote,

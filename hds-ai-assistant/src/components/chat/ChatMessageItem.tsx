@@ -21,6 +21,8 @@ import {
   Undo2,
   ExternalLink,
   Download,
+  Quote,
+  MapPin,
 } from 'lucide-react';
 
 const fmtSec = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
@@ -31,15 +33,26 @@ const fmtSec = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1
  * Giúp trả lời đúng câu hỏi hay gặp nhất: vì sao câu đơn giản vẫn chậm. Thủ
  * phạm gần như luôn là ĐỌC PROMPT — phần này tỉ lệ thuận với lượng tài liệu
  * nhồi vào mỗi lượt, chứ không phụ thuộc câu hỏi khó hay dễ, cũng không phụ
- * thuộc kho tài liệu to hay nhỏ.
+ * thuộc kho tài liệu to hay nhỏ. Kho lớn vẫn ảnh hưởng thời gian/chỉ mục tra
+ * cứu, nên backend tách riêng bước embedding và truy vấn vector để nhìn rõ.
  */
 const TimingPanel: React.FC<{ t: ChatTimings }> = ({ t }) => {
   const rows: Array<[string, number | undefined, string]> = [
-    ['Tra cứu tài liệu', t.tim_kiem_ms, 'Tìm đoạn liên quan trong kho'],
+    ['Đọc cấu hình', t.cai_dat_ms, 'Đọc cấu hình AI hiện hành'],
+    ['Đọc lịch sử', t.lich_su_ms, 'Lấy lượt trước và chủ đề hội thoại'],
+    ['Dữ liệu xác định', t.du_lieu_cau_truc_ms, 'Router và truy vấn đếm/danh sách trực tiếp'],
+    ['Tạo vector câu hỏi', t.embed_ms, 'Embedding bằng bge-m3'],
+    ['Nạp model embedding', t.embed_load_ms, 'Nạp bge-m3 nếu đã hết keep-alive'],
+    ['Tìm hybrid trong DB', t.vector_db_ms, 'Vector + từ khóa + xếp hạng lại'],
+    ...((typeof t.embed_ms !== 'number' && typeof t.vector_db_ms !== 'number')
+      ? [['Tra cứu tài liệu', t.tim_kiem_ms, 'Tìm đoạn liên quan trong kho'] as [string, number | undefined, string]]
+      : []),
     ['Dữ liệu công ty', t.du_lieu_cong_ty_ms, 'Đọc khách hàng, vụ việc, nhân sự'],
+    ['Chọn model', t.chon_model_ms, 'Kiểm tra model tự động/đang nóng'],
     ['Nạp model', t.load_ms, 'Đưa model từ ổ cứng vào bộ nhớ — >0 nghĩa là model đã bị đẩy ra'],
     ['AI đọc câu hỏi + tài liệu', t.prefill_ms, 'Tỉ lệ thuận với độ dài ngữ cảnh'],
     ['AI viết câu trả lời', t.gen_ms, 'Tỉ lệ thuận với độ dài câu trả lời'],
+    ['Tổng end-to-end', t.tong_ms, 'Từ lúc backend bắt đầu chuẩn bị đến khi lưu xong câu trả lời'],
   ];
   const speed = (tok?: number, ms?: number) =>
     tok && ms ? `${Math.round(tok / (ms / 1000))} token/giây` : '—';
@@ -109,6 +122,42 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
   const [sending, setSending] = useState(false);
   const [feedbackId, setFeedbackId] = useState<number | null>(null);
   const [notedId, setNotedId] = useState<number | null>(null);
+  const groundingMeta = (() => {
+    switch (message.grounding_status) {
+      case 'grounded':
+      case 'verified':
+        return {
+          label: 'Đã kiểm chứng theo nguồn',
+          cls: 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
+        };
+      case 'partial':
+        return {
+          label: 'Chỉ một phần có đủ căn cứ',
+          cls: 'bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800',
+        };
+      case 'uncited':
+      case 'uncited_blocked':
+        return {
+          label: 'Chưa có trích dẫn kiểm chứng',
+          cls: 'bg-red-50 dark:bg-red-950/50 text-red-800 dark:text-red-300 border-red-200 dark:border-red-800',
+        };
+      case 'insufficient':
+        return {
+          label: 'Chưa đủ bằng chứng để kết luận',
+          cls: 'bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800',
+        };
+      default:
+        return null;
+    }
+  })();
+  const answerModeLabel: Record<string, string> = {
+    structured: 'Dữ liệu hệ thống',
+    operational: 'Dữ liệu vận hành',
+    grounded: 'Tra cứu tài liệu',
+    mixed: 'Dữ liệu + tài liệu',
+    insufficient_evidence: 'Không đủ bằng chứng',
+    chat: 'Hội thoại',
+  };
 
   const handleSaveNote = async () => {
     try {
@@ -267,6 +316,26 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             </div>
           )}
 
+          {!message.isStreaming && groundingMeta && (
+            <div
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] font-bold ${groundingMeta.cls}`}
+            >
+              {message.grounding_status === 'grounded' || message.grounding_status === 'verified' ? (
+                <CheckCircle2 className="w-3.5 h-3.5" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5" />
+              )}
+              {groundingMeta.label}
+            </div>
+          )}
+
+          {!message.isStreaming && message.answer_mode && answerModeLabel[message.answer_mode] && (
+            <div className="inline-flex items-center gap-1.5 ml-1.5 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[10px] font-semibold">
+              <FileText className="w-3.5 h-3.5" />
+              {answerModeLabel[message.answer_mode]}
+            </div>
+          )}
+
           {/* Giai đoạn ĐỌC tài liệu: đã có nguồn nhưng model chưa viết chữ nào.
               Trên máy CPU quãng này dài cả trăm giây; hiện lời nhắc động để
               người dùng biết hệ thống đang chạy chứ không treo. */}
@@ -321,10 +390,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
               {showSources && (
                 <ul className="mt-2 space-y-1.5">
                   {message.sources.map((src, idx) => {
-                    const score =
-                      typeof src.relevance_score === 'number'
-                        ? Math.round(src.relevance_score * 100)
-                        : null;
+                    const rawScore = src.relevance_score ?? src.score;
+                    const score = typeof rawScore === 'number' ? Math.round(rawScore * 100) : null;
+                    const page = src.page_number ?? src.page;
+                    const section = src.section_title ?? src.section;
+                    const quote = src.quote ?? src.excerpt ?? src.snippet;
 
                     return (
                       <li
@@ -335,8 +405,24 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                           <BookOpen className="w-3.5 h-3.5 text-hds-navy dark:text-blue-300 shrink-0 mt-0.5" />
                           <div className="min-w-0">
                             <span className="font-semibold text-slate-800 dark:text-slate-100 block break-words">
-                              {src.title}
+                              {typeof src.n === 'number' ? `[Nguồn ${src.n}] ` : ''}
+                              {src.title || src.document_title || 'Tài liệu nguồn'}
                             </span>
+                            {(page != null || section || src.source_locator || src.source_version != null) && (
+                              <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400">
+                                <MapPin className="w-3 h-3" />
+                                {page != null && <span>Trang {page}</span>}
+                                {section && <span>Mục: {section}</span>}
+                                {src.source_locator && <span>Vị trí: {src.source_locator}</span>}
+                                {src.source_version != null && <span>Phiên bản {src.source_version}</span>}
+                              </span>
+                            )}
+                            {quote && (
+                              <blockquote className="mt-2 border-l-2 border-hds-gold pl-2 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300 whitespace-pre-wrap break-words">
+                                <Quote className="inline w-3 h-3 mr-1 -mt-0.5 text-hds-gold" />
+                                {quote}
+                              </blockquote>
+                            )}
                             {/* Mở bản gốc trên Drive + tải về — như kho tài liệu / NotebookLM */}
                             <span className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
                               {src.drive_file_id && (

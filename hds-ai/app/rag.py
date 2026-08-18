@@ -9,7 +9,10 @@ Hỗ trợ thêm:
   - analysis_methods: áp mẫu phương pháp admin đã dạy
 """
 import json
+import re
 import time
+import unicodedata
+from collections import defaultdict
 from datetime import date
 
 from app import company_context, db, settings
@@ -23,51 +26,183 @@ from app.models import embed, llm
 # nhồi 8 đoạn × 700 từ vào mỗi lượt thì câu "chào bạn" cũng nặng như câu phân
 # tích hợp đồng. Vì vậy giới hạn ở đây, chứ không phải ở kích thước kho dữ liệu.
 #
-# Lưu ý: kho có 1 tài liệu hay 1 triệu tài liệu thì prompt vẫn bằng nhau — tìm
-# kiếm vector luôn trả về đúng top_k đoạn. Kho lớn lên KHÔNG làm chậm trả lời.
+# `top_k` giữ prompt ổn định khi kho lớn, nhưng thời gian retrieval và RAM cho
+# chỉ mục vẫn tăng theo dữ liệu. Vì vậy kho triệu đoạn phải kiểm chứng bằng
+# EXPLAIN/load-test; không được coi câu "prompt không đổi" là cam kết tốc độ.
 # --------------------------------------------------------------------
 TOP_K = 5                 # số đoạn tài liệu đưa vào prompt
 CHUNK_CHARS = 1500        # cắt mỗi đoạn còn bấy nhiêu ký tự
 CONTEXT_CHARS = 6000      # tổng ngân sách cho toàn bộ tài liệu tham khảo
 HISTORY_CHARS = 300       # mỗi lượt hỏi-đáp cũ chỉ giữ bấy nhiêu ký tự
 MIN_SCORE = 0.25          # dưới ngưỡng này coi như không liên quan, bỏ đi
+RETRIEVAL_CANDIDATES = 40 # lấy rộng rồi xếp hạng lại trước khi cắt top_k
+MAX_CHUNKS_PER_DOC = 2    # tránh một tài liệu chiếm hết mọi vị trí nguồn
 
 CHANNEL_LEVEL = {"public": "public", "internal": "internal", "portal": "client"}
+
+
+def _fold(text: str) -> str:
+    text = unicodedata.normalize("NFD", text or "")
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    return re.sub(r"\s+", " ", text.replace("đ", "d").replace("Đ", "d").lower()).strip()
+
+
+def _tokens(text: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", _fold(text)) if len(t) > 1}
+
+
+def resolve_search_question(question, history=None, state=None) -> str:
+    """Viết lại câu tra cứu ngắn bằng chủ đề đã biết, không gọi thêm LLM.
+
+    Lịch sử trước đây chỉ được đưa vào prompt SAU khi retrieval đã xong, nên
+    câu "chi tiết từng cá nhân" đi tìm tài liệu bằng chính năm chữ mơ hồ đó.
+    Hàm này chạy trước retrieval và chỉ nối tối đa câu hỏi người dùng gần nhất.
+    """
+    folded = _fold(question)
+    followup = (len(folded.split()) <= 10 and any(w in folded for w in (
+        "chi tiet", "cu the", "ro hon", "tung ca nhan", "tung nguoi",
+        "con nua", "con ai", "the nao", "ra sao", "toi hoi", "y toi",
+        "danh sach", "liet ke",
+    )))
+    if not followup:
+        return question
+    previous = [content for role, content in (history or []) if role == "user"]
+    context = previous[-1] if previous else (state or {}).get("last_question", "")
+    return f"{context}. {question}".strip(". ") if context else question
+
+
+def _smalltalk_answer(question: str):
+    folded = _fold(question).strip(" .!?\t\r\n")
+    if folded in {"chao", "xin chao", "hello", "hi", "alo"}:
+        return "Chào bạn, mình là Trợ lý AI HDS. Bạn muốn tra cứu hồ sơ, dữ liệu công ty hay soạn tài liệu gì?"
+    if folded in {"cam on", "cảm ơn", "thanks", "thank you"}:
+        return "Mình rất vui được hỗ trợ."
+    return None
 
 # Phong cách tư vấn (system prompt) KHÔNG còn nằm cứng ở đây nữa — admin sửa
 # trên web, lưu ở bảng app_settings. Xem app/settings.py (khoá prompt_<kênh>).
 
 
 def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
-             top_k=None, can_finance=False, doc_types=None):
-    """Tìm đoạn liên quan. SQL KHÔNG lọc quyền — RLS tự lo (kể cả theo phòng
-    và quyền xem công nợ).
+             top_k=None, can_finance=False, doc_types=None, document_ids=None,
+             candidate_k=None, max_per_document=None, query_vector=None):
+    """Hybrid retrieval: vector + từ khoá chính xác rồi xếp hạng lại.
 
-    doc_types: giới hạn theo GÓI DỊCH VỤ của khách (không phải ranh giới bảo
-    mật — việc khách A không thấy dữ liệu khách B vẫn do RLS lo). None là
-    không giới hạn.
+    RLS vẫn là ranh giới bảo mật. `document_ids` chỉ THU HẸP bộ nguồn người dùng
+    đã chọn; nó không thể mở rộng quyền. Lấy nhiều ứng viên để mã hồ sơ/Điều luật
+    có cơ hội thắng, sau đó đa dạng hoá theo tài liệu để một file không chiếm
+    toàn bộ top-k.
     """
     if top_k is None:
         top_k = settings.get_int("retrieval_top_k", TOP_K)
-    qjson = json.dumps(embed(question))
+    if document_ids is not None:
+        safe_ids = set()
+        for raw_id in document_ids:
+            try:
+                value = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                safe_ids.add(value)
+        document_ids = sorted(safe_ids)[:50]
+        if not document_ids:
+            return []
+    candidate_k = candidate_k or settings.get_int(
+        "retrieval_candidate_k", max(RETRIEVAL_CANDIDATES, top_k * 8))
+    candidate_k = max(top_k, min(int(candidate_k), 200))
+    max_per_document = max_per_document or settings.get_int(
+        "retrieval_max_chunks_per_doc", MAX_CHUNKS_PER_DOC)
+    max_per_document = max(1, min(int(max_per_document), top_k))
+
+    qjson = json.dumps(query_vector if query_vector is not None else embed(question))
     level = CHANNEL_LEVEL[channel]
-    sql = """SELECT c.id, c.content, c.document_id, d.title, d.drive_file_id,
-                    1 - (c.embedding <=> %s::vector) AS score
-               FROM chunks c JOIN documents d ON d.id=c.document_id
-              WHERE c.embedding IS NOT NULL AND d.approved AND d.label_verified"""
-    params = [qjson]
+    select = """SELECT c.id,c.content,c.document_id,d.title,d.drive_file_id,
+                       1-(c.embedding <=> %s::vector) AS semantic_score,
+                       {lexical} AS lexical_score,
+                       c.page_number,c.section_title,c.source_locator,
+                       d.source_version
+                  FROM chunks c JOIN documents d ON d.id=c.document_id"""
+    where = """ WHERE c.embedding IS NOT NULL AND d.approved AND d.label_verified
+                       AND coalesce(d.active,true)
+                       AND coalesce(d.extraction_status,'ready')='ready'"""
+    filter_params = []
     if doc_types is not None:
-        sql += " AND c.doc_type = ANY(%s)"
-        params.append(list(doc_types))
-    sql += " ORDER BY c.embedding <=> %s::vector LIMIT %s"
-    params += [qjson, top_k]
-    with db.session(role=level, client_id=client_id, dept_ids=dept_ids, is_banqt=is_banqt,
-                    can_finance=can_finance) as conn:
+        where += " AND c.doc_type=ANY(%s)"
+        filter_params.append(list(doc_types))
+    if document_ids is not None:
+        where += " AND d.id=ANY(%s)"
+        filter_params.append(document_ids)
+
+    vector_sql = select.format(lexical="0::real") + where
+    vector_sql += " ORDER BY c.embedding <=> %s::vector LIMIT %s"
+    vector_params = [qjson, *filter_params, qjson, candidate_k]
+
+    # `simple` tách token tiếng Việt theo khoảng trắng, phù hợp cho mã hồ sơ,
+    # số điều và tên riêng. Query lexical vẫn tính semantic_score để hai nhánh
+    # có chung thang điểm khi gộp.
+    lexical_select = select.format(
+        lexical="ts_rank_cd(c.search_vector,q.query)")
+    lexical_sql = ("WITH q AS (SELECT plainto_tsquery('simple',%s) AS query) "
+                   + lexical_select
+                   + " CROSS JOIN q " + where
+                   + " AND q.query @@ c.search_vector"
+                   + " ORDER BY lexical_score DESC LIMIT %s")
+    lexical_params = [question, qjson, *filter_params, candidate_k]
+
+    with db.session(role=level, client_id=client_id, dept_ids=dept_ids,
+                    is_banqt=is_banqt, can_finance=can_finance) as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, params)
+            cur.execute(vector_sql, vector_params)
             rows = cur.fetchall()
-    return [{"chunk_id": r[0], "content": r[1], "document_id": r[2], "title": r[3],
-             "drive_file_id": r[4], "score": float(r[5])} for r in rows]
+            try:
+                cur.execute(lexical_sql, lexical_params)
+                rows += cur.fetchall()
+            except Exception:
+                # Kho cũ chưa có chỉ mục FTS vẫn phải phục vụ được bằng vector.
+                conn.rollback()
+
+    merged = {}
+    for r in rows:
+        item = merged.setdefault(r[0], {
+            "chunk_id": r[0], "content": r[1], "document_id": r[2],
+            "title": r[3], "drive_file_id": r[4],
+            "semantic_score": float(r[5] or 0), "lexical_score": 0.0,
+            "page_number": r[7], "section_title": r[8],
+            "source_locator": r[9], "source_version": r[10],
+        })
+        item["semantic_score"] = max(item["semantic_score"], float(r[5] or 0))
+        item["lexical_score"] = max(item["lexical_score"], float(r[6] or 0))
+
+    max_lex = max((x["lexical_score"] for x in merged.values()), default=0.0)
+    qtokens = _tokens(question)
+    qfold = _fold(question)
+    for item in merged.values():
+        ctokens = _tokens(item["content"])
+        coverage = len(qtokens & ctokens) / max(1, len(qtokens))
+        lexical = item["lexical_score"] / max_lex if max_lex else 0.0
+        exact = 1.0 if len(qfold) >= 4 and qfold in _fold(item["content"]) else 0.0
+        semantic = max(0.0, min(1.0, item["semantic_score"]))
+        item["score"] = min(1.0, 0.75 * semantic + 0.15 * lexical
+                            + 0.08 * coverage + 0.02 * exact)
+
+    ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
+    chosen, counts, used = [], defaultdict(int), set()
+    for item in ranked:
+        if counts[item["document_id"]] >= max_per_document:
+            continue
+        chosen.append(item)
+        used.add(item["chunk_id"])
+        counts[item["document_id"]] += 1
+        if len(chosen) >= top_k:
+            break
+    # Khi bộ nguồn chỉ có một/hai file, lấp đủ top-k thay vì trả thiếu vô cớ.
+    for item in ranked:
+        if len(chosen) >= top_k:
+            break
+        if item["chunk_id"] not in used:
+            chosen.append(item)
+            used.add(item["chunk_id"])
+    return chosen
 
 
 def tier_doc_types(role_level):
@@ -86,10 +221,10 @@ def tier_doc_types(role_level):
             if role == role_level and dept == "*" and can_open}
 
 
-def find_method(case_desc):
+def find_method(case_desc, query_vector=None):
     """Tìm mẫu phương pháp phân tích phù hợp (nếu admin đã dạy)."""
     try:
-        qvec = embed(case_desc)
+        qvec = query_vector if query_vector is not None else embed(case_desc)
         with db.session(role="internal") as conn:
             with conn.cursor() as cur:
                 cur.execute("""SELECT case_type, steps, 1-(embedding <=> %s::vector) AS s
@@ -132,6 +267,22 @@ def get_history(conversation_id, channel, client_id=None, turns=None):
     return list(reversed(rows))
 
 
+def get_conversation_state(conversation_id, channel, client_id=None):
+    """Chủ đề có cấu trúc của lượt trước; text history chỉ là lớp bổ sung."""
+    if not conversation_id:
+        return {}
+    try:
+        with db.session(role=CHANNEL_LEVEL[channel], client_id=client_id) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT context_state FROM conversations WHERE id=%s",
+                            (conversation_id,))
+                row = cur.fetchone()
+        return row[0] if row and isinstance(row[0], dict) else {}
+    except Exception:
+        # Tương thích trong lúc schema cũ chưa được migrate.
+        return {}
+
+
 def fit_context(chunks, chunk_chars=None, budget=None):
     """Cắt danh sách đoạn cho vừa ngân sách ký tự, giữ nguyên thứ tự liên quan.
 
@@ -172,9 +323,15 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
     # một file tải lên trong chat vẫn đủ sức thổi prompt lên quá cỡ.
     all_ctx = fit_context(list(chunks) + list(temp_chunks or []), chunk_chars, budget)
     if all_ctx:
-        parts.append("TÀI LIỆU THAM KHẢO:")
+        parts.append("TÀI LIỆU THAM KHẢO ĐÃ ĐƯỢC PHÉP DÙNG:")
         for i, c in enumerate(all_ctx, 1):
-            parts.append(f"[Nguồn {i}] {c.get('title','')}\n{c['content']}\n")
+            locator = c.get("source_locator") or ""
+            if not locator and c.get("page_number"):
+                locator = f"trang {c['page_number']}"
+            if c.get("section_title"):
+                locator = (locator + ", " if locator else "") + c["section_title"]
+            label = f" — {locator}" if locator else ""
+            parts.append(f"[Nguồn {i}] {c.get('title','')}{label}\n{c['content']}\n")
     elif not company:
         # Chỉ báo "không có tài liệu" khi cũng KHÔNG có dữ liệu công ty. Câu hỏi
         # đếm khách/nhân sự cố tình không tra tài liệu — lúc đó dòng này thừa và
@@ -191,7 +348,10 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
         parts.append("")
     parts.append(f"CÂU HỎI HIỆN TẠI: {question}\n"
                  "Nếu đây là câu nói lại/chỉnh lại câu trước, hiểu theo diễn biến ở "
-                 "trên và trả lời luôn. Ghi rõ [Nguồn n] khi dùng thông tin từ tài liệu. "
+                 "trên và trả lời luôn. MỖI đoạn có khẳng định lấy từ tài liệu phải kết "
+                 "thúc bằng đúng một hoặc nhiều ký hiệu [Nguồn n]. Chỉ được dùng số nguồn "
+                 "đang có ở trên; không có đoạn hỗ trợ thì nói 'chưa đủ căn cứ trong nguồn', "
+                 "không suy đoán và không tự điền tên/ngày/số tiền/chức danh. "
                  "Khi câu hỏi liên quan hiệu lực/thời hạn (hợp đồng còn hạn không, ai "
                  "còn hợp đồng, vụ nào quá hạn), TỰ so từng ngày kết thúc trong tài liệu "
                  "với HÔM NAY ở đầu prompt: ngày kết thúc đã qua = ĐÃ HẾT HẠN, ĐỪNG coi "
@@ -248,9 +408,9 @@ def add_temp_file(conversation_id, user_id, filename, content):
     return len(pieces)
 
 
-def get_temp_context(conversation_id, question, top_k=5):
+def get_temp_context(conversation_id, question, top_k=5, query_vector=None):
     """Lấy các đoạn liên quan nhất từ file tạm của cuộc chat này."""
-    qvec = embed(question)
+    qvec = query_vector if query_vector is not None else embed(question)
     with db.session(role="internal") as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT filename, embedding_json FROM temp_files
@@ -267,7 +427,7 @@ def get_temp_context(conversation_id, question, top_k=5):
     return scored[:top_k]
 
 
-def resolve_model(model_choice, question):
+def resolve_model(model_choice, question, configured_model=None, quality_required=False):
     """Từ lựa chọn của người dùng → tên model cụ thể (hoặc None = mặc định).
       ''/None      → None (dùng model mặc định của máy chủ)
       'auto'       → models.auto_pick_model (câu đơn giản chọn model nhanh)
@@ -277,8 +437,74 @@ def resolve_model(model_choice, question):
         return None
     if choice.lower() == "auto":
         from app.models import auto_pick_model
-        return auto_pick_model(question)
+        return auto_pick_model(question, configured_model=configured_model,
+                               quality_required=quality_required)
     return choice
+
+
+_CITATION_RE = re.compile(r"\[\s*Nguồn\s+(\d+)\s*\]", re.IGNORECASE)
+
+
+def validate_grounding(text, chunks, answer_mode="grounded", strict=True):
+    """Kiểm tra citation có trỏ tới nguồn thật; fail-closed khi hoàn toàn mất nguồn.
+
+    Đây không khẳng định model đã suy luận đúng mọi chữ, nhưng chặn hai lỗi nguy
+    hiểm nhất: tự tạo `[Nguồn 9]` không tồn tại và trả lời tài liệu không có bất
+    kỳ căn cứ nào để người dùng kiểm tra.
+    """
+    text = (text or "").strip()
+    if not chunks or answer_mode not in {"grounded", "mixed"}:
+        return text, "verified" if answer_mode == "structured" else "not_applicable"
+
+    valid_max = len(chunks)
+    seen_valid = []
+
+    def replace(match):
+        n = int(match.group(1))
+        if 1 <= n <= valid_max:
+            seen_valid.append(n)
+            return f"[Nguồn {n}]"
+        return ""
+
+    cleaned = _CITATION_RE.sub(replace, text)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned).strip()
+    if seen_valid:
+        unsupported = []
+        blocks = re.split(r"(\n\s*\n)", cleaned)
+        for index in range(0, len(blocks), 2):
+            block = blocks[index]
+            body_lines = [line for line in block.splitlines()
+                          if not line.lstrip().startswith(("#", ">"))]
+            body = re.sub(r"[`*_>#-]", "", " ".join(body_lines)).strip()
+            # Tiêu đề, câu nối rất ngắn và placeholder không phải một khẳng
+            # định cần nguồn. Các khối nội dung đáng kể thì bắt buộc phải có.
+            if (len(body) >= 35 and "[CẦN BỔ SUNG" not in body.upper()
+                    and not _CITATION_RE.search(block)):
+                unsupported.append(index)
+        if unsupported and strict and answer_mode == "grounded":
+            for index in unsupported:
+                heading = "\n".join(
+                    line for line in blocks[index].splitlines()
+                    if line.lstrip().startswith("#")
+                )
+                hidden = "> [Đã ẩn đoạn chưa có trích dẫn kiểm chứng.]"
+                blocks[index] = f"{heading}\n{hidden}".strip() if heading else hidden
+            return "".join(blocks).strip(), "partial"
+        return cleaned, "partial" if unsupported else "verified"
+    if not strict or answer_mode == "mixed":
+        return cleaned, "uncited"
+    return (
+        "Mình đã tìm thấy tài liệu liên quan nhưng câu trả lời sinh ra không gắn "
+        "được trích dẫn kiểm chứng, nên hệ thống đã chặn nội dung đó. Bạn hãy hỏi "
+        "cụ thể hơn hoặc chọn trực tiếp tài liệu cần dùng trong Bộ nguồn."
+    ), "uncited_blocked"
+
+
+def _insufficient_answer(source_selected=False):
+    scope = "trong bộ nguồn bạn đã chọn" if source_selected else "trong kho dữ liệu được phép truy cập"
+    return (f"Mình chưa tìm thấy căn cứ đủ liên quan {scope} để trả lời chính xác. "
+            "Mình sẽ không đoán. Bạn có thể chọn thêm tài liệu, nêu tên khách/vụ việc, "
+            "hoặc tải đúng hồ sơ lên rồi hỏi lại.")
 
 
 SLOW_MS = 20000   # trên mức này thì ghi log để soi lại, dưới thì im lặng
@@ -292,18 +518,21 @@ def _log_slow(question, t):
     `nap` lớn nghĩa là model bị đẩy ra khỏi bộ nhớ và phải nạp lại từ ổ cứng,
     `viet` lớn nghĩa là model quá nặng so với máy.
     """
-    if t.get("ai_ms", 0) < SLOW_MS:
+    measured_total = t.get("tong_ms") or (
+        (t.get("chuan_bi_ms") or 0) + (t.get("ai_ms") or 0))
+    if measured_total < SLOW_MS:
         return
-    print(f"[CHAM] {t.get('ai_ms')}ms | model={t.get('model')} "
+    print(f"[CHAM] tong={measured_total}ms ai={t.get('ai_ms')}ms | model={t.get('model')} "
           f"| prompt={t.get('prompt_tokens')} token, doc={t.get('prefill_ms')}ms "
           f"| sinh={t.get('gen_tokens')} token, viet={t.get('gen_ms')}ms "
-          f"| nap={t.get('load_ms')}ms | tim={t.get('tim_kiem_ms')}ms "
+          f"| nap={t.get('load_ms')}ms | embed={t.get('embed_ms')}ms "
+          f"(nap={t.get('embed_load_ms')}ms) | vector={t.get('vector_db_ms')}ms "
           f"| doan={t.get('so_doan')} | hoi={(question or '')[:60]!r}", flush=True)
 
 
 def prepare(question, channel, client_id=None, conversation_id=None,
             use_temp=False, use_method=False, dept_ids=None, is_banqt=False,
-            can_finance=False, role=None, model=None):
+            can_finance=False, role=None, model=None, source_document_ids=None):
     """Dựng đủ nguyên liệu cho một lượt trả lời, DỪNG NGAY TRƯỚC khi gọi model.
 
     Tách riêng vì có hai cách sinh câu trả lời — trả một cục (answer) và trả
@@ -318,6 +547,8 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     if channel == "portal" and client_id is None:
         raise ValueError("Kênh portal bắt buộc có client_id")
 
+    prepare_started = time.time()
+
     # Đọc cài đặt MỘT LẦN cho cả lượt hỏi (prompt, nhiệt độ, top_k) thay vì mở
     # ba kết nối CSDL riêng. Vẫn lấy tươi mỗi câu hỏi nên admin sửa là ăn ngay.
     cfg = settings.get_all()
@@ -328,12 +559,8 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         except (TypeError, ValueError):
             return fallback
 
-    # Cổng khách: giới hạn loại tài liệu theo gói dịch vụ (Free/Plus/Pro).
-    # Kênh nội bộ không giới hạn ở đây — quyền nội bộ nằm ở RLS và can_open_doc.
-    doc_types = tier_doc_types(role) if (channel == "portal" and role) else None
-
     # Đo từng chặng để biết chậm ở đâu — không đo thì chỉ đoán mò.
-    timings: dict = {}
+    timings: dict = {"cai_dat_ms": int((time.time() - prepare_started) * 1000)}
     clock = [time.time()]
 
     def tick(key):
@@ -341,37 +568,97 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         timings[key] = int((now - clock[0]) * 1000)
         clock[0] = now
 
-    # Câu hỏi ĐẾM/LIỆT KÊ danh bạ công ty (mấy khách, bao nhiêu nhân viên) trả
-    # lời hoàn toàn từ CSDL — bỏ hẳn bước tra tài liệu. Không bỏ thì vector kéo
-    # về hợp đồng lao động, đơn nghỉ phép… vừa hiện làm 'nguồn' sai, vừa làm
-    # chậm. Bỏ được khâu này cũng khiến loại câu hỏi này trả lời gần như tức thì.
-    if channel == "internal" and company_context.is_directory_query(question):
-        chunks = []
-        timings["bo_qua_doan_yeu"] = 0
-        timings["bo_tra_tai_lieu"] = True
-        tick("tim_kiem_ms")
+    # Lịch sử + state phải có TRƯỚC router và retrieval. Đây là thứ tự quan
+    # trọng nhất để câu nối tiếp không đi tìm bằng một cụm từ mơ hồ.
+    history = get_history(conversation_id, channel, client_id)
+    state = get_conversation_state(conversation_id, channel, client_id)
+    search_question = resolve_search_question(question, history, state)
+    timings["search_question"] = search_question[:300]
+    tick("lich_su_ms")
+
+    smalltalk = _smalltalk_answer(question)
+    direct = None
+    if smalltalk:
+        direct = {"answer": smalltalk, "answer_mode": "chat",
+                  "grounding_status": "not_applicable", "evidence": [], "state": {}}
     else:
-        chunks = retrieve(question, channel, client_id, dept_ids=dept_ids, is_banqt=is_banqt,
-                          top_k=_num("retrieval_top_k", TOP_K, int), can_finance=can_finance,
-                          doc_types=doc_types)
-        # Đoạn điểm thấp là đoạn không liên quan tới câu hỏi: nó không giúp câu
-        # trả lời mà vẫn ngốn thời gian đọc prompt.
-        min_score = _num("min_relevance", MIN_SCORE, float)
-        kept = [c for c in chunks if c["score"] >= min_score]
-        timings["bo_qua_doan_yeu"] = len(chunks) - len(kept)
-        chunks = kept
-        tick("tim_kiem_ms")
+        direct = company_context.structured_answer(
+            question, channel, client_id=client_id, dept_ids=dept_ids,
+            is_banqt=is_banqt, can_finance=can_finance,
+            history=history, state=state)
+    tick("du_lieu_cau_truc_ms")
 
-    temp_chunks = get_temp_context(conversation_id, question) if (use_temp and conversation_id) else None
-    method = find_method(question) if use_method else None
+    state_update = dict(state or {})
+    state_update.update((direct or {}).get("state") or {})
+    state_update["last_question"] = question[:1000]
 
-    # Hai nguồn ngữ cảnh song song: tài liệu (vector) và dữ liệu vận hành (SQL).
-    # Thiếu nguồn thứ hai thì bot không trả lời được câu hỏi về khách/vụ việc.
+    if direct:
+        timings.update({"bo_qua_doan_yeu": 0, "bo_tra_tai_lieu": True,
+                        "tim_kiem_ms": 0, "so_doan": 0})
+        timings["chuan_bi_ms"] = int((time.time() - prepare_started) * 1000)
+        return {
+            "prompt": "", "system": "", "model": None, "temperature": 0,
+            "chunks": [], "method": None, "timings": timings,
+            "direct_answer": direct["answer"],
+            "answer_mode": direct["answer_mode"],
+            "grounding_status": direct["grounding_status"],
+            "evidence": direct.get("evidence") or [], "state": state_update,
+            "strict_grounding": True,
+        }
+
+    # Cổng khách: giới hạn loại tài liệu theo gói dịch vụ (Free/Plus/Pro).
+    doc_types = tier_doc_types(role) if (channel == "portal" and role) else None
+    # Chỉ tạo embedding MỘT LẦN rồi tái dùng cho kho chính, file tạm và phương
+    # pháp phân tích. Trước đây bật cả ba tính năng khiến cùng câu bị embed 3 lần.
+    embed_stats: dict = {}
+    embed_started = time.time()
+    query_vector = embed(search_question, stats=embed_stats)
+    timings["embed_ms"] = int((time.time() - embed_started) * 1000)
+    timings.update(embed_stats)
+
+    vector_started = time.time()
+    chunks = retrieve(
+        search_question, channel, client_id, dept_ids=dept_ids, is_banqt=is_banqt,
+        top_k=_num("retrieval_top_k", TOP_K, int), can_finance=can_finance,
+        doc_types=doc_types, document_ids=source_document_ids,
+        candidate_k=_num("retrieval_candidate_k", RETRIEVAL_CANDIDATES, int),
+        max_per_document=_num("retrieval_max_chunks_per_doc", MAX_CHUNKS_PER_DOC, int),
+        query_vector=query_vector,
+    )
+    min_score = _num("min_relevance", MIN_SCORE, float)
+    kept = [c for c in chunks if c["score"] >= min_score]
+    timings["bo_qua_doan_yeu"] = len(chunks) - len(kept)
+    chunks = fit_context(kept,
+                         _num("chunk_char_limit", CHUNK_CHARS, int),
+                         _num("context_char_budget", CONTEXT_CHARS, int))
+    timings["vector_db_ms"] = int((time.time() - vector_started) * 1000)
+    timings["tim_kiem_ms"] = timings["embed_ms"] + timings["vector_db_ms"]
+    clock[0] = time.time()
+
+    temp_chunks = (get_temp_context(conversation_id, search_question,
+                                    query_vector=query_vector)
+                   if (use_temp and conversation_id) else None)
+    method = find_method(search_question, query_vector=query_vector) if use_method else None
+
+    # Nguồn vận hành dùng song song với tài liệu, nhưng các câu đếm xác định đã
+    # được structured_answer chặn ở trên và không còn đi qua LLM.
     company = company_context.build(question, channel, client_id=client_id,
                                     dept_ids=dept_ids, is_banqt=is_banqt,
-                                    can_finance=can_finance)
-    history = get_history(conversation_id, channel, client_id)
+                                    can_finance=can_finance, history=history)
     tick("du_lieu_cong_ty_ms")
+
+    if not chunks and not temp_chunks and not company:
+        direct_text = _insufficient_answer(source_document_ids is not None)
+        timings["so_doan"] = 0
+        timings["chuan_bi_ms"] = int((time.time() - prepare_started) * 1000)
+        return {
+            "prompt": "", "system": "", "model": None, "temperature": 0,
+            "chunks": [], "method": method, "timings": timings,
+            "direct_answer": direct_text,
+            "answer_mode": "insufficient_evidence",
+            "grounding_status": "insufficient", "evidence": [],
+            "state": state_update, "strict_grounding": True,
+        }
 
     # Truyền thẳng ngân sách đã đọc từ `cfg` — để build_prompt tự đọc lại thì
     # mỗi câu hỏi phải mở thêm hai kết nối CSDL cho hai con số.
@@ -380,28 +667,59 @@ def prepare(question, channel, client_id=None, conversation_id=None,
                           chunk_chars=_num("chunk_char_limit", CHUNK_CHARS, int),
                           budget=_num("context_char_budget", CONTEXT_CHARS, int))
     timings["so_doan"] = len(chunks)
+    answer_mode = "mixed" if company and chunks else ("grounded" if chunks else "operational")
+    strict = str(cfg.get("strict_grounding", "true")).lower() not in {"0", "false", "no"}
+    model_started = time.time()
+    configured_model = (cfg.get("llm_model") or "").strip() or None
+    chosen_model = resolve_model(model, question, configured_model=configured_model,
+                                 quality_required=True)
+    timings["chon_model_ms"] = int((time.time() - model_started) * 1000)
+    timings["chuan_bi_ms"] = int((time.time() - prepare_started) * 1000)
     return {
         "prompt": prompt,
         "system": cfg.get(f"prompt_{channel}") or settings.DEFAULTS.get(f"prompt_{channel}", ""),
-        "model": resolve_model(model, question),
+        "model": chosen_model,
         "temperature": _num("llm_temperature", 0.2, float),
         "chunks": chunks,
         "method": method,
         "timings": timings,
+        "direct_answer": None,
+        "answer_mode": answer_mode,
+        "grounding_status": "pending",
+        "evidence": format_sources(chunks),
+        "state": state_update,
+        "strict_grounding": strict,
     }
 
 
 def format_sources(chunks):
-    """Danh sách nguồn cho giao diện. Giữ ĐÚNG THỨ TỰ chunk trong prompt để số
-    [Nguồn n] trong câu trả lời khớp với nguồn hiển thị. Kèm document_id (để tải)
-    và drive_file_id (để mở bản gốc trên Drive)."""
-    return [{"n": i, "title": c["title"], "document_id": c.get("document_id"),
-             "drive_file_id": c.get("drive_file_id"),
-             "score": round(c["score"], 3)} for i, c in enumerate(chunks, 1)]
+    """Nguồn kiểm chứng đủ để mở đúng đoạn, không chỉ là tên file chung chung."""
+    out = []
+    for i, c in enumerate(chunks, 1):
+        quote = re.sub(r"\s+", " ", (c.get("content") or "")).strip()
+        if len(quote) > 600:
+            quote = quote[:600].rstrip() + "…"
+        score = round(float(c.get("score") or 0), 3)
+        out.append({
+            "n": i, "kind": "document", "chunk_id": c.get("chunk_id"),
+            "title": c.get("title") or "(không tiêu đề)",
+            "document_id": c.get("document_id"),
+            "drive_file_id": c.get("drive_file_id"),
+            "source_version": c.get("source_version"),
+            "page_number": c.get("page_number"),
+            "section_title": c.get("section_title"),
+            "source_locator": c.get("source_locator"),
+            "quote": quote, "snippet": quote,
+            "score": score, "relevance_score": score,
+            "semantic_score": round(float(c.get("semantic_score") or 0), 3),
+            "lexical_score": round(float(c.get("lexical_score") or 0), 3),
+        })
+    return out
 
 
 def save_turn(question, text, chunks, conversation_id, channel, client_id=None,
-              user_id=None, model_used=None, latency=0, method=None):
+              user_id=None, model_used=None, latency=0, method=None,
+              evidence=None, answer_mode=None, grounding_status=None, state=None):
     """Ghi cặp hỏi-đáp vào CSDL, trả về mã tin nhắn của câu trả lời.
 
     Ghi SAU khi đã có câu trả lời đầy đủ — kể cả ở luồng chảy dần. Nhờ vậy lịch
@@ -415,46 +733,73 @@ def save_turn(question, text, chunks, conversation_id, channel, client_id=None,
         with conn.cursor() as cur:
             cur.execute("INSERT INTO messages (conversation_id,role,content) VALUES (%s,'user',%s)",
                         (conversation_id, question))
-            cur.execute("""INSERT INTO messages (conversation_id,role,content,sources,model_used,latency_ms)
-                           VALUES (%s,'assistant',%s,%s,%s,%s) RETURNING id""",
-                        (conversation_id, text, json.dumps([c["chunk_id"] for c in chunks]),
-                         model_used, latency))
+            cur.execute("""INSERT INTO messages
+                           (conversation_id,role,content,sources,model_used,latency_ms,
+                            answer_mode,grounding_status,evidence)
+                           VALUES (%s,'assistant',%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                        (conversation_id, text,
+                         json.dumps([c["chunk_id"] for c in chunks if c.get("chunk_id")]),
+                         model_used, latency, answer_mode, grounding_status,
+                         json.dumps(evidence or [], ensure_ascii=False)))
             msg_id = cur.fetchone()[0]
+            if state is not None:
+                cur.execute("UPDATE conversations SET context_state=%s WHERE id=%s",
+                            (json.dumps(state, ensure_ascii=False), conversation_id))
         db.audit(conn, user_id, "chat_query", "conversation", conversation_id,
-                 {"channel": channel, "n_sources": len(chunks), "used_method": bool(method)})
+                 {"channel": channel, "n_sources": len(chunks),
+                  "used_method": bool(method), "answer_mode": answer_mode,
+                  "grounding_status": grounding_status})
     return msg_id
 
 
 def answer(question, channel, user_id=None, client_id=None, conversation_id=None,
            prefer="local", use_temp=False, use_method=False,
-           dept_ids=None, is_banqt=False, can_finance=False, role=None, model=None):
+           dept_ids=None, is_banqt=False, can_finance=False, role=None, model=None,
+           source_document_ids=None):
     """Trả lời MỘT CỤC — dùng cho kênh website, API khách và các lời gọi nội bộ."""
+    request_started = time.time()
     p = prepare(question, channel, client_id=client_id, conversation_id=conversation_id,
                 use_temp=use_temp, use_method=use_method, dept_ids=dept_ids,
-                is_banqt=is_banqt, can_finance=can_finance, role=role, model=model)
+                is_banqt=is_banqt, can_finance=can_finance, role=role, model=model,
+                source_document_ids=source_document_ids)
     timings, chunks, method = p["timings"], p["chunks"], p["method"]
 
-    llm_stats: dict = {}
-    text, latency = llm(p["prompt"], system=p["system"], prefer=prefer,
-                        temperature=p["temperature"], model=p["model"], stats=llm_stats)
-    timings["ai_ms"] = latency
-    timings.update({k: v for k, v in llm_stats.items()
-                    if k in ("prompt_tokens", "gen_tokens", "load_ms",
-                             "prefill_ms", "gen_ms", "num_ctx", "model")})
-    _log_slow(question, timings)
+    if p.get("direct_answer") is not None:
+        text, latency = p["direct_answer"], 0
+        timings["ai_ms"] = 0
+        grounding_status = p["grounding_status"]
+    else:
+        llm_stats: dict = {}
+        text, latency = llm(p["prompt"], system=p["system"], prefer=prefer,
+                            temperature=p["temperature"], model=p["model"], stats=llm_stats)
+        text, grounding_status = validate_grounding(
+            text, chunks, p["answer_mode"], p["strict_grounding"])
+        timings["ai_ms"] = latency
+        timings.update({k: v for k, v in llm_stats.items()
+                        if k in ("prompt_tokens", "gen_tokens", "load_ms",
+                                 "prefill_ms", "gen_ms", "num_ctx", "model")})
+
+    evidence = p.get("evidence") or format_sources(chunks)
 
     msg_id = save_turn(question, text, chunks, conversation_id, channel,
                        client_id=client_id, user_id=user_id,
-                       model_used=p["model"] or prefer, latency=latency, method=method)
+                       model_used=p["model"] or ("none" if latency == 0 else prefer),
+                       latency=latency, method=method, evidence=evidence,
+                       answer_mode=p["answer_mode"], grounding_status=grounding_status,
+                       state=p.get("state"))
+    timings["tong_ms"] = int((time.time() - request_started) * 1000)
+    _log_slow(question, timings)
 
-    return {"answer": text, "sources": format_sources(chunks),
+    return {"answer": text, "sources": evidence,
             "used_method": method["case_type"] if method else None,
-            "latency_ms": latency, "message_id": msg_id, "timings": timings}
+            "latency_ms": latency, "message_id": msg_id, "timings": timings,
+            "answer_mode": p["answer_mode"], "grounding_status": grounding_status,
+            "end_to_end_ms": timings["tong_ms"]}
 
 
 def answer_stream(question, channel, user_id=None, client_id=None, conversation_id=None,
                   use_temp=False, use_method=False, dept_ids=None, is_banqt=False,
-                  can_finance=False, role=None, model=None):
+                  can_finance=False, role=None, model=None, source_document_ids=None):
     """Trả lời THEO DÒNG — generator sinh ra các sự kiện dict:
 
         {"type": "meta",  "sources": [...]}        gửi ngay khi biết nguồn
@@ -464,16 +809,38 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
     Người gọi (api.py) chỉ việc đóng gói thành SSE.
     """
     from app.models import llm_stream
+    request_started = time.time()
 
     p = prepare(question, channel, client_id=client_id, conversation_id=conversation_id,
                 use_temp=use_temp, use_method=use_method, dept_ids=dept_ids,
-                is_banqt=is_banqt, can_finance=can_finance, role=role, model=model)
+                is_banqt=is_banqt, can_finance=can_finance, role=role, model=model,
+                source_document_ids=source_document_ids)
     timings, chunks, method = p["timings"], p["chunks"], p["method"]
 
     # Nguồn trích dẫn đã biết trước khi model viết chữ nào — gửi ngay để giao
     # diện có cái hiển thị, và để trình duyệt nhận byte đầu tiên sớm nhất.
-    yield {"type": "meta", "sources": format_sources(chunks),
-           "used_method": method["case_type"] if method else None}
+    evidence = p.get("evidence") or format_sources(chunks)
+    yield {"type": "meta", "sources": evidence,
+           "used_method": method["case_type"] if method else None,
+           "answer_mode": p["answer_mode"],
+           "grounding_status": p["grounding_status"]}
+
+    if p.get("direct_answer") is not None:
+        text, latency = p["direct_answer"], 0
+        timings["ai_ms"] = 0
+        yield {"type": "delta", "text": text}
+        msg_id = save_turn(
+            question, text, chunks, conversation_id, channel,
+            client_id=client_id, user_id=user_id, model_used="none", latency=0,
+            method=method, evidence=evidence, answer_mode=p["answer_mode"],
+            grounding_status=p["grounding_status"], state=p.get("state"))
+        timings["tong_ms"] = int((time.time() - request_started) * 1000)
+        _log_slow(question, timings)
+        yield {"type": "done", "message_id": msg_id, "latency_ms": 0,
+               "timings": timings, "answer_mode": p["answer_mode"],
+               "grounding_status": p["grounding_status"],
+               "end_to_end_ms": timings["tong_ms"]}
+        return
 
     llm_stats: dict = {}
     t0 = time.time()
@@ -484,20 +851,32 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
         parts.append(piece)
         yield {"type": "delta", "text": piece}
 
-    text = "".join(parts).strip()
+    raw_text = "".join(parts).strip()
+    text, grounding_status = validate_grounding(
+        raw_text, chunks, p["answer_mode"], p["strict_grounding"])
+    if text != raw_text:
+        # Giao diện thay toàn bộ nội dung đã stream khi bộ kiểm chứng phải bỏ
+        # citation giả hoặc chặn một câu không có citation.
+        yield {"type": "replace", "text": text,
+               "grounding_status": grounding_status}
     latency = int((time.time() - t0) * 1000)
     timings["ai_ms"] = latency
     timings.update({k: v for k, v in llm_stats.items()
                     if k in ("prompt_tokens", "gen_tokens", "load_ms",
                              "prefill_ms", "gen_ms", "num_ctx", "model")})
-    _log_slow(question, timings)
 
     msg_id = save_turn(question, text, chunks, conversation_id, channel,
                        client_id=client_id, user_id=user_id,
-                       model_used=p["model"] or "local", latency=latency, method=method)
+                       model_used=p["model"] or "local", latency=latency, method=method,
+                       evidence=evidence, answer_mode=p["answer_mode"],
+                       grounding_status=grounding_status, state=p.get("state"))
+    timings["tong_ms"] = int((time.time() - request_started) * 1000)
+    _log_slow(question, timings)
 
     yield {"type": "done", "message_id": msg_id, "latency_ms": latency,
-           "timings": timings}
+           "timings": timings, "answer_mode": p["answer_mode"],
+           "grounding_status": grounding_status,
+           "end_to_end_ms": timings["tong_ms"]}
 
 
 # =============================================================

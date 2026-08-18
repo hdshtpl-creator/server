@@ -120,19 +120,49 @@ export interface Stats {
 export interface Source {
   title: string;
   relevance_score?: number;
+  /** Điểm do backend trả về; tương đương relevance_score. */
+  score?: number;
+  /** Số thứ tự [Nguồn n] đã dùng trong câu trả lời. */
+  n?: number;
   /** Mã tài liệu trong CSDL — để tải bản gốc qua /files/{id}/download. */
   document_id?: number | null;
   /** ID file trên Google Drive — để mở bản gốc trên Drive (kiểu NotebookLM). */
   drive_file_id?: string | null;
   doc_id?: string | number;
+  chunk_id?: number | string;
   snippet?: string;
+  /** Vị trí bằng chứng chính xác nếu pipeline trích xuất giữ được. */
+  page?: number | string | null;
+  page_number?: number | string | null;
+  section?: string | null;
+  section_title?: string | null;
+  quote?: string | null;
+  excerpt?: string | null;
+  citation_key?: string | null;
+  document_title?: string | null;
+  source_locator?: string | null;
+  source_version?: number | string | null;
+  semantic_score?: number;
+  lexical_score?: number;
 }
+
+export type GroundingStatus = 'grounded' | 'partial' | 'uncited' | 'insufficient' | string;
 
 /**
  * Thời gian từng chặng của một lượt trả lời — để biết chậm ở đâu.
  * `prefill_ms` (đọc prompt) và `gen_ms` (viết câu trả lời) do Ollama báo về.
  */
 export interface ChatTimings {
+  cai_dat_ms?: number;
+  lich_su_ms?: number;
+  du_lieu_cau_truc_ms?: number;
+  embed_ms?: number;
+  embed_load_ms?: number;
+  embed_total_ms?: number;
+  vector_db_ms?: number;
+  chon_model_ms?: number;
+  chuan_bi_ms?: number;
+  tong_ms?: number;
   /** Tra cứu vector trong kho tài liệu. */
   tim_kiem_ms?: number;
   /** Rút dữ liệu khách/vụ việc/nhân sự bằng SQL. */
@@ -153,6 +183,7 @@ export interface ChatTimings {
   so_doan?: number;
   /** Số đoạn bị loại vì điểm liên quan thấp. */
   bo_qua_doan_yeu?: number;
+  search_question?: string;
 }
 
 export interface ChatResponse {
@@ -160,10 +191,13 @@ export interface ChatResponse {
   sources: Source[];
   conversation_id: number;
   latency_ms: number;
+  end_to_end_ms?: number;
   message_id?: number;
   timings?: ChatTimings;
   /** Chỉ có ở /chat/portal — hạn mức câu hỏi theo gói của khách. */
   quota?: { used: number; limit: number };
+  grounding_status?: GroundingStatus;
+  answer_mode?: string;
 }
 
 export interface ChatMessage {
@@ -182,6 +216,9 @@ export interface ChatMessage {
   timings?: ChatTimings;
   /** Đang chảy chữ về — hiện con trỏ nhấp nháy, ẩn các nút thao tác. */
   isStreaming?: boolean;
+  /** Trạng thái kiểm chứng sau khi model viết xong. */
+  grounding_status?: GroundingStatus;
+  answer_mode?: string;
 }
 
 export interface Conversation {
@@ -202,7 +239,7 @@ export interface Conversation {
 
 /** Một sự kiện trên dòng trả lời chảy dần (/chat/stream). */
 export interface ChatStreamEvent {
-  type: 'start' | 'meta' | 'delta' | 'done' | 'error';
+  type: 'start' | 'meta' | 'delta' | 'replace' | 'done' | 'error';
   conversation_id?: number;
   sources?: Source[];
   used_method?: string | null;
@@ -213,6 +250,89 @@ export interface ChatStreamEvent {
   timings?: ChatTimings;
   quota?: { used: number; limit: number };
   message?: string;
+  grounding_status?: GroundingStatus;
+  answer_mode?: string;
+}
+
+export type DraftStatus =
+  | 'draft'
+  | 'generating'
+  | 'generated'
+  | 'needs_review'
+  | 'approved'
+  | 'failed'
+  | string;
+
+/** Bản nháp do module Soạn tài liệu quản lý. Các khoá tuỳ chọn giúp
+ * frontend tương thích với bản backend cũ trong lúc triển khai cuốn chiếu. */
+export interface DraftDocument {
+  id: number;
+  title: string;
+  draft_type?: string;
+  document_type?: string;
+  template_id?: number | null;
+  template_name?: string | null;
+  department_id?: number | null;
+  status: DraftStatus;
+  instructions?: string | null;
+  content?: string | null;
+  content_markdown?: string | null;
+  current_version?: number;
+  grounding_status?: GroundingStatus;
+  placeholder_count?: number;
+  client_id?: number | null;
+  client_name?: string | null;
+  matter_id?: number | null;
+  matter_title?: string | null;
+  source_document_ids?: number[];
+  sources?: Source[];
+  missing_fields?: string[];
+  created_at?: string;
+  updated_at?: string;
+  approved_at?: string | null;
+  error?: string | null;
+  versions?: DraftVersion[];
+  latest_version?: DraftVersion | null;
+  source_documents?: Array<{ id: number; title: string; doc_type?: string }>;
+}
+
+export interface DraftVersion {
+  id?: number;
+  version_no: number;
+  content_markdown: string;
+  change_note?: string | null;
+  model_used?: string | null;
+  grounding_status?: GroundingStatus;
+  placeholder_count?: number;
+  evidence_snapshot?: Source[];
+  evidence?: Source[];
+  created_at?: string;
+}
+
+export interface DraftTemplate {
+  id: number;
+  code: string;
+  name: string;
+  document_type: string;
+  description?: string | null;
+  body_template?: string;
+  required_fields?: Array<
+    | string
+    | { key?: string; name?: string; label?: string; required?: boolean; placeholder?: string }
+  >;
+}
+
+export interface DraftCreateInput {
+  title: string;
+  document_type: string;
+  draft_type?: string;
+  template_id?: number | null;
+  instructions?: string;
+  client_id?: number | null;
+  matter_id?: number | null;
+  department_id?: number | null;
+  input_data?: Record<string, unknown>;
+  source_document_ids?: number[];
 }
 
 /** Một hội thoại trong danh sách bên trái (mô hình ChatGPT). */
@@ -232,6 +352,10 @@ export interface ChatSearchHit {
   /** Hội thoại chứa đoạn này — để mở đúng hội thoại rồi nhảy tới. */
   conversation_id?: number;
   conversation_title?: string;
+  sources?: Source[];
+  evidence?: Source[];
+  grounding_status?: GroundingStatus;
+  answer_mode?: string;
 }
 
 /** Ghi chú cá nhân trong khung chat. */

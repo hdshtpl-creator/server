@@ -67,9 +67,9 @@ export function getUseMockMode() {
 }
 
 /**
- * Đăng ký hàm được gọi khi module TỰ chuyển sang chế độ giả lập vì backend
- * không kết nối được. Nhờ đó giao diện cập nhật lại huy hiệu trạng thái thay vì
- * tiếp tục báo "Backend FastAPI" trong khi dữ liệu hiển thị là dữ liệu mẫu.
+ * Hook tương thích ngược. Mock Mode chỉ được bật bằng thao tác tường minh
+ * của người dùng; lỗi mạng không bao giờ được phép đổi dữ liệu thật sang dữ
+ * liệu mẫu. Giữ API này để không làm hỏng các bản giao diện cũ.
  */
 let fallbackListener = null;
 export function onMockFallback(listener) {
@@ -147,12 +147,12 @@ async function request(endpoint, options = {}) {
   try {
     response = await fetch(url, { ...options, headers });
   } catch (err) {
-    // Backend không chạy / sai URL / CORS chặn → chuyển sang chế độ giả lập
-    console.warn(`[HDS AI] Không kết nối được ${url}. Tự chuyển sang Mock Mode.`, err);
-    const wasLive = !useMockBackend;
-    useMockBackend = true;
-    if (wasLive && fallbackListener) fallbackListener(apiBaseUrl);
-    return handleMockRequest(endpoint, options, headers);
+    console.error(`[HDS AI] Không kết nối được ${url}.`, err);
+    if (fallbackListener) fallbackListener(apiBaseUrl);
+    throw new Error(
+      `Không kết nối được backend tại ${apiBaseUrl}. ` +
+        'Dữ liệu giả lập không được tự động sử dụng; hãy kiểm tra máy chủ hoặc CORS.'
+    );
   }
 
   if (!response.ok) {
@@ -203,7 +203,14 @@ export async function changePassword({ old_password, new_password }) {
 // ==================== 1. HỘI THOẠI ====================
 
 // POST /chat/internal — conversation_id phải là số hoặc bỏ hẳn
-export async function chatInternal({ question, conversation_id, use_temp, use_method, model }) {
+export async function chatInternal({
+  question,
+  conversation_id,
+  use_temp,
+  use_method,
+  model,
+  source_document_ids,
+}) {
   return request('/chat/internal', {
     method: 'POST',
     body: JSON.stringify({
@@ -212,6 +219,9 @@ export async function chatInternal({ question, conversation_id, use_temp, use_me
       use_temp: Boolean(use_temp),
       use_method: Boolean(use_method),
       model: model || undefined,
+      source_document_ids: Array.isArray(source_document_ids) && source_document_ids.length
+        ? source_document_ids.map(toIntOrNull).filter((id) => id !== null)
+        : undefined,
     }),
   });
 }
@@ -230,7 +240,7 @@ export async function chatInternal({ question, conversation_id, use_temp, use_me
  * Trả về sự kiện 'done' cuối cùng để nơi gọi dùng tiếp.
  */
 export async function chatStream(
-  { question, conversation_id, use_temp, use_method, model },
+  { question, conversation_id, use_temp, use_method, model, source_document_ids },
   onEvent
 ) {
   const payload = {
@@ -239,6 +249,9 @@ export async function chatStream(
     use_temp: Boolean(use_temp),
     use_method: Boolean(use_method),
     model: model || undefined,
+    source_document_ids: Array.isArray(source_document_ids) && source_document_ids.length
+      ? source_document_ids.map(toIntOrNull).filter((id) => id !== null)
+      : undefined,
   };
 
   if (useMockBackend) return mockChatStream(payload, onEvent);
@@ -255,11 +268,12 @@ export async function chatStream(
       body: JSON.stringify(payload),
     });
   } catch (err) {
-    console.warn('[HDS AI] Không kết nối được /chat/stream. Chuyển sang giả lập.', err);
-    const wasLive = !useMockBackend;
-    useMockBackend = true;
-    if (wasLive && fallbackListener) fallbackListener(apiBaseUrl);
-    return mockChatStream(payload, onEvent);
+    console.error('[HDS AI] Không kết nối được /chat/stream.', err);
+    if (fallbackListener) fallbackListener(apiBaseUrl);
+    throw new Error(
+      `Không kết nối được backend tại ${apiBaseUrl}. ` +
+        'Câu hỏi chưa được gửi và hệ thống không thay bằng câu trả lời mẫu.'
+    );
   }
 
   if (!response.ok || !response.body) {
@@ -294,6 +308,11 @@ export async function chatStream(
       onEvent?.(evt);
       last = evt;
     }
+  }
+  if (!last || last.type !== 'done') {
+    throw new Error(
+      'Kết nối bị đóng trước khi máy chủ xác nhận đã lưu xong câu trả lời.'
+    );
   }
   return last;
 }
@@ -622,7 +641,90 @@ export async function reviewFeedback(fid, { action, corrected_answer, admin_note
   });
 }
 
-// ==================== 11. TỆP: TẢI LÊN / TẢI VỀ THẬT ====================
+// ==================== 11. SOẠN TÀI LIỆU ====================
+
+export async function listDrafts() {
+  const data = await request('/drafts', { method: 'GET' });
+  // Chấp nhận cả response mảng và response phân trang {items:[...]}.
+  return Array.isArray(data) ? data : data?.items || data?.drafts || [];
+}
+
+export async function listDraftTemplates() {
+  const data = await request('/draft-templates', { method: 'GET' });
+  return Array.isArray(data) ? data : data?.items || [];
+}
+
+export async function getDraft(draftId) {
+  return request(`/drafts/${toIntOrNull(draftId)}`, { method: 'GET' });
+}
+
+export async function createDraft(data) {
+  return request('/drafts', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: data.title,
+      document_type: data.document_type || data.draft_type || 'other',
+      template_id: toIntOrNull(data.template_id),
+      instructions: data.instructions || '',
+      client_id: toIntOrNull(data.client_id),
+      matter_id: toIntOrNull(data.matter_id),
+      department_id: toIntOrNull(data.department_id),
+      input_data: data.input_data && typeof data.input_data === 'object' ? data.input_data : {},
+      source_document_ids: Array.isArray(data.source_document_ids)
+        ? data.source_document_ids.map(toIntOrNull).filter((id) => id !== null)
+        : [],
+    }),
+  });
+}
+
+export async function generateDraft(draftId, data = {}) {
+  return request(`/drafts/${toIntOrNull(draftId)}/generate`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function reviseDraft(draftId, data = {}) {
+  return request(`/drafts/${toIntOrNull(draftId)}/revise`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function approveDraft(draftId, data = {}) {
+  return request(`/drafts/${toIntOrNull(draftId)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({
+      note: data.note || undefined,
+      allow_placeholders: Boolean(data.allow_placeholders),
+      confirm_needs_review: Boolean(data.confirm_needs_review),
+    }),
+  });
+}
+
+export async function exportDraft(draftId, filename) {
+  if (useMockBackend) {
+    const blob = new Blob(['Bản demo — chỉ xuất tệp khi kết nối backend thật.'], {
+      type: 'text/plain;charset=utf-8',
+    });
+    triggerDownload(blob, filename || `ban-nhap-${draftId}.txt`);
+    return;
+  }
+  const res = await fetch(`${apiBaseUrl}/drafts/${toIntOrNull(draftId)}/export?format=docx`, {
+    method: 'GET',
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+  });
+  if (!res.ok) {
+    const rawText = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(rawText, res.status));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  triggerDownload(blob, filename || (m ? decodeURIComponent(m[1]) : `ban-nhap-${draftId}.docx`));
+}
+
+// ==================== 12. TỆP: TẢI LÊN / TẢI VỀ THẬT ====================
 
 // POST /files/upload (multipart) — gửi tệp thật, server tự trích văn bản + OCR.
 export async function uploadDocument({

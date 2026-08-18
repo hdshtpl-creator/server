@@ -7,6 +7,7 @@ Nhóm đường dẫn:
   /review/*   — duyệt nhãn tài liệu (chỉ người có can_review)
   /learn/*    — duyệt hội thoại đưa vào kho (tự học)
   /methods/*  — dạy AI cách phân tích (mẫu phương pháp)
+  /drafts/*   — soạn tài liệu có nguồn, version, duyệt và xuất DOCX/Markdown
   /users/*    — quản lý người dùng và quyền (chỉ admin)
   /stats,/health
 
@@ -23,9 +24,10 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Header, HTTPException, Depends, File, Form, UploadFile
-from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -248,13 +250,33 @@ class ChatIn(BaseModel):
     use_temp: bool = False       # dùng file 'dùng xong bỏ' đã tải trong chat
     use_method: bool = False     # áp mẫu phương pháp phân tích
     model: str | None = None     # '' = mặc định máy chủ | 'auto' | tên model cụ thể
+    source_document_ids: list[int] | None = None  # bộ nguồn người dùng chủ động chọn
+
+
+def _chat_source_ids(body: ChatIn) -> list[int] | None:
+    """Validate sớm trước khi mở SSE; RAG vẫn chịu trách nhiệm lọc theo quyền/RLS."""
+    if body.source_document_ids is None:
+        return None
+    ids = []
+    seen = set()
+    for value in body.source_document_ids:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise HTTPException(422, "source_document_ids chỉ nhận số nguyên dương")
+        if value not in seen:
+            seen.add(value)
+            ids.append(value)
+    if len(ids) > 50:
+        raise HTTPException(422, "Chỉ được chọn tối đa 50 tài liệu nguồn")
+    return ids
 
 
 @app.post("/chat/public")
 def chat_public(body: ChatIn):
+    source_ids = _chat_source_ids(body)
     conv = (check_conversation(None, body.conversation_id, "public")
             if body.conversation_id else rag.start_conversation(None, "public"))
-    res = rag.answer(body.question, "public", conversation_id=conv)
+    res = rag.answer(body.question, "public", conversation_id=conv,
+                     source_document_ids=source_ids)
     res["conversation_id"] = conv
     return res
 
@@ -262,11 +284,13 @@ def chat_public(body: ChatIn):
 @app.post("/chat/internal")
 def chat_internal(body: ChatIn, user=Depends(current_user)):
     require(user, INTERNAL_ROLES)
+    source_ids = _chat_source_ids(body)
     conv = _resolve_conv(user, body, "internal")
     res = rag.answer(body.question, "internal", user_id=user["id"], conversation_id=conv,
                      use_temp=body.use_temp, use_method=body.use_method,
                      dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
-                     can_finance=user["can_finance"], model=body.model)
+                     can_finance=user["can_finance"], model=body.model,
+                     source_document_ids=source_ids)
     res["conversation_id"] = conv
     return res
 
@@ -274,6 +298,7 @@ def chat_internal(body: ChatIn, user=Depends(current_user)):
 @app.post("/chat/portal")
 def chat_portal(body: ChatIn, user=Depends(current_user)):
     require(user, CLIENT_ROLES)
+    source_ids = _chat_source_ids(body)
     # Hạn mức câu hỏi/tháng theo gói
     quota = user.get("monthly_quota") or 0
     used = user.get("used_this_month") or 0
@@ -284,7 +309,7 @@ def chat_portal(body: ChatIn, user=Depends(current_user)):
     conv = _resolve_conv(user, body, "portal", cid)
     res = rag.answer(body.question, "portal", user_id=user["id"], client_id=cid,
                      conversation_id=conv, use_temp=body.use_temp,
-                     role=user["role"])
+                     role=user["role"], source_document_ids=source_ids)
     # Tăng bộ đếm đã dùng
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
@@ -313,6 +338,7 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
     và /chat/portal qua rag.prepare — không có bản sao thứ hai để lệch nhau.
     """
     require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    source_ids = _chat_source_ids(body)
     is_client = user["role"] in CLIENT_ROLES
 
     if is_client:
@@ -361,7 +387,8 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
                         dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
                         can_finance=user["can_finance"],
                         role=user["role"] if is_client else None,
-                        model=None if is_client else body.model):
+                        model=None if is_client else body.model,
+                        source_document_ids=source_ids):
                     q.put(("event", ev))
             except Exception as e:  # noqa: BLE001 - báo lỗi qua dòng, không để luồng chết câm
                 q.put(("error", str(e)))
@@ -402,6 +429,18 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
 def _user_channel(user):
     """Kênh của người đang đăng nhập (nhân viên → internal, khách → portal)."""
     return "portal" if user["role"] in CLIENT_ROLES else "internal"
+
+
+def _message_evidence(value):
+    """psycopg thường giải mã JSONB sẵn; vẫn chịu được driver trả chuỗi JSON."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return []
+    return value
 
 
 @app.get("/conversations")
@@ -460,6 +499,7 @@ def chat_history(user=Depends(current_user), conversation_id: int | None = None,
     """Tin nhắn của MỘT hội thoại cụ thể. Không truyền conversation_id thì trả
     hội thoại mới hoạt động gần nhất (mở app là thấy lại chỗ đang dở)."""
     require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    limit = max(1, min(limit, 1000))
     channel = _user_channel(user)
     if conversation_id:
         conv = check_conversation(user, conversation_id, channel)
@@ -478,11 +518,16 @@ def chat_history(user=Depends(current_user), conversation_id: int | None = None,
         return {"conversation_id": None, "messages": []}
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("""SELECT id, role, content, created_at FROM messages
+            cur.execute("""SELECT id, role, content, created_at, sources, evidence,
+                                  answer_mode, grounding_status
+                             FROM messages
                             WHERE conversation_id=%s ORDER BY id DESC LIMIT %s""",
                         (conv, limit))
             rows = cur.fetchall()
-    msgs = [{"id": r[0], "role": r[1], "content": r[2], "created_at": str(r[3])}
+    msgs = [{"id": r[0], "role": r[1], "content": r[2], "created_at": str(r[3]),
+             "sources": _message_evidence(r[5]) if r[5] is not None else _message_evidence(r[4]),
+             "evidence": _message_evidence(r[5]),
+             "answer_mode": r[6], "grounding_status": r[7]}
             for r in reversed(rows)]
     return {"conversation_id": conv, "messages": msgs}
 
@@ -604,14 +649,16 @@ def review_pending(user=Depends(current_user), limit: int = 50):
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT d.id,d.title,d.doc_type,d.access_level,d.client_id,d.confidence,
-                           d.source_kind,c.name,
+                           d.source_kind,c.name,d.extraction_status,d.extraction_error,
                            (SELECT left(content,200) FROM chunks WHERE document_id=d.id ORDER BY chunk_index LIMIT 1)
                            FROM documents d LEFT JOIN clients c ON c.id=d.client_id
                            WHERE NOT d.label_verified ORDER BY d.confidence NULLS FIRST, d.id LIMIT %s""",
                         (limit,))
             rows = cur.fetchall()
     return [{"id": r[0], "title": r[1], "doc_type": r[2], "access_level": r[3], "client_id": r[4],
-             "confidence": r[5], "source_kind": r[6], "client_name": r[7], "preview": r[8]} for r in rows]
+             "confidence": r[5], "source_kind": r[6], "client_name": r[7],
+             "extraction_status": r[8], "extraction_warning": r[9],
+             "preview": r[10]} for r in rows]
 
 
 class LabelIn(BaseModel):
@@ -628,7 +675,8 @@ def review_approve(doc_id: int, body: LabelIn, user=Depends(current_user)):
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""UPDATE documents SET doc_type=%s,access_level=%s,client_id=%s,
-                           label_verified=true,approved=true,updated_at=now() WHERE id=%s""",
+                           label_verified=true,approved=true,extraction_status='ready',updated_at=now()
+                           WHERE id=%s""",
                         (body.doc_type, body.access_level, body.client_id, doc_id))
         db.audit(conn, user["id"], "approve_label", "documents", doc_id, body.model_dump())
     return {"ok": True, "document_id": doc_id}
@@ -874,11 +922,15 @@ def documents_list(user=Depends(current_user), q: str = "", doc_type: str = "", 
     """Danh sách tài liệu đã vào kho, kèm tóm tắt. Chỉ admin hoặc người được cấp quyền.
     q: tìm theo tên/tóm tắt. doc_type: lọc theo loại (law/contract/...)."""
     require_reviewer(user)
+    q = (q or "").strip()[:200]
+    limit = max(1, min(limit, 500))
     sql = """SELECT d.id, d.title, d.doc_type, d.access_level, d.summary,
                     d.source_kind, d.created_at, c.name,
                     (SELECT count(*) FROM chunks WHERE document_id=d.id) AS so_doan
                FROM documents d LEFT JOIN clients c ON c.id=d.client_id
-              WHERE d.label_verified = true AND d.approved = true"""
+              WHERE d.label_verified = true AND d.approved = true
+                AND coalesce(d.active,true)
+                AND coalesce(d.extraction_status,'ready')='ready'"""
     params = []
     # Phiên này mở bằng admin=True nên RLS không áp — phải tự chặn công nợ.
     if not user["can_finance"]:
@@ -919,12 +971,16 @@ def documents_browse(user=Depends(current_user), q: str = "", limit: int = 300):
     """Danh sách tài liệu cho MỌI nhân viên nội bộ — ÁP CƠ CHẾ CÁCH B:
     thấy tên tất cả, nhưng hồ sơ ngoài phòng bị CHE TÊN và không mở được."""
     require(user, INTERNAL_ROLES)
+    q = (q or "").strip()[:200]
+    limit = max(1, min(limit, 500))
     sql = """SELECT d.id,d.title,d.doc_type,d.access_level,d.client_id,d.department_id,
                     dep.name, c.name, d.summary
                FROM documents d
                LEFT JOIN clients c ON c.id=d.client_id
                LEFT JOIN departments dep ON dep.id=d.department_id
-              WHERE d.label_verified AND d.approved"""
+              WHERE d.label_verified AND d.approved
+                AND coalesce(d.active,true)
+                AND coalesce(d.extraction_status,'ready')='ready'"""
     params = []
     if q:
         sql += " AND (d.title ILIKE %s OR d.summary ILIKE %s)"
@@ -1164,7 +1220,7 @@ def models_benchmark(user=Depends(current_user), model: str | None = None):
 
 DATA_RAW = Path(os.getenv("DATA_RAW", "./data/raw"))
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
-ALLOWED_UPLOAD_EXT = {".pdf", ".docx", ".txt", ".md"}
+ALLOWED_UPLOAD_EXT = {".pdf", ".docx", ".xlsx", ".csv", ".txt", ".md"}
 
 
 def _safe_filename(name: str) -> str:
@@ -1240,12 +1296,18 @@ async def files_upload(
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("UPDATE documents SET uploaded_by=%s WHERE id=%s", (user["id"], doc_id))
+            cur.execute("SELECT approved,extraction_status FROM documents WHERE id=%s", (doc_id,))
+            actual_approved, extraction_status = cur.fetchone()
         db.audit(conn, user["id"], "web_upload", "documents", doc_id,
                  {"file": safe, "bytes": size, "auto_approve": auto_approve})
 
+    if extraction_status == "warning":
+        note = "Đã trích xuất nhưng có cảnh báo; bắt buộc duyệt thủ công trước khi dùng."
+    else:
+        note = "Đã nạp vào kho." if actual_approved else "Đã vào hàng chờ duyệt nhãn."
     return {"ok": True, "document_id": doc_id, "filename": safe, "bytes": size,
             "stored_path": str(dest),
-            "note": "Đã nạp vào kho." if auto_approve else "Đã vào hàng chờ duyệt nhãn."}
+            "extraction_status": extraction_status, "note": note}
 
 
 @app.get("/files/{doc_id}/download")
@@ -1309,10 +1371,10 @@ def settings_put(key: str, body: SettingIn, user=Depends(current_user)):
     require(user, {"admin"})
     try:
         settings.set(key, body.value, user["id"])
-    except ValueError as e:
-        raise HTTPException(400, str(e))
     except json.JSONDecodeError:
         raise HTTPException(400, "Giá trị không phải JSON hợp lệ")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True, "key": key}
 
 
@@ -1460,6 +1522,14 @@ def feedback_review(fid: int, body: FeedbackReviewIn, user=Depends(current_user)
                  {"action": body.action, "document_id": doc_id})
 
     return {"ok": True, "feedback_id": fid, "action": body.action, "document_id": doc_id}
+
+
+# ---------- 11. Soạn tài liệu có nguồn ----------
+# Router nhận lại chính dependency xác thực/duyệt ở file này để không sinh một
+# cơ chế quyền thứ hai. Đăng ký trước route /admin; các endpoint được liệt kê
+# trong OpenAPI như phần còn lại của ứng dụng.
+from app.draft_api import build_router as _build_draft_router
+app.include_router(_build_draft_router(current_user, require_reviewer))
 
 
 # ---------- 9. Giao diện quản trị ----------

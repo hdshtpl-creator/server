@@ -145,9 +145,19 @@ File nằm ngoài các thư mục trên → bỏ qua kèm cảnh báo. Cứ ch�
 | `.pdf` | PDF scan được **OCR tiếng Việt** tự động |
 | `.docx` | Đọc cả bảng biểu |
 | `.txt` `.md` | |
-| Google Docs / Sheets | Tự xuất sang .docx / .xlsx |
+| `.xlsx` `.csv` | Giữ tên sheet/cột/dòng để tra cứu; sheet ẩn không được học tự động |
+| Google Docs / Sheets | Tự xuất sang `.docx` / `.xlsx` rồi trích nội dung |
 
-`.doc` cũ **không đọc được** — mở bằng Word/Google Docs lưu lại thành `.docx`.
+`.doc` cũ được chuyển bằng LibreOffice trên server; nếu chuyển lỗi, dashboard ghi mã lỗi
+và giữ tài liệu cũ (nếu có). Nên lưu lại thành `.docx` để ổn định hơn.
+
+File rỗng, file hỏng/đặt mật khẩu, PDF scan thiếu OCR, bảng tính quá lớn hoặc nội dung
+quá ngắn đều được ghi rõ trong trạng thái đồng bộ. File có cảnh báo luôn vào hàng chờ
+duyệt, kể cả khi đã bật tự duyệt.
+
+Khi chia đoạn, bot giữ vị trí nguồn: số trang PDF, tiêu đề mục DOCX và tên sheet +
+khoảng dòng XLSX/CSV. Phần trả lời có thể dùng các trường này để mở đúng nơi làm căn cứ,
+thay vì chỉ dẫn về tên file chung chung.
 
 Tên file nên giữ nguyên quy ước bạn đang dùng (`07_2022_QH15_458435.pdf`) — bot dùng tên
 file làm tiêu đề tài liệu nên tên rõ ràng thì tra cứu dễ hơn.
@@ -187,8 +197,19 @@ bash deploy/auto-learn.sh                     # học thật
 sudo bash deploy/auto-learn.sh --install-timer # tự học mỗi 15 phút
 ```
 
-Bot chỉ xử lý file **mới hoặc đã sửa** (so checksum) → chạy lại rất nhanh.
+Bot chỉ xử lý file **mới hoặc đã sửa** (file thường so checksum; Google Docs/Sheets
+so `modifiedTime`) → chạy lại rất nhanh.
 Sửa nội dung file trên Drive → lần sau bot tự thay bản cũ bằng bản mới.
+
+Mặc định an toàn: file mới **chờ người duyệt** trước khi được dùng để trả lời. Sau khi
+đã kiểm tra quy trình và dashboard, có thể chủ động bật trong `hds-ai/.env`:
+
+```env
+AUTO_LEARN_AUTO_APPROVE=1
+```
+
+Biến cũ vẫn tương thích: `AUTO_LEARN_REVIEW=1` là chờ duyệt,
+`AUTO_LEARN_REVIEW=0` là tự duyệt. Không nên đặt đồng thời hai biến; biến mới được ưu tiên.
 
 ## Thứ tự làm cho bản demo
 

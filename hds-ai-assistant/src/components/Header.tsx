@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { ChangePasswordModal } from './auth/ChangePasswordModal';
-import { ROLE_META, canAccessAdmin } from '../constants';
+import { ROLE_META, canAccessAdmin, isClientRole } from '../constants';
 import {
   MessageSquare,
   ShieldCheck,
@@ -18,6 +18,7 @@ import {
   Menu,
   X,
   UserCircle2,
+  FilePenLine,
 } from 'lucide-react';
 
 export const Header: React.FC = () => {
@@ -80,6 +81,7 @@ export const Header: React.FC = () => {
 
   const role = ROLE_META[currentUser?.role as keyof typeof ROLE_META];
   const showAdminTab = canAccessAdmin(currentUser);
+  const showDraftsTab = !isClientRole(currentUser?.role);
 
   const tabClass = (active: boolean) =>
     `flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
@@ -133,6 +135,18 @@ export const Header: React.FC = () => {
               <MessageSquare className="w-4 h-4" />
               <span className="hidden sm:inline">Hội thoại AI</span>
             </button>
+
+            {showDraftsTab && (
+              <button
+                id="nav-drafts-btn"
+                onClick={() => setActiveView('drafts')}
+                className={tabClass(activeView === 'drafts')}
+                aria-current={activeView === 'drafts' ? 'page' : undefined}
+              >
+                <FilePenLine className="w-4 h-4" />
+                <span className="hidden sm:inline">Soạn tài liệu</span>
+              </button>
+            )}
 
             {showAdminTab && (
               <button
@@ -340,6 +354,7 @@ export const Header: React.FC = () => {
                 </p>
               </div>
 
+              {(import.meta.env.DEV || import.meta.env.VITE_ENABLE_MOCK_MODE === 'true') && (
               <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
                 <div>
                   <div className="font-semibold text-xs flex items-center gap-1.5">
@@ -365,6 +380,7 @@ export const Header: React.FC = () => {
                   <div className="w-11 h-6 bg-slate-300 dark:bg-slate-700 rounded-full peer peer-checked:bg-hds-navy peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform" />
                 </label>
               </div>
+              )}
 
               <div className="p-3 bg-hds-soft dark:bg-slate-800/60 border border-blue-200 dark:border-slate-700 rounded-lg text-xs text-hds-navy dark:text-blue-200 flex items-start gap-2">
                 <Info className="w-4 h-4 shrink-0 mt-0.5" />

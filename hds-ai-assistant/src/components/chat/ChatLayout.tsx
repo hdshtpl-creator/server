@@ -4,7 +4,7 @@ import { ConversationSidebar } from './ConversationSidebar';
 import { ChatMessageItem } from './ChatMessageItem';
 import { FileUploadModal } from './FileUploadModal';
 import * as api from '../../api';
-import type { MethodTemplate } from '../../types';
+import type { BrowseDocument, MethodTemplate } from '../../types';
 import { isClientRole } from '../../constants';
 import {
   Send,
@@ -17,6 +17,9 @@ import {
   AlertCircle,
   Bot,
   Cpu,
+  BookOpen,
+  Check,
+  Search,
 } from 'lucide-react';
 
 const nowLabel = () =>
@@ -31,6 +34,8 @@ export const ChatLayout: React.FC = () => {
     setConvServerId,
     setConvTempFile,
     currentUser,
+    isChatStreaming,
+    setChatStreaming,
   } = useApp();
 
   const [inputQuestion, setInputQuestion] = useState('');
@@ -38,10 +43,15 @@ export const ChatLayout: React.FC = () => {
   const [methodTemplates, setMethodTemplates] = useState<MethodTemplate[]>([]);
   const [genModels, setGenModels] = useState<string[]>([]);
   const [warmModels, setWarmModels] = useState<string[]>([]);
-  // 'auto' = tự chọn model phù hợp; '' = mặc định máy chủ; hoặc tên model cụ thể
+  // 'auto' = fast-path cho câu xác định, model chất lượng mặc định cho RAG;
+  // '' = mặc định máy chủ; hoặc tên model cụ thể
   const [selectedModel, setSelectedModel] = useState('auto');
-  const [isLoading, setIsLoading] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showSourcePicker, setShowSourcePicker] = useState(false);
+  const [sourceDocs, setSourceDocs] = useState<BrowseDocument[]>([]);
+  const [sourceQuery, setSourceQuery] = useState('');
+  const [selectedSourceIds, setSelectedSourceIds] = useState<number[]>([]);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [quota, setQuota] = useState<{ used: number; limit: number } | null>(null);
 
@@ -56,7 +66,50 @@ export const ChatLayout: React.FC = () => {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeConversation?.messages, isLoading]);
+  }, [activeConversation?.messages, isChatStreaming]);
+
+  const openSourcePicker = async () => {
+    setShowSourcePicker(true);
+  };
+
+  // Tìm trên server thay vì chỉ lọc 300 dòng đầu. Với kho lớn, nhập tên/mã
+  // tài liệu vẫn tìm được nguồn nằm ngoài trang đầu.
+  useEffect(() => {
+    if (!showSourcePicker || isClient) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setSourcesLoading(true);
+      try {
+        const docs = await api.getBrowseDocuments({ q: sourceQuery.trim() });
+        if (!cancelled) {
+          setSourceDocs((Array.isArray(docs) ? docs : []).filter((doc) => doc.can_open));
+        }
+      } catch (err: any) {
+        if (!cancelled) setErrorMessage(err?.message || 'Không tải được danh sách nguồn.');
+      } finally {
+        if (!cancelled) setSourcesLoading(false);
+      }
+    }, sourceQuery.trim() ? 250 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [showSourcePicker, sourceQuery, isClient]);
+
+  // Bộ nguồn là phạm vi của hội thoại hiện tại. Đổi hội thoại phải bỏ lựa chọn
+  // cũ để không vô tình giới hạn câu hỏi mới vào hồ sơ của cuộc chat trước.
+  useEffect(() => {
+    setSelectedSourceIds([]);
+    setSourceQuery('');
+  }, [activeConvId]);
+
+  const refreshModels = () => {
+    if (isClient) return;
+    api.getModels().then((m) => {
+      setGenModels(Array.isArray(m?.generation) ? m.generation : []);
+      setWarmModels(Array.isArray(m?.loaded) ? m.loaded : []);
+    }).catch(() => undefined);
+  };
 
   useEffect(() => {
     if (isClient) return;
@@ -65,22 +118,15 @@ export const ChatLayout: React.FC = () => {
       .then((templates) => setMethodTemplates(Array.isArray(templates) ? templates : []))
       .catch(() => setMethodTemplates([]));
     // Danh sách model để chọn ngay ô chat (chỉ nhân viên nội bộ)
-    api
-      .getModels()
-      .then((m) => {
-        setGenModels(Array.isArray(m?.generation) ? m.generation : []);
-        setWarmModels(Array.isArray(m?.loaded) ? m.loaded : []);
-      })
-      .catch(() => {
-        setGenModels([]);
-        setWarmModels([]);
-      });
+    refreshModels();
+    // refreshModels chỉ phụ thuộc vai hiện tại; gọi lại khi isClient đổi.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isClient]);
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const questionText = inputQuestion.trim();
-    if (!questionText || isLoading || !activeConversation) return;
+    if (!questionText || isChatStreaming || !activeConversation) return;
 
     setInputQuestion('');
     setErrorMessage(null);
@@ -96,7 +142,7 @@ export const ChatLayout: React.FC = () => {
       used_temp_file: tempFileName,
     });
 
-    setIsLoading(true);
+    setChatStreaming(true);
     // Ô trống cho câu trả lời, chữ sẽ chảy dần vào đây.
     const aiMsgId = `ai-${Date.now()}`;
     let opened = false;
@@ -109,6 +155,8 @@ export const ChatLayout: React.FC = () => {
           use_temp: Boolean(tempFileName),
           use_method: useMethod && !isClient,
           model: isClient ? undefined : selectedModel,
+          source_document_ids:
+            isClient || selectedSourceIds.length === 0 ? undefined : selectedSourceIds,
         },
         (evt) => {
           if (evt.type === 'start' && evt.conversation_id) {
@@ -117,7 +165,8 @@ export const ChatLayout: React.FC = () => {
             return;
           }
           if (evt.type === 'meta') {
-            // Chữ đầu tiên sắp tới: dựng bong bóng và tắt chỉ báo "đang trả lời"
+            // Dựng bong bóng nhưng vẫn khoá lượt gửi mới. Chỉ sự kiện
+            // `done` mới xác nhận backend đã lưu xong toàn bộ câu trả lời.
             addMessageToConv(activeConvId, {
               id: aiMsgId,
               sender: 'ai',
@@ -125,9 +174,10 @@ export const ChatLayout: React.FC = () => {
               sources: evt.sources,
               timestamp: nowLabel(),
               isStreaming: true,
+              grounding_status: evt.grounding_status,
+              answer_mode: evt.answer_mode,
             });
             opened = true;
-            setIsLoading(false);
             return;
           }
           if (evt.type === 'delta' && evt.text) {
@@ -135,14 +185,26 @@ export const ChatLayout: React.FC = () => {
             updateMessage(aiMsgId, (m) => ({ ...m, text: m.text + piece }));
             return;
           }
+          if (evt.type === 'replace') {
+            updateMessage(aiMsgId, (m) => ({
+              ...m,
+              text: evt.text ?? m.text,
+              grounding_status: evt.grounding_status ?? m.grounding_status,
+              answer_mode: evt.answer_mode ?? m.answer_mode,
+            }));
+            return;
+          }
           if (evt.type === 'done') {
             if (evt.quota) setQuota(evt.quota);
+            refreshModels();
             updateMessage(aiMsgId, (m) => ({
               ...m,
               isStreaming: false,
               latency_ms: evt.latency_ms,
               serverMessageId: evt.message_id,
               timings: evt.timings,
+              grounding_status: evt.grounding_status ?? m.grounding_status,
+              answer_mode: evt.answer_mode ?? m.answer_mode,
             }));
           }
         }
@@ -168,7 +230,7 @@ export const ChatLayout: React.FC = () => {
         });
       }
     } finally {
-      setIsLoading(false);
+      setChatStreaming(false);
       textareaRef.current?.focus();
     }
   };
@@ -182,6 +244,7 @@ export const ChatLayout: React.FC = () => {
 
   const messages = activeConversation?.messages ?? [];
   const hasConversation = messages.length > 0;
+  const visibleSourceDocs = sourceDocs;
 
   return (
     <div className="flex w-full h-[calc(100dvh-4rem)] bg-hds-soft dark:bg-slate-950 overflow-hidden">
@@ -244,6 +307,27 @@ export const ChatLayout: React.FC = () => {
 
             {!isClient && (
               <button
+                type="button"
+                onClick={openSourcePicker}
+                disabled={isChatStreaming}
+                className={`flex items-center gap-1.5 font-semibold text-xs px-3 py-1.5 rounded-xl border transition-colors disabled:opacity-50 ${
+                  selectedSourceIds.length > 0
+                    ? 'bg-blue-50 dark:bg-blue-950/60 text-hds-navy dark:text-blue-200 border-blue-300 dark:border-blue-800'
+                    : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+                title="Giới hạn câu trả lời trong các tài liệu đã chọn"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">
+                  {selectedSourceIds.length > 0
+                    ? `Nguồn đã chọn (${selectedSourceIds.length})`
+                    : 'Chọn nguồn'}
+                </span>
+              </button>
+            )}
+
+            {!isClient && (
+              <button
                 id="chat-upload-btn"
                 onClick={() => setShowUploadModal(true)}
                 disabled={!canUpload}
@@ -295,7 +379,7 @@ export const ChatLayout: React.FC = () => {
             </div>
           )}
 
-          {isLoading && (
+          {isChatStreaming && !messages.some((message) => message.isStreaming) && (
             <div className="py-5 px-4 sm:px-6 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
               <div className="max-w-3xl mx-auto flex items-start gap-3.5">
                 {/* Avatar trợ lý — giống hệt tin nhắn thật để nhìn ra ngay là bot đang soạn */}
@@ -338,6 +422,7 @@ export const ChatLayout: React.FC = () => {
                 value={inputQuestion}
                 onChange={(e) => setInputQuestion(e.target.value)}
                 onKeyDown={handleKeyDown}
+                disabled={isChatStreaming}
                 placeholder="Nhập câu hỏi pháp lý… (Enter để gửi, Shift+Enter để xuống dòng)"
                 aria-label="Câu hỏi gửi tới trợ lý AI"
                 className="flex-1 px-2 py-1.5 bg-transparent text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none resize-none min-w-0"
@@ -364,12 +449,12 @@ export const ChatLayout: React.FC = () => {
                 <button
                   id="send-chat-btn"
                   type="submit"
-                  disabled={!inputQuestion.trim() || isLoading}
+                  disabled={!inputQuestion.trim() || isChatStreaming}
                   className="p-2.5 rounded-xl transition-colors bg-hds-navy text-hds-gold hover:bg-hds-navy-light disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 disabled:cursor-not-allowed"
                   title="Gửi câu hỏi"
                   aria-label="Gửi câu hỏi"
                 >
-                  {isLoading ? (
+                  {isChatStreaming ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
                     <Send className="w-4 h-4" />
@@ -387,8 +472,9 @@ export const ChatLayout: React.FC = () => {
                     <select
                       value={selectedModel}
                       onChange={(e) => setSelectedModel(e.target.value)}
+                      onFocus={refreshModels}
                       aria-label="Chọn mô hình AI"
-                      title="Mô hình trả lời — Tự động ưu tiên model đang sẵn trong bộ nhớ"
+                      title="Tự động: câu dữ liệu xác định không gọi model; tra cứu tài liệu dùng model chất lượng mặc định"
                       className="bg-transparent text-slate-500 dark:text-slate-400 font-semibold border border-slate-200 dark:border-slate-700 rounded-lg px-1.5 py-0.5 focus:ring-2 focus:ring-hds-blue focus:outline-none cursor-pointer max-w-[190px]"
                     >
                       <option value="auto">⚡ Tự động</option>
@@ -420,6 +506,129 @@ export const ChatLayout: React.FC = () => {
           </form>
         </div>
       </main>
+
+      {showSourcePicker && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4"
+          onClick={() => setShowSourcePicker(false)}
+          role="presentation"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="source-picker-title"
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-2xl max-h-[82vh] flex flex-col bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl overflow-hidden"
+          >
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
+              <div>
+                <h3 id="source-picker-title" className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                  Chọn bộ nguồn cho hội thoại
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Khi có lựa chọn, backend chỉ tra cứu trong các tài liệu này.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSourcePicker(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                aria-label="Đóng bộ chọn nguồn"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800">
+                <Search className="w-4 h-4 text-slate-400" />
+                <input
+                  value={sourceQuery}
+                  onChange={(event) => setSourceQuery(event.target.value)}
+                  placeholder="Tìm theo tên tài liệu…"
+                  className="flex-1 min-w-0 bg-transparent outline-none text-xs text-slate-800 dark:text-slate-100"
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3">
+              {sourcesLoading ? (
+                <div className="py-12 flex items-center justify-center gap-2 text-xs text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Đang tải kho tài liệu…
+                </div>
+              ) : visibleSourceDocs.length === 0 ? (
+                <p className="py-12 text-center text-xs text-slate-500">
+                  Không có tài liệu có quyền mở phù hợp.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {visibleSourceDocs.map((doc) => {
+                    const checked = selectedSourceIds.includes(doc.id);
+                    return (
+                      <label
+                        key={doc.id}
+                        className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                          checked
+                            ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-800'
+                            : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            setSelectedSourceIds((ids) =>
+                              checked ? ids.filter((id) => id !== doc.id) : [...ids, doc.id]
+                            )
+                          }
+                          className="sr-only"
+                        />
+                        <span
+                          className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                            checked
+                              ? 'bg-hds-navy border-hds-navy text-hds-gold'
+                              : 'border-slate-300 dark:border-slate-600'
+                          }`}
+                        >
+                          {checked && <Check className="w-3 h-3" />}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-xs font-semibold text-slate-800 dark:text-slate-100 break-words">
+                            {doc.title}
+                          </span>
+                          {(doc.doc_type || doc.department) && (
+                            <span className="block mt-0.5 text-[10px] text-slate-500 dark:text-slate-400">
+                              {[doc.doc_type, doc.department].filter(Boolean).join(' · ')}
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setSelectedSourceIds([])}
+                disabled={selectedSourceIds.length === 0}
+                className="px-3 py-2 text-xs font-semibold text-slate-500 hover:text-hds-red disabled:opacity-40"
+              >
+                Bỏ chọn tất cả
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSourcePicker(false)}
+                className="px-4 py-2 rounded-xl bg-hds-navy text-hds-gold text-xs font-bold"
+              >
+                Dùng {selectedSourceIds.length || 'toàn bộ'} nguồn
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <FileUploadModal
         isOpen={showUploadModal}

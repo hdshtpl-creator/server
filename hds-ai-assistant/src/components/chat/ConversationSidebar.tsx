@@ -38,6 +38,7 @@ export const ConversationSidebar: React.FC = () => {
     saveNote,
     removeNote,
     showToast,
+    isChatStreaming,
   } = useApp();
 
   const [query, setQuery] = useState('');
@@ -98,6 +99,10 @@ export const ConversationSidebar: React.FC = () => {
 
   // Bấm kết quả tìm: cùng hội thoại thì nhảy thẳng, khác thì mở đúng hội thoại rồi nhảy
   const openHit = (hit: ChatSearchHit) => {
+    if (isChatStreaming && hit.conversation_id !== activeServerId) {
+      showToast('Hãy chờ câu trả lời hiện tại được lưu xong.', 'info');
+      return;
+    }
     if (hit.conversation_id && hit.conversation_id !== activeServerId) {
       selectConversation(hit.conversation_id, hit.id).catch(() =>
         showToast('Không mở được hội thoại này.', 'error')
@@ -140,6 +145,10 @@ export const ConversationSidebar: React.FC = () => {
   };
 
   const handleDelete = async (id: number, title: string) => {
+    if (isChatStreaming) {
+      showToast('Hãy chờ câu trả lời hiện tại được lưu xong.', 'info');
+      return;
+    }
     if (!window.confirm(`Xoá hội thoại "${title}"? Toàn bộ tin nhắn trong đó sẽ mất.`)) return;
     try {
       await deleteConversation(id);
@@ -169,7 +178,9 @@ export const ConversationSidebar: React.FC = () => {
         <div className="p-3 border-b border-white/10 space-y-2">
           <button
             onClick={newConversation}
-            className="w-full flex items-center justify-center gap-2 bg-hds-navy hover:bg-hds-navy-light text-hds-gold font-semibold text-xs px-3 py-2.5 rounded-xl border border-hds-gold/30 transition-colors"
+            disabled={isChatStreaming}
+            title={isChatStreaming ? 'Hãy chờ câu trả lời hiện tại lưu xong' : undefined}
+            className="w-full flex items-center justify-center gap-2 bg-hds-navy hover:bg-hds-navy-light text-hds-gold font-semibold text-xs px-3 py-2.5 rounded-xl border border-hds-gold/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <MessageSquarePlus className="w-4 h-4" />
             Cuộc trò chuyện mới
@@ -260,11 +271,15 @@ export const ConversationSidebar: React.FC = () => {
                       />
                     ) : (
                       <button
-                        onClick={() =>
+                        onClick={() => {
+                          if (isChatStreaming && c.id !== activeServerId) {
+                            showToast('Hãy chờ câu trả lời hiện tại được lưu xong.', 'info');
+                            return;
+                          }
                           selectConversation(c.id).catch(() =>
                             showToast('Không mở được hội thoại.', 'error')
-                          )
-                        }
+                          );
+                        }}
                         className="flex-1 min-w-0 text-left px-2.5 py-2"
                         title={c.title}
                       >

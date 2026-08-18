@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS clients (
   note          TEXT,
   created_at    TIMESTAMPTZ DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_clients_name_trgm ON clients USING gin(lower(name) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_clients_code_lower ON clients(lower(code));
 
 CREATE TABLE IF NOT EXISTS users (
   id            SERIAL PRIMARY KEY,
@@ -59,6 +61,7 @@ CREATE TABLE IF NOT EXISTS users (
     CHECK (role NOT IN ('client_free','client_plus','client_pro')
            OR client_id IS NOT NULL)
 );
+CREATE INDEX IF NOT EXISTS idx_users_active_role ON users(active, role);
 -- CSDL tạo từ bản trước có cột 'api_key' (chưa bao giờ được ghi vào, nên đổi
 -- tên là an toàn tuyệt đối). Đổi tên thay vì thêm cột mới để không để lại một
 -- cột tên 'api_key' mà thực chất chứa bản băm — dễ khiến người sau tưởng là
@@ -83,6 +86,8 @@ CREATE TABLE IF NOT EXISTS user_departments (
   is_head       BOOLEAN DEFAULT false,
   PRIMARY KEY (user_id, department_id)
 );
+CREATE INDEX IF NOT EXISTS idx_user_departments_department_user
+  ON user_departments(department_id, user_id);
 
 CREATE TABLE IF NOT EXISTS matters (
   id            SERIAL PRIMARY KEY,
@@ -128,6 +133,16 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 CREATE INDEX IF NOT EXISTS idx_doc_access ON documents(access_level, client_id, department_id);
 CREATE INDEX IF NOT EXISTS idx_doc_pending ON documents(label_verified) WHERE label_verified = false;
+
+-- Trạng thái trích xuất/version phải nằm ngay trên tài liệu để bộ tra cứu có thể
+-- loại file lỗi và không vô tình dùng bản Drive cũ. Các ALTER này giữ schema
+-- tương thích với CSDL đã chạy từ những bản trước.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_status TEXT DEFAULT 'ready';
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_error TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_version INT DEFAULT 1;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true;
+CREATE INDEX IF NOT EXISTS idx_doc_ready_active
+  ON documents(active, extraction_status, approved, label_verified);
 
 -- -------------------------------------------------------------
 -- NÂNG CẤP CSDL TẠO TỪ BẢN TRƯỚC
@@ -176,6 +191,9 @@ CREATE TABLE IF NOT EXISTS chunks (
   document_id   INT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   chunk_index   INT NOT NULL,
   content       TEXT NOT NULL,
+  page_number   INT,
+  section_title TEXT,
+  source_locator TEXT,
   access_level  TEXT NOT NULL,
   client_id     INT,
   department_id INT,
@@ -183,8 +201,18 @@ CREATE TABLE IF NOT EXISTS chunks (
   embedding     vector(1024),
   created_at    TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS page_number INT;
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS section_title TEXT;
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS source_locator TEXT;
+-- Chỉ mục từ khóa cho hybrid retrieval. Cấu hình 'simple' không làm mất mã hồ
+-- sơ, số điều/khoản và vẫn hoạt động tốt với tiếng Việt không có stemmer riêng.
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS search_vector tsvector
+  GENERATED ALWAYS AS (to_tsvector('simple', coalesce(content, ''))) STORED;
 CREATE INDEX IF NOT EXISTS idx_chunks_vec ON chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_chunks_access ON chunks(access_level, client_id, department_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_fts ON chunks USING gin(search_vector);
+CREATE INDEX IF NOT EXISTS idx_chunks_content_trgm ON chunks USING gin(lower(content) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_documents_title_trgm ON documents USING gin(lower(title) gin_trgm_ops);
 
 CREATE OR REPLACE FUNCTION sync_chunk_labels() RETURNS TRIGGER AS $$
 BEGIN
@@ -204,8 +232,10 @@ CREATE TABLE IF NOT EXISTS conversations (
   channel     TEXT NOT NULL CHECK (channel IN ('public','internal','portal')),
   client_id   INT REFERENCES clients(id),
   title       TEXT,
+  context_state JSONB DEFAULT '{}'::jsonb,
   started_at  TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS context_state JSONB DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS messages (
   id              BIGSERIAL PRIMARY KEY,
@@ -213,6 +243,9 @@ CREATE TABLE IF NOT EXISTS messages (
   role            TEXT NOT NULL CHECK (role IN ('user','assistant')),
   content         TEXT NOT NULL,
   sources         JSONB,
+  answer_mode     TEXT,
+  grounding_status TEXT,
+  evidence        JSONB,
   model_used      TEXT,
   latency_ms      INT,
   review_status   TEXT DEFAULT 'pending'
@@ -224,8 +257,167 @@ CREATE TABLE IF NOT EXISTS messages (
   promoted_doc_id INT REFERENCES documents(id),
   created_at      TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS answer_mode TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS grounding_status TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS evidence JSONB;
 CREATE INDEX IF NOT EXISTS idx_msg_review ON messages(review_status) WHERE review_status='pending';
 CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_msg_conv_desc ON messages(conversation_id, id DESC);
+
+-- =============================================================
+-- DỮ LIỆU NHÂN SỰ CÓ CẤU TRÚC
+-- Không dùng users.active làm quân số: users là tài khoản đăng nhập, còn hai
+-- bảng này mới là nguồn sự thật cho nhân sự và hợp đồng lao động.
+-- =============================================================
+CREATE TABLE IF NOT EXISTS employees (
+  id                 SERIAL PRIMARY KEY,
+  employee_code      TEXT UNIQUE NOT NULL,
+  full_name          TEXT NOT NULL,
+  title              TEXT,
+  department_id      INT REFERENCES departments(id),
+  employment_status  TEXT DEFAULT 'active',
+  active             BOOLEAN DEFAULT true,
+  source_document_id INT REFERENCES documents(id) ON DELETE SET NULL,
+  created_at         TIMESTAMPTZ DEFAULT now(),
+  updated_at         TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_employees_active ON employees(active, employment_status);
+CREATE INDEX IF NOT EXISTS idx_employees_department ON employees(department_id);
+
+CREATE TABLE IF NOT EXISTS employment_contracts (
+  id                 SERIAL PRIMARY KEY,
+  employee_id        INT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  contract_no        TEXT,
+  start_date         DATE,
+  end_date           DATE,
+  status             TEXT DEFAULT 'active',
+  source_document_id INT REFERENCES documents(id) ON DELETE SET NULL,
+  created_at         TIMESTAMPTZ DEFAULT now(),
+  updated_at         TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (employee_id, contract_no)
+);
+CREATE INDEX IF NOT EXISTS idx_contract_employee ON employment_contracts(employee_id);
+CREATE INDEX IF NOT EXISTS idx_contract_active_dates
+  ON employment_contracts(status, start_date, end_date);
+
+-- =============================================================
+-- SOẠN THẢO CÓ NGUỒN, VERSION VÀ DUYỆT
+-- Nội dung phiên bản và bằng chứng là snapshot bất biến; sửa bản nháp luôn tạo
+-- version mới để có thể kiểm toán chính xác tài liệu đã được duyệt.
+-- =============================================================
+CREATE TABLE IF NOT EXISTS document_templates (
+  id                  SERIAL PRIMARY KEY,
+  code                TEXT UNIQUE NOT NULL,
+  name                TEXT NOT NULL,
+  document_type       TEXT NOT NULL DEFAULT 'other',
+  description         TEXT,
+  system_instructions TEXT,
+  body_template       TEXT NOT NULL,
+  required_fields     JSONB DEFAULT '[]'::jsonb,
+  active              BOOLEAN DEFAULT true,
+  created_by          INT REFERENCES users(id),
+  created_at          TIMESTAMPTZ DEFAULT now(),
+  updated_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS document_drafts (
+  id                SERIAL PRIMARY KEY,
+  title             TEXT NOT NULL,
+  document_type     TEXT NOT NULL DEFAULT 'other',
+  template_id       INT REFERENCES document_templates(id) ON DELETE SET NULL,
+  client_id         INT REFERENCES clients(id) ON DELETE SET NULL,
+  matter_id         INT REFERENCES matters(id) ON DELETE SET NULL,
+  department_id     INT REFERENCES departments(id) ON DELETE SET NULL,
+  instructions      TEXT,
+  input_data        JSONB DEFAULT '{}'::jsonb,
+  status            TEXT NOT NULL DEFAULT 'draft',
+  current_version   INT NOT NULL DEFAULT 0,
+  created_by        INT NOT NULL REFERENCES users(id),
+  approved_by       INT REFERENCES users(id),
+  approved_at       TIMESTAMPTZ,
+  approval_note     TEXT,
+  created_at        TIMESTAMPTZ DEFAULT now(),
+  updated_at        TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_drafts_owner_time ON document_drafts(created_by, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_drafts_review ON document_drafts(status, department_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS document_draft_sources (
+  draft_id     INT NOT NULL REFERENCES document_drafts(id) ON DELETE CASCADE,
+  document_id  INT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  added_by     INT REFERENCES users(id),
+  created_at   TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (draft_id, document_id)
+);
+CREATE INDEX IF NOT EXISTS idx_draft_sources_document ON document_draft_sources(document_id);
+
+CREATE TABLE IF NOT EXISTS document_draft_versions (
+  id                 SERIAL PRIMARY KEY,
+  draft_id           INT NOT NULL REFERENCES document_drafts(id) ON DELETE CASCADE,
+  version_no         INT NOT NULL,
+  content_markdown   TEXT NOT NULL,
+  change_note        TEXT,
+  model_used         TEXT,
+  grounding_status   TEXT NOT NULL DEFAULT 'needs_review',
+  placeholder_count  INT NOT NULL DEFAULT 0,
+  evidence_snapshot  JSONB DEFAULT '[]'::jsonb,
+  created_by         INT NOT NULL REFERENCES users(id),
+  created_at         TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (draft_id, version_no)
+);
+CREATE INDEX IF NOT EXISTS idx_draft_versions_draft ON document_draft_versions(draft_id, version_no DESC);
+
+CREATE TABLE IF NOT EXISTS document_draft_evidence (
+  id                SERIAL PRIMARY KEY,
+  draft_version_id  INT NOT NULL REFERENCES document_draft_versions(id) ON DELETE CASCADE,
+  document_id       INT REFERENCES documents(id) ON DELETE SET NULL,
+  document_title    TEXT NOT NULL DEFAULT '',
+  source_version    INT,
+  chunk_id          BIGINT REFERENCES chunks(id) ON DELETE SET NULL,
+  citation_key      TEXT NOT NULL,
+  excerpt           TEXT NOT NULL,
+  page_number       INT,
+  section_title     TEXT,
+  source_locator    TEXT,
+  created_at        TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (draft_version_id, citation_key)
+);
+ALTER TABLE document_draft_evidence ADD COLUMN IF NOT EXISTS document_title TEXT NOT NULL DEFAULT '';
+ALTER TABLE document_draft_evidence ADD COLUMN IF NOT EXISTS source_version INT;
+-- Bản Drive cũ có thể được thay thế. Nguồn đang chọn tự rời bản nháp, còn bằng
+-- chứng của version cũ giữ title/excerpt snapshot và chỉ mất liên kết tới row cũ.
+ALTER TABLE document_draft_sources
+  DROP CONSTRAINT IF EXISTS document_draft_sources_document_id_fkey;
+ALTER TABLE document_draft_sources
+  ADD CONSTRAINT document_draft_sources_document_id_fkey
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE;
+ALTER TABLE document_draft_evidence
+  DROP CONSTRAINT IF EXISTS document_draft_evidence_document_id_fkey;
+ALTER TABLE document_draft_evidence ALTER COLUMN document_id DROP NOT NULL;
+ALTER TABLE document_draft_evidence
+  ADD CONSTRAINT document_draft_evidence_document_id_fkey
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_draft_evidence_version ON document_draft_evidence(draft_version_id);
+
+INSERT INTO document_templates
+  (code, name, document_type, description, system_instructions, body_template, required_fields)
+VALUES
+  ('legal_advice', 'Thư tư vấn pháp lý', 'advisory',
+   'Bản tư vấn có vấn đề, căn cứ, phân tích, rủi ro và kiến nghị.',
+   'Chỉ kết luận từ dữ liệu đầu vào và bằng chứng được cung cấp. Mọi dữ kiện thiếu phải để placeholder.',
+   E'# THƯ TƯ VẤN PHÁP LÝ\n\n## 1. Thông tin và yêu cầu\n[CẦN BỔ SUNG: thông tin khách hàng và yêu cầu tư vấn]\n\n## 2. Căn cứ\n[CẦN BỔ SUNG: căn cứ có nguồn]\n\n## 3. Phân tích\n[CẦN BỔ SUNG: phân tích bám nguồn]\n\n## 4. Rủi ro và kiến nghị\n[CẦN BỔ SUNG: rủi ro và kiến nghị]\n',
+   '["client_name", "request"]'::jsonb),
+  ('matter_report', 'Báo cáo vụ việc', 'filing',
+   'Báo cáo tiến độ, sự kiện, tài liệu và công việc tiếp theo.',
+   'Không tự tạo ngày, số hồ sơ, cơ quan, tên người hoặc trạng thái vụ việc.',
+   E'# BÁO CÁO VỤ VIỆC\n\n## 1. Thông tin chung\n[CẦN BỔ SUNG: mã và tên vụ việc]\n\n## 2. Diễn biến\n[CẦN BỔ SUNG: diễn biến có nguồn]\n\n## 3. Tình trạng hiện tại\n[CẦN BỔ SUNG: tình trạng đã xác minh]\n\n## 4. Công việc tiếp theo\n[CẦN BỔ SUNG: đầu việc, người phụ trách và hạn]\n',
+   '["matter_code", "report_date"]'::jsonb),
+  ('generic_grounded', 'Tài liệu có căn cứ', 'other',
+   'Mẫu chung để soạn nội dung từ bộ nguồn đã chọn.',
+   'Giữ cấu trúc rõ ràng, đánh dấu mọi thông tin còn thiếu và gắn trích dẫn vào từng nhận định.',
+   E'# [CẦN BỔ SUNG: tên tài liệu]\n\n## Mục đích\n[CẦN BỔ SUNG: mục đích]\n\n## Nội dung\n[CẦN BỔ SUNG: nội dung có nguồn]\n\n## Việc cần xác minh\n[CẦN BỔ SUNG: danh sách dữ liệu còn thiếu]\n',
+   '[]'::jsonb)
+ON CONFLICT (code) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS analysis_methods (
   id          SERIAL PRIMARY KEY,
@@ -357,6 +549,58 @@ DROP POLICY IF EXISTS doc_ins ON documents;
 CREATE POLICY doc_ins ON documents FOR INSERT WITH CHECK (true);
 DROP POLICY IF EXISTS doc_upd ON documents;
 CREATE POLICY doc_upd ON documents FOR UPDATE USING (current_setting('app.role', true)='internal');
+
+-- Dữ liệu nhân sự và khu vực soạn thảo không bao giờ lộ sang kênh khách/public.
+-- Quyền sở hữu/phòng ban của từng bản nháp còn được kiểm tra chặt tại API vì
+-- app.user_id không phải session setting của các bản triển khai cũ.
+ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employees FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS employee_internal ON employees;
+CREATE POLICY employee_internal ON employees FOR ALL
+  USING (current_setting('app.role', true)='internal')
+  WITH CHECK (current_setting('app.role', true)='internal');
+
+ALTER TABLE employment_contracts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employment_contracts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS employment_contract_internal ON employment_contracts;
+CREATE POLICY employment_contract_internal ON employment_contracts FOR ALL
+  USING (current_setting('app.role', true)='internal')
+  WITH CHECK (current_setting('app.role', true)='internal');
+
+ALTER TABLE document_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_templates FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS document_template_internal ON document_templates;
+CREATE POLICY document_template_internal ON document_templates FOR ALL
+  USING (current_setting('app.role', true)='internal')
+  WITH CHECK (current_setting('app.role', true)='internal');
+
+ALTER TABLE document_drafts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_drafts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS document_draft_internal ON document_drafts;
+CREATE POLICY document_draft_internal ON document_drafts FOR ALL
+  USING (current_setting('app.role', true)='internal')
+  WITH CHECK (current_setting('app.role', true)='internal');
+
+ALTER TABLE document_draft_sources ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_draft_sources FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS document_draft_source_internal ON document_draft_sources;
+CREATE POLICY document_draft_source_internal ON document_draft_sources FOR ALL
+  USING (current_setting('app.role', true)='internal')
+  WITH CHECK (current_setting('app.role', true)='internal');
+
+ALTER TABLE document_draft_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_draft_versions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS document_draft_version_internal ON document_draft_versions;
+CREATE POLICY document_draft_version_internal ON document_draft_versions FOR ALL
+  USING (current_setting('app.role', true)='internal')
+  WITH CHECK (current_setting('app.role', true)='internal');
+
+ALTER TABLE document_draft_evidence ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_draft_evidence FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS document_draft_evidence_internal ON document_draft_evidence;
+CREATE POLICY document_draft_evidence_internal ON document_draft_evidence FOR ALL
+  USING (current_setting('app.role', true)='internal')
+  WITH CHECK (current_setting('app.role', true)='internal');
 
 -- =============================================================
 -- CẢNH BÁO VỤ VIỆC — tính trực tiếp, không lưu sẵn

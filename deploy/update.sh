@@ -28,25 +28,31 @@ else
   run_as() { sudo -u "$SERVICE_USER" bash -c "$1"; }
 fi
 
-c_info "1/4  Cập nhật thư viện Python"
+c_info "1/5  Cập nhật thư viện Python"
 run_as "cd '$BACKEND_DIR' && .venv/bin/pip install -q -r requirements.txt"
 c_ok "Xong"
 
-c_info "2/4  Cập nhật schema (an toàn, chỉ thêm cái còn thiếu)"
-if [ -f "$BACKEND_DIR/.env" ]; then
-  # shellcheck disable=SC1090
-  set -a; . "$BACKEND_DIR/.env"; set +a
-  docker exec -i hds-postgres psql -U hds -d hdsai -v ON_ERROR_STOP=1 \
-    -v app_pass="${APP_DB_PASSWORD:-}" < "$BACKEND_DIR/sql/schema.sql" >/dev/null \
-    && c_ok "Schema đã đồng bộ" || c_info "Bỏ qua cập nhật schema"
-fi
+c_info "2/5  Cập nhật schema (bắt buộc chạy trước code mới)"
+[ -f "$BACKEND_DIR/.env" ] || die "Thiếu $BACKEND_DIR/.env — không thể migrate an toàn"
+# shellcheck disable=SC1090
+set -a; . "$BACKEND_DIR/.env"; set +a
+[ -n "${APP_DB_PASSWORD:-}" ] || die "Thiếu APP_DB_PASSWORD trong .env"
+docker exec -i hds-postgres psql -U hds -d hdsai -v ON_ERROR_STOP=1 \
+  -v app_pass="$APP_DB_PASSWORD" < "$BACKEND_DIR/sql/schema.sql" >/dev/null \
+  || die "Migration schema thất bại — backend cũ vẫn được giữ nguyên"
+c_ok "Schema đã đồng bộ"
 
-c_info "3/4  Build lại giao diện"
+c_info "3/5  Chạy kiểm tra backend"
+run_as "cd '$BACKEND_DIR' && .venv/bin/python -m unittest discover -s tests -v" \
+  || die "Backend test thất bại — không khởi động code mới"
+c_ok "Backend tests đạt"
+
+c_info "4/5  Build lại giao diện"
 run_as "cd '$FRONTEND_DIR' && { [ -f package-lock.json ] && npm ci || npm install; } && npm run build"
 [ -f "$FRONTEND_DIR/dist/index.html" ] || die "Build frontend thất bại"
 c_ok "Đã build"
 
-c_info "4/4  Khởi động lại dịch vụ"
+c_info "5/5  Khởi động lại dịch vụ"
 
 # Máy cài từ bản cũ có cấu hình nginx chưa tắt đệm. Không vá thì nginx gom cả
 # câu trả lời rồi mới gửi, và tính năng trả lời chảy dần mất sạch tác dụng —

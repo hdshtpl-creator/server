@@ -45,8 +45,9 @@ HDS-AI/
   của khách này sang khách khác. An toàn là ưu tiên số một.
 - File nằm ở thư mục gốc hoặc thư mục lạ (không đúng quy ước) → cũng bỏ qua kèm cảnh báo.
 
-Định dạng nhận: `.pdf .docx .txt .md` và Google Docs/Sheets (tự xuất ra .docx/.xlsx).
-PDF scan sẽ được OCR tiếng Việt tự động.
+Định dạng nhận: `.pdf .docx .doc .txt .md .xlsx .csv` và Google Docs/Sheets
+(tự xuất ra `.docx/.xlsx`). PDF scan được OCR tiếng Việt tự động. Với bảng tính,
+bot giữ tên sheet/cột/dòng để tìm chính xác hơn và bỏ qua sheet ẩn có cảnh báo.
 
 ### 1b. Cho bot quyền đọc thư mục Drive (làm một lần)
 
@@ -95,9 +96,13 @@ journalctl -u hds-ai-learn.service -n 40 --no-pager   # kết quả lần chạy
 Bot chỉ xử lý **file mới hoặc file đã sửa** (so bằng checksum) nên chạy lại rất nhanh.
 Sửa nội dung một file trên Drive → lần chạy sau bot tự cập nhật lại (xoá bản cũ, học bản mới).
 
-> **Mặc định bot tự duyệt luôn** (thư mục chính là nhãn nên tin được). Muốn cẩn trọng hơn
-> — mọi file vào hàng chờ để người duyệt tay trước khi thành tri thức — đặt trong `.env`:
-> `AUTO_LEARN_REVIEW=1` rồi vào web tab *Duyệt nhãn tài liệu*.
+> **Mặc định an toàn: bot đưa file mới vào hàng chờ duyệt.** Thư mục xác định nhãn và
+> quyền, nhưng không bảo đảm file không hỏng, thiếu trang hoặc OCR sai. Sau khi đã kiểm
+> tra quy trình, muốn file sạch được dùng ngay thì đặt `AUTO_LEARN_AUTO_APPROVE=1` trong
+> `.env`. File có cảnh báo vẫn chờ duyệt. Biến cũ `AUTO_LEARN_REVIEW=0/1` vẫn được hỗ trợ.
+
+Dashboard đồng bộ ghi riêng `bỏ qua`, `lỗi trích xuất` và `cảnh báo`, kèm mã/hướng xử lý.
+Nếu cập nhật một file bị lỗi, bản cũ trong CSDL được giữ nguyên do giao dịch được rollback.
 
 ---
 

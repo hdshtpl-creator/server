@@ -31,6 +31,7 @@ MAX_NOTE_CHARS = 700      # cắt ghi chú dài để prompt không phình
 MAX_SUMMARY_CHARS = 3000  # ngân sách ký tự cho file tổng hợp thông tin khách
 MAX_FINANCE_CHARS = 1500  # ngân sách ký tự cho tài liệu công nợ
 MAX_WORK_CHARS = 2500     # ngân sách ký tự cho nội dung hợp đồng/công việc của khách
+MAX_HR_CHARS = 5000       # ngân sách ký tự cho hồ sơ nhân sự của chính HDS
 
 # Mã vụ việc theo quy ước [M-2026-001]
 RE_MATTER_CODE = re.compile(r"\b([A-Z]{1,3}-\d{4}-\d{1,4})\b", re.I)
@@ -153,6 +154,29 @@ STAFF_WORDS = {
     "co bao nhieu luat su", "bao nhieu luat su", "bao nhieu chuyen vien",
     "bao nhieu phong", "danh sach phong ban", "co nhung phong nao",
     "nhan vien nao", "quan so", "co bao nhieu nhan",
+    # Câu hỏi CHI TIẾT về người — hay xuất hiện ở lượt hỏi tiếp
+    "chi tiet tung ca nhan", "tung ca nhan", "tung nguoi", "moi nguoi",
+    "ho ten", "ten nhan vien", "ai lam gi", "gom nhung ai", "bao gom ai",
+    "danh sach nguoi", "liet ke nhan vien", "thong tin nhan su",
+    "nhan su hds", "nguoi lao dong", "hop dong lao dong",
+    # Viết tắt/ngôn ngữ nói thường gặp. Các cụm ngắn như "nv" được kiểm tra
+    # theo ranh giới từ ở _staff_intent, không dùng phép `in` lỏng.
+    "bao nhieu nv", "may nv", "danh sach nv", "cty toi co may nguoi",
+    "cong ty toi co may nguoi", "hds co may nguoi", "hds co bao nhieu nguoi",
+}
+
+# Phân biệt tài khoản phần mềm với người lao động. Đây là hai khái niệm dữ liệu
+# khác nhau; trộn chúng là nguyên nhân trực tiếp khiến bot báo "5 người" khi
+# CSDL thực ra chỉ có 5 tài khoản đăng nhập.
+ACCOUNT_WORDS = {
+    "tai khoan", "account", "user", "nguoi dung", "dang nhap",
+    "tai khoan noi bo", "tai khoan phan mem",
+}
+
+EMPLOYMENT_CONTRACT_WORDS = {
+    "hop dong lao dong", "hdld", "hd lao dong", "con hop dong",
+    "con han hop dong", "hop dong con han", "het hop dong", "het han hop dong",
+    "dang co hop dong", "thoi han hop dong", "gia han hop dong",
 }
 
 # Tên cấp bậc hiển thị cho người đọc — khớp với CHECK role trong schema.
@@ -175,16 +199,21 @@ DOC_TYPE_VN = {
 # ---------------------------------------------------------------
 # Nhận diện khách / vụ việc được nhắc trong câu hỏi
 # ---------------------------------------------------------------
-def _visible_clients(cur, dept_ids, is_banqt):
+def _visible_clients(cur, dept_ids, is_banqt, limit=None):
     """Khách mà người hỏi được phép thấy. Lọc theo phòng vì clients không có RLS.
     Khách chưa gán phòng (department_id NULL) coi như dùng chung — mọi nội bộ thấy,
     khớp với cách RLS xử lý (app_in_dept trả true khi dept NULL)."""
+    suffix = " ORDER BY name LIMIT %s" if limit else ""
     if is_banqt:
-        cur.execute("SELECT id, name, code FROM clients")
+        cur.execute("SELECT id, name, code FROM clients" + suffix,
+                    (limit,) if limit else ())
     else:
-        cur.execute("""SELECT id, name, code FROM clients
-                       WHERE department_id = ANY(%s) OR department_id IS NULL""",
-                    (dept_ids or [-1],))
+        sql = """SELECT id, name, code FROM clients
+                  WHERE department_id = ANY(%s) OR department_id IS NULL""" + suffix
+        params = [dept_ids or [-1]]
+        if limit:
+            params.append(limit)
+        cur.execute(sql, params)
     return cur.fetchall()
 
 
@@ -192,8 +221,35 @@ def detect_clients(cur, question, dept_ids, is_banqt):
     """Khách được nhắc trong câu hỏi — khớp theo mã, hoặc theo từ đặc trưng của tên."""
     q = _fold(question)
     q_tokens = set(re.findall(r"[a-z0-9]+", q))
+    # Không tải toàn bộ bảng clients về Python trên MỌI câu hỏi. Lọc ứng viên
+    # bằng mã/từ đặc trưng trước; idx_clients_*_trgm giúp truy vấn này giữ được
+    # tốc độ khi danh mục lên hàng trăm nghìn khách.
+    stop = {
+        "cong", "ty", "tnhh", "co", "phan", "tap", "doan", "doanh", "nghiep",
+        "khach", "hang", "hds", "luat", "van", "phong", "cho", "toi", "cua",
+        "nay", "kia", "dang", "lam", "viec", "ho", "so", "thong", "tin",
+        "the", "nao", "bao", "nhieu", "may", "gi", "va", "voi", "ve",
+    }
+    name_tokens = sorted((t for t in q_tokens if len(t) >= 3 and t not in stop),
+                         key=len, reverse=True)[:10]
+    code_tokens = sorted(t for t in q_tokens if len(t) >= 3)[:20]
+    if not name_tokens and not code_tokens:
+        return []
+    patterns = [f"%{token}%" for token in name_tokens]
+    scope_sql = "" if is_banqt else (
+        " AND (department_id=ANY(%s) OR department_id IS NULL)")
+    params = [code_tokens, patterns]
+    if not is_banqt:
+        params.append(dept_ids or [-1])
+    cur.execute(
+        """SELECT id,name,code FROM clients
+            WHERE (lower(coalesce(code,''))=ANY(%s)
+                   OR lower(name) LIKE ANY(%s))""" + scope_sql
+        + " ORDER BY name LIMIT 200",
+        params,
+    )
     hits = []
-    for cid, name, code in _visible_clients(cur, dept_ids, is_banqt):
+    for cid, name, code in cur.fetchall():
         folded = _fold(code) if code else ""
         if folded and len(folded) >= 3 and re.search(rf"\b{re.escape(folded)}\b", q):
             hits.append((cid, name, code))
@@ -239,13 +295,26 @@ _DOC_TOPIC_WORDS = {"hop dong", "hd lao dong", "hdld", "hop dong lao dong",
 
 
 def _staff_intent(q_folded: str) -> bool:
-    """Câu hỏi về quân số / cơ cấu nhân sự của chính HDS.
+    """Câu hỏi về nhân sự của chính HDS (quân số, cơ cấu, từng người).
 
-    Loại trừ câu về hợp đồng: 'bao nhiêu người còn hợp đồng' hỏi về hợp đồng
-    lao động, không phải số tài khoản — đếm tài khoản sẽ ra con số sai lệch."""
-    if any(w in q_folded for w in _DOC_TOPIC_WORDS):
-        return False
+    KHÔNG loại trừ câu về hợp đồng nữa: câu 'bao nhiêu người còn hợp đồng' cần
+    CẢ HAI nguồn — số tài khoản trong hệ thống VÀ nội dung hợp đồng lao động đã
+    học. Trước đây chặn ở đây khiến bot mất sạch dữ liệu nhân sự cho đúng loại
+    câu hỏi ấy. Việc phân biệt 'tài khoản' với 'người lao động theo hợp đồng'
+    do khối dữ liệu tự nói rõ, không phải bằng cách giấu dữ liệu đi."""
+    if re.search(r"(?:^|\s)nv(?:$|\s)", q_folded):
+        return True
     return any(w in q_folded for w in STAFF_WORDS)
+
+
+def _account_intent(q_folded: str) -> bool:
+    """Người hỏi đang hỏi rõ về tài khoản phần mềm, không phải nhân sự HR."""
+    return any(w in q_folded for w in ACCOUNT_WORDS)
+
+
+def _employment_contract_intent(q_folded: str) -> bool:
+    """Câu hỏi về hiệu lực HĐLĐ của nhân sự HDS."""
+    return any(w in q_folded for w in EMPLOYMENT_CONTRACT_WORDS)
 
 
 # Từ khoá cho thấy câu hỏi muốn CHI TIẾT từng khách (dịch vụ, hợp đồng, tình
@@ -279,11 +348,16 @@ def is_directory_query(question: str) -> bool:
     NHƯNG nếu câu hỏi còn đòi CHI TIẾT (dịch vụ, hợp đồng của từng khách) thì
     KHÔNG bỏ tra tài liệu — lúc đó phải mở hồ sơ bên trong ra đọc. Chỉ câu ĐẾM
     THUẦN mới bỏ. Cũng không gộp câu về hạn/cảnh báo vào đây.
+
+    CHỈ áp cho danh sách KHÁCH HÀNG. Câu hỏi NHÂN SỰ thì luôn tra tài liệu: hồ
+    sơ nhân sự và hợp đồng lao động đã học chính là nguồn để trả lời "công ty có
+    mấy người", "chi tiết từng người". Bỏ tra tài liệu ở đó khiến bot chỉ còn
+    biết đếm tài khoản đăng nhập — đúng lỗi "trả lời 5 người" vừa gặp.
     """
     q = _fold(question)
-    if _detail_intent(q):
+    if _detail_intent(q) or _staff_intent(q):
         return False
-    return _roster_intent(q) or _staff_intent(q)
+    return _roster_intent(q)
 
 
 def _staff_block(cur, is_banqt):
@@ -304,10 +378,13 @@ def _staff_block(cur, is_banqt):
         return ["### Nhân sự HDS: hệ thống chưa có tài khoản nhân viên nào."]
 
     total = sum(n for _, n in by_role)
-    out = [f"### Nhân sự HDS: {total} người đang hoạt động trên hệ thống.",
-           "  (Đây là số tài khoản nội bộ trong phần mềm, có thể khác quân số "
-           "thực tế nếu ai đó chưa được cấp tài khoản.)",
-           "- Theo cấp bậc: " + ", ".join(
+    out = [f"### Tài khoản nội bộ trên phần mềm: {total} tài khoản đang hoạt động.",
+           "  LƯU Ý QUAN TRỌNG: đây CHỈ là số tài khoản đăng nhập, KHÔNG phải "
+           "quân số nhân sự của công ty. Khi người dùng hỏi công ty có bao nhiêu "
+           "người / nhân sự gồm những ai, hãy trả lời dựa vào HỒ SƠ NHÂN SỰ và "
+           "HỢP ĐỒNG LAO ĐỘNG trong phần tài liệu tham khảo; chỉ nêu con số tài "
+           "khoản này khi được hỏi riêng về tài khoản phần mềm.",
+           "- Theo cấp bậc (tài khoản): " + ", ".join(
                f"{ROLE_VN.get(r, r)} {n}" for r, n in
                sorted(by_role, key=lambda x: -x[1]))]
 
@@ -334,10 +411,19 @@ def _staff_block(cur, is_banqt):
                         ORDER BY u.full_name LIMIT 100""")
         rows = cur.fetchall()
         if rows:
-            out.append("- Danh sách (chỉ Ban quản trị được xem):")
+            out.append("- Danh sách tài khoản (chỉ Ban quản trị được xem):")
             for name, role, depts in rows:
                 out.append(f"  · {name or '(chưa đặt tên)'} — {ROLE_VN.get(role, role)}"
                            + (f", phòng {depts}" if depts else ""))
+
+    # GHIM nội dung HỒ SƠ NHÂN SỰ đã học (HĐLĐ, quyết định, sơ yếu lý lịch…).
+    # Đây mới là nguồn sự thật về nhân sự công ty. Không ghim thì bot phải trông
+    # vào may mắn của tìm kiếm vector, và dễ trả lời bằng số tài khoản.
+    hr = _pinned_text(cur, None, ["ho_so_ns"], MAX_HR_CHARS)
+    if hr:
+        out.append("- HỒ SƠ NHÂN SỰ ĐÃ HỌC (nguồn sự thật về người lao động — "
+                   "đọc kỹ để trả lời về quân số, họ tên, chức danh, thời hạn HĐLĐ):")
+        out += hr
     return out
 
 
@@ -413,13 +499,24 @@ def _pinned_text(cur, cid, doc_types, budget):
 
     Bảng chunks có RLS: phiên không được cấp quyền tài chính sẽ không đọc nổi
     đoạn nào của tài liệu công nợ, dù hàm này có hỏi tới.
+
+    cid=None: tài liệu KHÔNG thuộc khách nào — dùng cho hồ sơ nhân sự của chính
+    HDS (hợp đồng lao động, quyết định, sơ yếu lý lịch).
     """
-    cur.execute("""SELECT d.title, c.content
-                     FROM documents d JOIN chunks c ON c.document_id = d.id
-                    WHERE d.client_id = %s AND d.doc_type = ANY(%s)
-                      AND d.approved AND d.label_verified
-                    ORDER BY d.updated_at DESC, d.id, c.chunk_index""",
-                (cid, list(doc_types)))
+    if cid is None:
+        cur.execute("""SELECT d.title, c.content
+                         FROM documents d JOIN chunks c ON c.document_id = d.id
+                        WHERE d.client_id IS NULL AND d.doc_type = ANY(%s)
+                          AND d.approved AND d.label_verified
+                        ORDER BY d.updated_at DESC, d.id, c.chunk_index""",
+                    (list(doc_types),))
+    else:
+        cur.execute("""SELECT d.title, c.content
+                         FROM documents d JOIN chunks c ON c.document_id = d.id
+                        WHERE d.client_id = %s AND d.doc_type = ANY(%s)
+                          AND d.approved AND d.label_verified
+                        ORDER BY d.updated_at DESC, d.id, c.chunk_index""",
+                    (cid, list(doc_types)))
     out, used, last_title = [], 0, None
     for title, content in cur.fetchall():
         if used >= budget:
@@ -527,8 +624,277 @@ def _client_lines(cur, cid, name, code, internal, can_finance=False, share=1,
 # ---------------------------------------------------------------
 # Điểm vào duy nhất
 # ---------------------------------------------------------------
+# Câu hỏi tiếp nối, tự nó không mang chủ đề: "chi tiết từng cá nhân", "còn ai
+# nữa", "cụ thể hơn". Gặp loại này phải xét CHỦ ĐỀ CỦA LƯỢT TRƯỚC, nếu không thì
+# bot mất sạch dữ liệu ở lượt hỏi thứ hai — đúng lỗi "Không có thông tin cụ thể
+# trong tài liệu" dù lượt trước vừa liệt kê xong.
+# Chỉ những cụm ĐẶC TRƯNG, nhiều ký tự. Tránh từ ngắn như "ai"/"va"/"do": vì so
+# khớp theo chuỗi con, "ai" sẽ trúng cả "tai lieu", "hai", "phai"… làm mọi câu
+# ngắn đều bị coi là hỏi tiếp.
+FOLLOWUP_WORDS = {
+    "chi tiet", "cu the", "chi tiet hon", "ro hon", "them thong tin",
+    "con ai", "con gi", "con nua", "the nao", "ra sao", "nhu the nao",
+    "bao gom", "liet ke", "day du", "tung nguoi", "tung ca nhan",
+    "ho ten", "danh sach", "moi nguoi", "gom nhung",
+    # Câu sửa lại ý ở lượt trước. Đây chính là dạng "tôi hỏi người còn hợp
+    # đồng mà"; nếu không coi là follow-up thì router mất chủ đề HĐLĐ đã lưu.
+    "toi hoi", "y toi", "toi dang hoi", "toi muon hoi", "van de toi hoi",
+}
+
+
+def _is_followup(q_folded: str) -> bool:
+    """Câu ngắn mang tính hỏi thêm — cần vay chủ đề của lượt trước."""
+    if len(q_folded.split()) > 8:
+        return False
+    return any(w in q_folded for w in FOLLOWUP_WORDS)
+
+
+def _topic_question(question, history, turns=3):
+    """Câu dùng để NHẬN DIỆN CHỦ ĐỀ (roster / nhân sự / cảnh báo / chi tiết).
+
+    Bình thường là chính câu hỏi. Nhưng nếu đây là câu hỏi tiếp ngắn gọn, ghép
+    thêm mấy câu người dùng đã hỏi trước đó để chủ đề không bị mất — nhờ vậy
+    "chi tiết từng cá nhân" vẫn được hiểu là đang nói về nhân sự.
+
+    `turns` nhỏ hơn khi dùng để nhận diện KHÁCH HÀNG: vay quá xa dễ lôi tên
+    khách của chuyện cũ vào câu hỏi mới, và trả lời sai khách còn tệ hơn thiếu.
+    """
+    q = _fold(question)
+    if not history or not _is_followup(q):
+        return question
+    prev = [c for role, c in history if role == "user"][-turns:]
+    return question + " " + " ".join(prev)
+
+
+def infer_intent(question, history=None, state=None):
+    """Nhận diện nhóm dữ liệu có thể trả lời xác định, không cần LLM.
+
+    `state` là chủ đề có cấu trúc đã lưu ở conversation. Nó chỉ được dùng cho
+    câu hỏi tiếp ngắn; câu hỏi đầy đủ luôn tự quyết định lại để tránh kéo nhầm
+    chủ đề cũ sang việc mới.
+    """
+    folded_current = _fold(question)
+    if _is_followup(folded_current) and state and state.get("intent"):
+        return state.get("intent")
+
+    topic = _fold(_topic_question(question, history))
+    if _roster_intent(topic) and not _detail_intent(topic):
+        return "client_roster"
+    if _account_intent(topic) and (_staff_intent(topic) or any(
+            w in topic for w in ("noi bo", "hds", "cong ty", "cty"))):
+        return "account_directory"
+    if (_employment_contract_intent(topic)
+            and (_staff_intent(topic) or any(w in topic for w in (
+                "nhan vien", "nhan su", "nguoi lao dong", "nguoi trong hds",
+                "cty toi", "cong ty toi")))):
+        return "employment_contract"
+    if _staff_intent(topic):
+        return "staff_directory"
+    if _alert_intent(topic):
+        return "matter_alerts"
+    return None
+
+
+def _system_evidence(title, locator, quote):
+    """Nguồn dữ liệu vận hành cho UI; không giả làm một tài liệu trích dẫn."""
+    return {
+        "kind": "system",
+        "title": title,
+        "source_locator": locator,
+        "quote": quote,
+        "as_of": date.today().isoformat(),
+    }
+
+
+def _active_accounts():
+    """Tài khoản phần mềm đang hoạt động, tách hẳn khỏi dữ liệu nhân sự HR."""
+    with db.session(role="internal") as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT u.full_name, u.role,
+                                  coalesce(string_agg(d.name, ', ' ORDER BY d.name), '')
+                             FROM users u
+                             LEFT JOIN user_departments ud ON ud.user_id=u.id
+                             LEFT JOIN departments d ON d.id=ud.department_id
+                            WHERE u.active
+                              AND u.role NOT IN ('client_free','client_plus','client_pro')
+                            GROUP BY u.id,u.full_name,u.role ORDER BY u.full_name""")
+            return cur.fetchall()
+
+
+def _employees_with_latest_contract():
+    """Đọc sổ nhân sự chuẩn. Trả [] khi máy chủ chưa chạy migration mới.
+
+    Không suy người lao động từ `users`: một người có thể chưa có tài khoản,
+    hoặc một tài khoản kỹ thuật không phải một lao động.
+    """
+    try:
+        with db.session(role="internal") as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT e.id,e.employee_code,e.full_name,e.title,d.name,
+                                      e.employment_status,e.active,
+                                      ec.contract_no,ec.start_date,ec.end_date,ec.status
+                                 FROM employees e
+                                 LEFT JOIN departments d ON d.id=e.department_id
+                                 LEFT JOIN LATERAL (
+                                   SELECT c.contract_no,c.start_date,c.end_date,c.status
+                                     FROM employment_contracts c
+                                    WHERE c.employee_id=e.id
+                                    ORDER BY c.start_date DESC NULLS LAST,c.id DESC LIMIT 1
+                                 ) ec ON true
+                                WHERE e.active
+                                  AND coalesce(e.employment_status,'working')
+                                      NOT IN ('terminated','inactive')
+                                ORDER BY e.full_name""")
+                return cur.fetchall()
+    except Exception:
+        return []
+
+
+def _contract_is_current(row):
+    """Hiệu lực HĐLĐ được tính từ trạng thái + ngày, không tin riêng một cột."""
+    start_date, end_date, status = row[8], row[9], (row[10] or "").lower()
+    today = date.today()
+    if not row[7] or status in {"expired", "terminated", "cancelled", "inactive"}:
+        return False
+    if start_date and start_date > today:
+        return False
+    if end_date and end_date < today:
+        return False
+    return status in {"active", "valid", "effective", ""}
+
+
+def structured_answer(question, channel, client_id=None, dept_ids=None,
+                      is_banqt=False, can_finance=False, history=None, state=None):
+    """Trả lời xác định cho dữ liệu vận hành; `None` nghĩa là chuyển sang RAG.
+
+    Hàm này là cổng chống bịa: câu đếm/danh sách không đi qua model sinh văn
+    bản. Kết quả luôn ghi rõ phạm vi, ngày chốt và loại dữ liệu đang đếm.
+    """
+    if channel != "internal":
+        return None
+    intent = infer_intent(question, history=history, state=state)
+    if not intent:
+        return None
+
+    next_state = {"intent": intent, "updated_on": date.today().isoformat()}
+
+    if intent == "client_roster":
+        with db.session(role="internal", dept_ids=dept_ids, is_banqt=is_banqt,
+                        can_finance=can_finance) as conn:
+            with conn.cursor() as cur:
+                if is_banqt:
+                    cur.execute("SELECT count(*) FROM clients")
+                    total = cur.fetchone()[0]
+                    cur.execute("""SELECT c.name,c.code,d.name FROM clients c
+                                   LEFT JOIN departments d ON d.id=c.department_id
+                                   ORDER BY c.name LIMIT 60""")
+                else:
+                    cur.execute("""SELECT count(*) FROM clients
+                                   WHERE department_id=ANY(%s) OR department_id IS NULL""",
+                                (dept_ids or [-1],))
+                    total = cur.fetchone()[0]
+                    cur.execute("""SELECT c.name,c.code,d.name FROM clients c
+                                   LEFT JOIN departments d ON d.id=c.department_id
+                                   WHERE c.department_id=ANY(%s) OR c.department_id IS NULL
+                                   ORDER BY c.name LIMIT 60""", (dept_ids or [-1],))
+                rows = cur.fetchall()
+        scope = "toàn công ty" if is_banqt else "trong phạm vi phòng bạn phụ trách"
+        lines = [f"HDS có **{total} khách hàng {scope}** (tính đến {date.today()})."]
+        lines += [f"- {name}" + (f" — mã {code}" if code else "")
+                  + (f", phòng {dept}" if dept else "") for name, code, dept in rows]
+        if total > len(rows):
+            lines.append(f"- … và {total - len(rows)} khách khác; danh sách trên giới hạn 60 dòng.")
+        return {
+            "answer": "\n".join(lines), "answer_mode": "structured",
+            "grounding_status": "verified",
+            "evidence": [_system_evidence("Danh mục khách hàng HDS", "clients",
+                                          f"COUNT={total}; phạm vi={scope}")],
+            "state": next_state,
+        }
+
+    if intent == "matter_alerts":
+        with db.session(role="internal", dept_ids=dept_ids, is_banqt=is_banqt,
+                        can_finance=can_finance) as conn:
+            with conn.cursor() as cur:
+                lines = _alerts_block(cur, dept_ids, is_banqt)
+        return {
+            "answer": "\n".join(lines), "answer_mode": "structured",
+            "grounding_status": "verified",
+            "evidence": [_system_evidence("Cảnh báo vụ việc HDS", "v_matter_alerts",
+                                          lines[0])],
+            "state": next_state,
+        }
+
+    accounts = _active_accounts()
+    if intent == "account_directory":
+        lines = [f"Hệ thống có **{len(accounts)} tài khoản nội bộ đang hoạt động** "
+                 f"(tính đến {date.today()}). Đây là tài khoản phần mềm, không phải quân số HR."]
+        if is_banqt:
+            lines += [f"- {name or '(chưa đặt tên)'} — {ROLE_VN.get(role, role)}"
+                      + (f", phòng {depts}" if depts else "")
+                      for name, role, depts in accounts]
+        return {
+            "answer": "\n".join(lines), "answer_mode": "structured",
+            "grounding_status": "verified",
+            "evidence": [_system_evidence("Tài khoản nội bộ HDS", "users.active",
+                                          f"COUNT={len(accounts)}")],
+            "state": next_state,
+        }
+
+    employees = _employees_with_latest_contract()
+    if not employees:
+        return {
+            "answer": (
+                "Hệ thống **chưa có sổ nhân sự có cấu trúc**, nên mình chưa thể xác định "
+                "chính xác quân số, danh sách người lao động hoặc số người còn HĐLĐ. "
+                f"Hiện có {len(accounts)} tài khoản nội bộ đang hoạt động, nhưng không được "
+                "coi con số tài khoản đó là số nhân sự. Hãy nhập dữ liệu vào mục Nhân sự/HĐLĐ."
+            ),
+            "answer_mode": "insufficient_evidence", "grounding_status": "insufficient",
+            "evidence": [_system_evidence("Sổ nhân sự HDS", "employees",
+                                          "Không có bản ghi nhân sự đang hoạt động")],
+            "state": next_state,
+        }
+
+    if intent == "employment_contract":
+        current = [row for row in employees if _contract_is_current(row)]
+        lines = [f"Có **{len(current)}/{len(employees)} người có HĐLĐ còn hiệu lực** "
+                 f"tính đến {date.today()}."]
+        if is_banqt:
+            for row in employees:
+                state_text = "còn hiệu lực" if _contract_is_current(row) else "không còn hiệu lực/chưa có dữ liệu"
+                period = ""
+                if row[8] or row[9]:
+                    period = f" ({row[8] or '?'} → {row[9] or 'không xác định thời hạn'})"
+                lines.append(f"- {row[2]} — {row[7] or 'chưa có số HĐ'}: {state_text}{period}")
+        return {
+            "answer": "\n".join(lines), "answer_mode": "structured",
+            "grounding_status": "verified",
+            "evidence": [_system_evidence("Sổ hợp đồng lao động HDS",
+                                          "employees + employment_contracts",
+                                          f"Còn hiệu lực={len(current)}; tổng nhân sự={len(employees)}")],
+            "state": next_state,
+        }
+
+    # staff_directory
+    lines = [f"HDS có **{len(employees)} nhân sự đang hoạt động** trong sổ nhân sự "
+             f"(tính đến {date.today()})."]
+    if is_banqt:
+        lines += [f"- {row[2]}" + (f" — {row[3]}" if row[3] else "")
+                  + (f", phòng {row[4]}" if row[4] else "") for row in employees]
+    else:
+        lines.append("Danh sách họ tên chỉ hiển thị cho Ban quản trị; bạn đang xem số tổng hợp.")
+    return {
+        "answer": "\n".join(lines), "answer_mode": "structured",
+        "grounding_status": "verified",
+        "evidence": [_system_evidence("Sổ nhân sự HDS", "employees",
+                                      f"COUNT={len(employees)}")],
+        "state": next_state,
+    }
+
+
 def build(question, channel, client_id=None, dept_ids=None, is_banqt=False,
-          can_finance=False):
+          can_finance=False, history=None):
     """Khối 'DỮ LIỆU CÔNG TY' để ghép vào prompt. Trả '' nếu không có gì liên quan.
 
     channel='public'  → luôn trả '' (khách lạ trên website, không đưa dữ liệu nào)
@@ -560,13 +926,22 @@ def build(question, channel, client_id=None, dept_ids=None, is_banqt=False,
         with db.session(role="internal", dept_ids=dept_ids, is_banqt=is_banqt,
                         can_finance=can_finance) as conn:
             with conn.cursor() as cur:
-                found = detect_clients(cur, question, dept_ids, is_banqt)
+                # Câu hỏi tiếp ngắn gọn thì vay chủ đề của lượt trước, để nhận
+                # diện chủ đề không bị rơi ở lượt thứ hai.
+                topic = _topic_question(question, history)
+                # Nhận diện KHÁCH chỉ vay 1 lượt gần nhất — trả lời bằng số liệu
+                # của khách khác còn tệ hơn là không nhận ra khách nào.
+                found = detect_clients(cur, _topic_question(question, history, turns=1),
+                                       dept_ids, is_banqt)
                 seen = {c[0] for c in found}
                 for c in detect_clients_by_matter(cur, question, dept_ids, is_banqt):
                     if c[0] not in seen:
                         found.append(c)
                         seen.add(c[0])
-                q_folded = _fold(question)
+                # Dùng CHỦ ĐỀ (đã vay lượt trước nếu là câu hỏi tiếp) cho mọi
+                # nhận diện bên dưới — không dùng câu gốc, vì câu tiếp kiểu
+                # "chi tiết từng cá nhân" tự nó không chứa từ khoá nào.
+                q_folded = _fold(topic)
 
                 # "Liệt kê khách kèm dịch vụ/chi tiết" mà không nêu tên khách cụ
                 # thể: bung hồ sơ ĐẦY ĐỦ từng khách trong phạm vi (dịch vụ đã
@@ -574,7 +949,10 @@ def build(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                 # được thông tin bên trong thay vì chỉ đọc danh sách tên.
                 expand_all = False
                 if not found and _roster_intent(q_folded) and _detail_intent(q_folded):
-                    visible = _visible_clients(cur, dept_ids, is_banqt)
+                    # Chỉ cần biết có tối đa 5 khách hay nhiều hơn; không kéo
+                    # toàn bộ danh mục về RAM cho câu "liệt kê kèm dịch vụ".
+                    visible = _visible_clients(cur, dept_ids, is_banqt,
+                                               limit=ROSTER_DETAIL_MAX + 1)
                     if visible and len(visible) <= ROSTER_DETAIL_MAX:
                         found = visible
                         expand_all = True

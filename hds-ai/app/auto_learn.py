@@ -2,8 +2,9 @@
 auto_learn.py — Bot TỰ HỌC tài liệu từ Google Drive theo CẤU TRÚC THƯ MỤC.
 
 Khác với drive_sync + classify (gộp phẳng rồi nhờ AI đoán nhãn + người duyệt tay),
-module này lấy chính THƯ MỤC trên Drive làm nhãn — không cần đoán, không cần duyệt.
-Mỗi lần chạy chỉ xử lý file MỚI hoặc file ĐÃ SỬA (so bằng checksum).
+module này lấy chính THƯ MỤC trên Drive làm nhãn — không cần AI đoán. File mới mặc
+định vẫn chờ người duyệt chất lượng trích xuất trước khi được dùng để trả lời.
+Mỗi lần chạy chỉ xử lý file MỚI hoặc file ĐÃ SỬA (checksum; Google-native dùng modifiedTime).
 
 ────────────────────────────────────────────────────────────────────────
 CÂY THƯ MỤC (xem đầy đủ ở deploy/CAU_TRUC_DRIVE.md):
@@ -49,7 +50,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from app import db, settings
-from app.ingest import extract_text, split_document
+from app.ingest import (ExtractionError, MAX_SOURCE_BYTES, SUPPORTED_EXTENSIONS,
+                        extract_text_with_metadata, safe_path_component,
+                        split_document_with_metadata)
 from app.models import embed, summarize
 
 load_dotenv()
@@ -59,9 +62,40 @@ MAX_STATUS_ITEMS = 30  # giới hạn số dòng chi tiết lưu vào trạng th
 FOLDER_ID = os.getenv("DRIVE_FOLDER_ID", "")
 SA_FILE = os.getenv("DRIVE_SA_FILE", "credentials/service-account.json")
 DEST = Path(os.getenv("DATA_RAW", "./data/raw"))
-# Mặc định tự duyệt luôn (thư mục CHÍNH LÀ nhãn). Đặt AUTO_LEARN_REVIEW=1 nếu
-# muốn cẩn trọng: file vào hàng chờ /review thay vì học ngay.
-AUTO_APPROVE = os.getenv("AUTO_LEARN_REVIEW", "0") not in ("1", "true", "True")
+
+
+def _env_bool(value, default=False):
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def auto_approve_from_env(env=None):
+    """Mặc định an toàn là chờ duyệt; vẫn hiểu biến AUTO_LEARN_REVIEW cũ."""
+    env = os.environ if env is None else env
+    explicit = env.get("AUTO_LEARN_AUTO_APPROVE")
+    if explicit is not None:
+        return _env_bool(explicit, default=False)
+    legacy_review = env.get("AUTO_LEARN_REVIEW")
+    if legacy_review is not None:
+        return not _env_bool(legacy_review, default=True)
+    return False
+
+
+# Biến mới diễn đạt trực tiếp. Tương thích cũ: AUTO_LEARN_REVIEW=0 vẫn tự duyệt,
+# AUTO_LEARN_REVIEW=1 vẫn đưa vào hàng chờ. Khi không đặt biến nào, luôn chờ duyệt.
+AUTO_APPROVE = auto_approve_from_env()
+try:
+    MAX_DOWNLOAD_BYTES = int(os.getenv("DRIVE_MAX_DOWNLOAD_BYTES", str(MAX_SOURCE_BYTES)))
+    if MAX_DOWNLOAD_BYTES <= 0:
+        raise ValueError
+except (TypeError, ValueError):
+    MAX_DOWNLOAD_BYTES = MAX_SOURCE_BYTES
 
 EXPORT_MAP = {
     "application/vnd.google-apps.document":
@@ -69,7 +103,7 @@ EXPORT_MAP = {
     "application/vnd.google-apps.spreadsheet":
         ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"),
 }
-ALLOWED = {".pdf", ".docx", ".doc", ".txt", ".md"}
+ALLOWED = set(SUPPORTED_EXTENSIONS)
 
 
 # Bắt mã trong ngoặc vuông ở đầu tên thư mục: "[SUNGROUP] Tập đoàn SunGroup"
@@ -153,7 +187,7 @@ def walk(service, root_id):
         while True:
             resp = service.files().list(
                 q=f"'{fid}' in parents and trashed=false",
-                fields="nextPageToken, files(id,name,mimeType,md5Checksum)",
+                fields="nextPageToken, files(id,name,mimeType,md5Checksum,modifiedTime,size)",
                 pageSize=200, pageToken=page).execute()
             for f in resp.get("files", []):
                 if f["mimeType"] == "application/vnd.google-apps.folder":
@@ -166,7 +200,17 @@ def walk(service, root_id):
     return out
 
 
-def resolve_labels(parts):
+def drive_fingerprint(file_info):
+    """Dấu vết ổn định cả cho file Google-native (vốn không có md5Checksum)."""
+    if file_info.get("md5Checksum"):
+        # Giữ đúng định dạng md5 cũ để file nhị phân đã học không bị nạp lại hàng loạt.
+        return file_info["md5Checksum"]
+    if file_info.get("modifiedTime"):
+        return f"gdrive-modified:{file_info['modifiedTime']}"
+    return None
+
+
+def resolve_labels(parts, create_missing_client=True):
     """Từ đường dẫn thư mục → nhãn. Trả về dict nhãn, hoặc (None, lý do bỏ qua)."""
     if not parts:
         return None, "nằm ở thư mục gốc (không rõ loại)"
@@ -189,7 +233,7 @@ def resolve_labels(parts):
             with conn.cursor() as cur:
                 cur.execute("SELECT id, department_id FROM clients WHERE upper(code)=upper(%s)", (code,))
                 row = cur.fetchone()
-                if not row:
+                if not row and create_missing_client:
                     # Chưa có trong hệ thống → tự tạo bản ghi khách từ thư mục.
                     # DO NOTHING để không ghi đè tên/phòng admin đã sửa tay.
                     cur.execute(
@@ -201,7 +245,9 @@ def resolve_labels(parts):
                                 (code,))
                     row = cur.fetchone()
         if not row:
-            return None, f"không tạo được bản ghi khách cho '{folder}'"
+            action = ("chưa có trong hệ thống (dry-run không tạo dữ liệu)"
+                      if not create_missing_client else "không tạo được bản ghi khách")
+            return None, f"{action} cho '{folder}'"
         client_id, dept_id = row
 
         # Loại giấy tờ: quét các thư mục con, lấy khớp SÂU NHẤT (cụ thể nhất)
@@ -274,68 +320,114 @@ def relabel(doc_id, labels):
 def download(service, f, parts):
     from googleapiclient.http import MediaIoBaseDownload
     name, mime = f["name"], f["mimeType"]
+    try:
+        remote_size = int(f.get("size") or 0)
+    except (TypeError, ValueError):
+        remote_size = 0
+    if remote_size > MAX_DOWNLOAD_BYTES:
+        raise ExtractionError(
+            "drive_file_too_large", f"File Drive lớn hơn giới hạn {MAX_DOWNLOAD_BYTES:,} byte.",
+            "Tách file hoặc tăng DRIVE_MAX_DOWNLOAD_BYTES có kiểm soát.")
     if mime in EXPORT_MAP:
         emime, ext = EXPORT_MAP[mime]
-        if not name.endswith(ext):
+        if not name.lower().endswith(ext):
             name += ext
         req = service.files().export_media(fileId=f["id"], mimeType=emime)
     else:
         if Path(name).suffix.lower() not in ALLOWED:
             return None
         req = service.files().get_media(fileId=f["id"])
-    out_dir = DEST.joinpath(*parts) if parts else DEST
+    safe_parts = [safe_path_component(part) for part in parts]
+    out_dir = DEST.joinpath(*safe_parts) if safe_parts else DEST
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / name
+    out = out_dir / safe_path_component(name)
     buf = io.BytesIO()
     dl = MediaIoBaseDownload(buf, req)
     done = False
     while not done:
         _, done = dl.next_chunk()
+        if buf.tell() > MAX_DOWNLOAD_BYTES:
+            raise ExtractionError(
+                "drive_file_too_large", f"File tải về vượt giới hạn {MAX_DOWNLOAD_BYTES:,} byte.",
+                "Tách file hoặc tăng DRIVE_MAX_DOWNLOAD_BYTES có kiểm soát.")
     out.write_bytes(buf.getvalue())
     return out
 
 
-def learn_one(path, labels, drive_id, drive_md5, replace_id=None):
-    text = extract_text(path)
-    if not text.strip():
-        print("     [BỎ QUA] không trích được nội dung.")
+def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=None):
+    """Học một file; ``diagnostics`` nhận method/warnings/lỗi mà không phá API bool cũ."""
+    diagnostics = diagnostics if diagnostics is not None else {}
+    try:
+        extraction = extract_text_with_metadata(path)
+    except ExtractionError as exc:
+        diagnostics["error"] = exc.as_dict()
+        print(f"     [BỎ QUA] [{exc.code}] {exc}")
         return False
-    pieces = split_document(text, labels["doc_type"])
+    text = extraction.text
+    diagnostics.update({
+        "method": extraction.method,
+        "status": extraction.status,
+        "warnings": extraction.warnings,
+        "metadata": extraction.metadata,
+    })
+    print(f"     Trích xuất bằng {extraction.method}; {len(text):,} ký tự.")
+    for warning in extraction.warnings:
+        print(f"     [CẢNH BÁO] {warning}")
+    pieces = split_document_with_metadata(extraction, labels["doc_type"])
     if not pieces:
-        print("     [BỎ QUA] không chia được đoạn.")
+        error = ExtractionError("no_chunks", "Không chia được nội dung thành đoạn.",
+                                "Kiểm tra nội dung trích xuất trước khi học lại.")
+        diagnostics["error"] = error.as_dict()
+        print(f"     [BỎ QUA] [{error.code}] {error}")
         return False
     checksum = drive_md5 or hashlib.md5(text.encode()).hexdigest()
-    vecs = embed(pieces)
+    should_approve = AUTO_APPROVE and extraction.status == "ok"
+    diagnostics["approved"] = should_approve
+    vecs = embed([piece.content for piece in pieces])
     summary = summarize(text, path.stem)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
+            source_version = 1
             if replace_id:                       # file đã đổi → xoá bản cũ (chunks tự xoá theo)
+                cur.execute("SELECT coalesce(source_version,1)+1 FROM documents WHERE id=%s",
+                            (replace_id,))
+                version_row = cur.fetchone()
+                source_version = version_row[0] if version_row else 1
                 cur.execute("DELETE FROM documents WHERE id=%s", (replace_id,))
             cur.execute("""INSERT INTO documents
                 (title, source_path, drive_file_id, checksum, doc_type, access_level,
-                 client_id, department_id, matter_id, approved, label_verified, source_kind, summary)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'drive',%s) RETURNING id""",
+                 client_id, department_id, matter_id, approved, label_verified, source_kind, summary,
+                 extraction_status,extraction_error,source_version)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'drive',%s,%s,%s,%s) RETURNING id""",
                 (path.stem, str(path), drive_id, checksum,
                  labels["doc_type"], labels["access_level"],
                  labels["client_id"], labels["department_id"], labels.get("matter_id"),
-                 AUTO_APPROVE, AUTO_APPROVE, summary))
+                 should_approve, should_approve, summary,
+                 "warning" if extraction.warnings else "ready",
+                 json.dumps(extraction.warnings, ensure_ascii=False) if extraction.warnings else None,
+                 source_version))
             doc_id = cur.fetchone()[0]
             for idx, (piece, vec) in enumerate(zip(pieces, vecs)):
                 cur.execute("""INSERT INTO chunks
-                    (document_id, chunk_index, content, access_level, client_id, department_id, doc_type, embedding)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (doc_id, idx, piece, labels["access_level"],
-                     labels["client_id"], labels["department_id"], labels["doc_type"],
-                     json.dumps(vec)))
+                    (document_id, chunk_index, content, page_number, section_title, source_locator,
+                     access_level, client_id, department_id, doc_type, embedding)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (doc_id, idx, piece.content, piece.page_number, piece.section_title,
+                     piece.source_locator, labels["access_level"], labels["client_id"],
+                     labels["department_id"], labels["doc_type"], json.dumps(vec)))
         db.audit(conn, None, "auto_learn", "documents", doc_id,
-                 {"file": path.name, "chunks": len(pieces), "labels": labels})
-    state = "đã học" if AUTO_APPROVE else "vào hàng chờ duyệt"
+                 {"file": path.name, "chunks": len(pieces), "labels": labels,
+                  "extraction": {"method": extraction.method,
+                                 "status": extraction.status,
+                                 "warnings": extraction.warnings,
+                                 "metadata": extraction.metadata}})
+    state = "đã học" if should_approve else "vào hàng chờ duyệt"
     print(f"     [OK] document_id={doc_id}, {len(pieces)} đoạn — {state}.")
     return True
 
 
 def _write_status(started_at, folder_id, counts, new_items, updated_items,
-                  skipped_items, error_items, finished=True):
+                  skipped_items, error_items, warning_items=None, finished=True):
     """Ghi tóm tắt lần quét gần nhất vào app_settings để dashboard đọc được.
 
     Đây chính là 'cơ chế nhận biết file đã học và file mới chưa học': admin
@@ -353,6 +445,7 @@ def _write_status(started_at, folder_id, counts, new_items, updated_items,
         "updated_items": updated_items[-MAX_STATUS_ITEMS:],
         "skipped_items": skipped_items[-MAX_STATUS_ITEMS:],
         "error_items": error_items[-MAX_STATUS_ITEMS:],
+        "warning_items": (warning_items or [])[-MAX_STATUS_ITEMS:],
     }
     try:
         settings.set_system("drive_sync_status", json.dumps(summary, ensure_ascii=False))
@@ -366,12 +459,14 @@ def run(dry_run=False):
         sys.exit(1)
     started_at = datetime.now(timezone.utc)
     service = get_service()
+    review_mode = "TỰ DUYỆT" if AUTO_APPROVE else "CHỜ NGƯỜI DUYỆT (mặc định an toàn)"
+    print(f">> Chế độ nhập: {review_mode}")
     print(f">> Duyệt cây thư mục Drive {FOLDER_ID}...")
     items = walk(service, FOLDER_ID)
     print(f"   {len(items)} file.\n")
 
     n_new = n_upd = n_skip = n_unmapped = n_badext = 0
-    new_items, updated_items, skipped_items, error_items = [], [], [], []
+    new_items, updated_items, skipped_items, error_items, warning_items = [], [], [], [], []
 
     for f, parts in items:
         ext = Path(f["name"]).suffix.lower()
@@ -379,9 +474,14 @@ def run(dry_run=False):
 
         if f["mimeType"] not in EXPORT_MAP and ext not in ALLOWED:
             n_badext += 1
+            reason = (f"định dạng '{ext or '(không có đuôi)'}' chưa hỗ trợ; "
+                      "dùng PDF, DOCX, DOC, TXT, MD, XLSX hoặc CSV")
+            print(f"   [BỎ QUA] {f['name']}  ← {loc}: {reason}")
+            skipped_items.append({"name": f["name"], "location": loc,
+                                  "reason": reason, "code": "unsupported_format"})
             continue
 
-        labels, reason = resolve_labels(parts)
+        labels, reason = resolve_labels(parts, create_missing_client=not dry_run)
         if labels is None:
             print(f"   [BỎ QUA] {f['name']}  ← {loc}: {reason}")
             n_unmapped += 1
@@ -391,8 +491,8 @@ def run(dry_run=False):
             continue
 
         row = existing(f["id"])
-        drive_md5 = f.get("md5Checksum")
-        if row and drive_md5 and row[1] == drive_md5:
+        remote_fingerprint = drive_fingerprint(f)
+        if row and remote_fingerprint and row[1] == remote_fingerprint:
             # Nội dung không đổi. Nhưng nếu NHÃN đã khác (vd trước đây chưa gắn
             # được khách, giờ gắn được), thì cập nhật nhãn — không nạp lại nội dung.
             cur_labels = (row[2], row[3], row[4], row[5], row[6])
@@ -429,9 +529,21 @@ def run(dry_run=False):
             p = download(service, f, parts)
             if not p:
                 n_badext += 1
+                skipped_items.append({"name": f["name"], "location": loc,
+                                      "reason": "định dạng chưa hỗ trợ",
+                                      "code": "unsupported_format"})
                 continue
-            if learn_one(p, labels, f["id"], drive_md5, replace_id=row[0] if row else None):
+            extraction_info = {}
+            if learn_one(p, labels, f["id"], remote_fingerprint,
+                         replace_id=row[0] if row else None, diagnostics=extraction_info):
                 (updated_items if row else new_items).append(item_info)
+                if extraction_info.get("warnings"):
+                    warning_items.append({
+                        "name": f["name"], "location": loc,
+                        "method": extraction_info.get("method"),
+                        "warnings": extraction_info["warnings"],
+                        "requires_review": not extraction_info.get("approved", False),
+                    })
                 if row:
                     n_upd += 1
                 else:
@@ -440,28 +552,45 @@ def run(dry_run=False):
                 # learn_one bỏ qua vì không đọc được nội dung. Trước đây file này
                 # biến mất không dấu vết — admin tưởng đã học. Giờ đưa vào danh
                 # sách lỗi để thấy trên dashboard và biết đường xử lý.
+                error = extraction_info.get("error") or {
+                    "code": "extraction_failed", "message": "Không đọc được nội dung.",
+                    "hint": "Kiểm tra định dạng file rồi học lại.",
+                }
                 error_items.append({
                     "name": f["name"], "location": loc,
-                    "error": "không đọc được nội dung — nếu là PDF scan cần cài OCR "
-                             "(tesseract-ocr-vie, poppler-utils) rồi học lại"})
+                    "code": error.get("code"), "error": error.get("message"),
+                    "hint": error.get("hint"), "preserved_existing": bool(row),
+                })
         except Exception as e:
             print(f"     [LỖI] {f['name']}: {e}")
-            error_items.append({"name": f["name"], "location": loc, "error": str(e)})
+            if isinstance(e, ExtractionError):
+                detail = e.as_dict()
+                error_items.append({"name": f["name"], "location": loc,
+                                    "code": detail["code"], "error": detail["message"],
+                                    "hint": detail["hint"], "preserved_existing": bool(row)})
+            else:
+                error_items.append({"name": f["name"], "location": loc,
+                                    "code": "unexpected_error", "error": str(e)[:500],
+                                    "hint": "Xem journal của hds-ai-learn để biết chi tiết.",
+                                    "preserved_existing": bool(row)})
 
     n_ig = n_unmapped + n_badext
-    print(f"\n{n_new} mới | {n_upd} cập nhật | {n_skip} không đổi | {n_ig} bỏ qua")
+    print(f"\n{n_new} mới | {n_upd} cập nhật | {n_skip} không đổi | "
+          f"{n_ig} bỏ qua | {len(error_items)} lỗi | {len(warning_items)} cảnh báo")
     if not dry_run and (n_new or n_upd):
         if AUTO_APPROVE:
-            print("Đã học xong — bot dùng được ngay. Kiểm tra: /admin → Kho tài liệu đã học.")
+            print("Đã học xong — file sạch dùng ngay; file có cảnh báo vẫn chờ duyệt. "
+                  "Kiểm tra: /admin → Kho tài liệu đã học.")
         else:
             print("Đang chờ duyệt — mở /admin → Duyệt nhãn tài liệu.")
 
     if not dry_run:
         counts = {"scanned": len(items), "new": n_new, "updated": n_upd,
                   "unchanged": n_skip, "unmapped": n_unmapped, "bad_format": n_badext,
-                  "errors": len(error_items)}
+                  "errors": len(error_items), "warnings": len(warning_items),
+                  "auto_approved": AUTO_APPROVE}
         _write_status(started_at, FOLDER_ID, counts, new_items, updated_items,
-                     skipped_items, error_items)
+                     skipped_items, error_items, warning_items)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,9 @@ trong mã nguồn → muốn đổi phải sửa code rồi khởi động lại
 Ghi: set(key, value, user_id)  — chỉ admin, kiểm ở tầng API.
 """
 import json
+import os
+import threading
+import time
 
 from app import db
 
@@ -37,7 +40,13 @@ DEFAULTS = {
         "Trả lời rõ ràng, đủ ý, mạch lạc — trình bày dễ đọc (gạch đầu dòng khi "
         "cần) nhưng không lan man, không liệt kê máy móc mọi thứ dính từ khoá. "
         "Có ngày tháng/thời hạn thì tự so với HÔM NAY ở đầu prompt để biết còn "
-        "hạn hay đã hết. Nếu dữ liệu chưa có thứ người dùng cần, nói thẳng một "
+        "hạn hay đã hết. "
+        "NGUỒN SỰ THẬT: khi hỏi về nhân sự (bao nhiêu người, gồm những ai, chức "
+        "danh, thời hạn hợp đồng), hãy trả lời theo HỒ SƠ NHÂN SỰ và HỢP ĐỒNG "
+        "LAO ĐỘNG trong tài liệu — nêu rõ họ tên, chức danh, thời hạn của TỪNG "
+        "người. Số tài khoản đăng nhập KHÔNG phải quân số công ty, chỉ nhắc tới "
+        "khi được hỏi riêng về tài khoản phần mềm. "
+        "Nếu dữ liệu chưa có thứ người dùng cần, nói thẳng một "
         "cách nhẹ nhàng và gợi ý bước tiếp theo (tìm ở đâu, cần bổ sung gì) — "
         "TUYỆT ĐỐI không bịa số liệu hay điều luật. Chỉ hỏi lại khi câu hỏi thật "
         "sự mơ hồ mà lịch sử cũng không giúp làm rõ. Trích Điều/Khoản và ghi "
@@ -59,9 +68,12 @@ DEFAULTS = {
     # Kho tài liệu lớn lên KHÔNG làm prompt dài thêm — tìm kiếm vector luôn trả
     # đúng top_k đoạn — nên các con số này không cần đổi khi dữ liệu tăng.
     "retrieval_top_k": "5",          # số đoạn tài liệu đưa vào prompt
+    "retrieval_candidate_k": "40",   # hybrid search lấy rộng trước khi rerank
+    "retrieval_max_chunks_per_doc": "2", # đa dạng nguồn, tránh một file chiếm hết
     "chunk_char_limit": "1500",      # cắt mỗi đoạn còn bấy nhiêu ký tự
     "context_char_budget": "6000",   # trần ký tự cho toàn bộ tài liệu tham khảo
     "min_relevance": "0.25",         # dưới ngưỡng này coi như không liên quan
+    "strict_grounding": "true",       # không citation hợp lệ thì chặn câu tài liệu
     # Cửa sổ ngữ cảnh của model. Prompt dài hơn mức này bị Ollama cắt mất phần
     # ĐẦU — đúng chỗ đặt DỮ LIỆU CÔNG TY — mà vẫn tốn thời gian đọc phần còn
     # lại. Nên để rộng hơn prompt thực tế một quãng an toàn, rồi giữ prompt gọn
@@ -134,24 +146,39 @@ DEFAULTS = {
 # Khoá được phép sửa qua API (chặn ghi khoá lạ)
 EDITABLE_KEYS = set(DEFAULTS.keys())
 
+# Model generation đọc nhiều tham số trong cùng một request. Trước đây mỗi lần
+# `get_int()` lại mở một kết nối và SELECT riêng. Cache rất ngắn giữ cấu hình
+# nhất quán trong một lượt chat; set/reset chủ động xoá cache nên thay đổi từ UI
+# vẫn có hiệu lực ngay, không phải đợi TTL.
+try:
+    _CACHE_TTL = max(0.0, float(os.getenv("SETTINGS_CACHE_SECONDS", "2")))
+except ValueError:
+    _CACHE_TTL = 2.0
+_CACHE_LOCK = threading.Lock()
+_CACHE_VALUE = None
+_CACHE_AT = 0.0
+
+
+def invalidate_cache():
+    global _CACHE_VALUE, _CACHE_AT
+    with _CACHE_LOCK:
+        _CACHE_VALUE = None
+        _CACHE_AT = 0.0
+
 
 def get(key, default=None):
     """Đọc một cài đặt. Ưu tiên CSDL, không có thì lấy DEFAULTS."""
-    try:
-        with db.session(role="internal", admin=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT value FROM app_settings WHERE key=%s", (key,))
-                row = cur.fetchone()
-        if row:
-            return row[0]
-    except Exception:
-        # CSDL chưa nạp bảng app_settings (lần đầu chạy) → dùng mặc định
-        pass
-    return DEFAULTS.get(key, default)
+    return get_all().get(key, default)
 
 
 def get_all():
     """Toàn bộ cài đặt hiện hành = DEFAULTS bị ghi đè bởi bản trong CSDL."""
+    global _CACHE_VALUE, _CACHE_AT
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        if (_CACHE_VALUE is not None and _CACHE_TTL > 0
+                and now - _CACHE_AT < _CACHE_TTL):
+            return dict(_CACHE_VALUE)
     out = dict(DEFAULTS)
     try:
         with db.session(role="internal", admin=True) as conn:
@@ -161,7 +188,10 @@ def get_all():
                     out[k] = v
     except Exception:
         pass
-    return out
+    with _CACHE_LOCK:
+        _CACHE_VALUE = dict(out)
+        _CACHE_AT = time.monotonic()
+    return dict(out)
 
 
 def get_json(key):
@@ -208,6 +238,7 @@ def set(key, value, user_id=None):  # noqa: A001 - đặt tên theo nghiệp v�
                 (key, value, user_id),
             )
         db.audit(conn, user_id, "update_setting", "app_settings", None, {"key": key})
+    invalidate_cache()
     return True
 
 
@@ -217,6 +248,7 @@ def reset(key, user_id=None):
         with conn.cursor() as cur:
             cur.execute("DELETE FROM app_settings WHERE key=%s", (key,))
         db.audit(conn, user_id, "reset_setting", "app_settings", None, {"key": key})
+    invalidate_cache()
     return DEFAULTS.get(key)
 
 
@@ -236,3 +268,4 @@ def set_system(key, value):
                      SET value=EXCLUDED.value, updated_at=now()""",
                 (key, value),
             )
+    invalidate_cache()

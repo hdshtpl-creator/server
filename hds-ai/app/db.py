@@ -13,10 +13,16 @@ Với mức 'internal', truyền thêm:
 Cô lập dữ liệu khách hàng luôn khóa ở CSDL (RLS), không phó mặc cho code.
 """
 import os
+import threading
 from contextlib import contextmanager
 
 import psycopg
 from dotenv import load_dotenv
+
+try:
+    from psycopg_pool import ConnectionPool
+except ImportError:  # Triển khai cũ vẫn chạy; requirements mới sẽ bật pool.
+    ConnectionPool = None
 
 load_dotenv()
 
@@ -28,6 +34,52 @@ ROLE_TO_DBLEVEL = {
 }
 # Cấp thấy mọi phòng (không bị giới hạn bộ phận)
 SEE_ALL_DEPTS = {"admin", "ban_qt"}
+
+# Một câu chat trước đây mở nhiều kết nối TCP/PostgreSQL nối tiếp (xác thực,
+# settings, retrieval, history, ghi message...). Pool tách riêng tài khoản app
+# và tài khoản chủ để không bao giờ cho một kết nối bypass-RLS lọt sang truy vấn
+# người dùng. min_size=0 giúp các lệnh CLI ngắn không giữ tiến trình sống.
+_POOLS = {}
+_POOL_LOCK = threading.Lock()
+
+
+def _env_int(name: str, fallback: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(fallback))))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _pool(as_app: bool):
+    if ConnectionPool is None:
+        return None
+    key = "app" if as_app else "admin"
+    existing = _POOLS.get(key)
+    if existing is not None:
+        return existing
+    with _POOL_LOCK:
+        existing = _POOLS.get(key)
+        if existing is None:
+            maximum = _env_int("DB_POOL_MAX" if as_app else "DB_ADMIN_POOL_MAX",
+                               12 if as_app else 4)
+            existing = ConnectionPool(
+                conninfo=_conn_str(as_app=as_app), min_size=0, max_size=maximum,
+                timeout=_env_int("DB_POOL_TIMEOUT", 10), max_idle=300,
+                name=f"hds-{key}", open=True,
+            )
+            _POOLS[key] = existing
+    return existing
+
+
+@contextmanager
+def _connection(as_app: bool):
+    pool = _pool(as_app)
+    if pool is None:
+        with psycopg.connect(_conn_str(as_app=as_app)) as conn:
+            yield conn
+        return
+    with pool.connection() as conn:
+        yield conn
 
 
 def db_level(role: str) -> str:
@@ -80,18 +132,27 @@ def session(role: str = "public", client_id: int | None = None,
         raise ValueError("Mức 'client' bắt buộc phải có client_id")
 
     dept_csv = ",".join(str(d) for d in dept_ids) if dept_ids else ""
-    with psycopg.connect(_conn_str(as_app=not admin)) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT set_config('app.role', %s, false)", (level,))
-            cur.execute("SELECT set_config('app.client_id', %s, false)",
-                        (str(client_id) if client_id is not None else "",))
-            cur.execute("SELECT set_config('app.dept_ids', %s, false)", (dept_csv,))
-            cur.execute("SELECT set_config('app.is_banqt', %s, false)",
-                        ("yes" if is_banqt else "no",))
-            cur.execute("SELECT set_config('app.can_finance', %s, false)",
-                        ("yes" if can_finance else "no",))
-        yield conn
-        conn.commit()
+    with _connection(as_app=not admin) as conn:
+        try:
+            # Luôn ghi đè TOÀN BỘ context trên mỗi lần mượn connection. Không
+            # được dựa vào giá trị của request trước còn lưu trong pool.
+            with conn.cursor() as cur:
+                cur.execute("SELECT set_config('app.role', %s, false)", (level,))
+                cur.execute("SELECT set_config('app.client_id', %s, false)",
+                            (str(client_id) if client_id is not None else "",))
+                cur.execute("SELECT set_config('app.dept_ids', %s, false)", (dept_csv,))
+                cur.execute("SELECT set_config('app.is_banqt', %s, false)",
+                            ("yes" if is_banqt else "no",))
+                cur.execute("SELECT set_config('app.can_finance', %s, false)",
+                            ("yes" if can_finance else "no",))
+            yield conn
+            conn.commit()
+        except BaseException:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
 
 
 def audit(conn, user_id, action, entity=None, entity_id=None, detail=None):
