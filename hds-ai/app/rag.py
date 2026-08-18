@@ -30,13 +30,13 @@ from app.models import embed, llm
 # chỉ mục vẫn tăng theo dữ liệu. Vì vậy kho triệu đoạn phải kiểm chứng bằng
 # EXPLAIN/load-test; không được coi câu "prompt không đổi" là cam kết tốc độ.
 # --------------------------------------------------------------------
-TOP_K = 5                 # số đoạn tài liệu đưa vào prompt
-CHUNK_CHARS = 1500        # cắt mỗi đoạn còn bấy nhiêu ký tự
-CONTEXT_CHARS = 6000      # tổng ngân sách cho toàn bộ tài liệu tham khảo
+TOP_K = 8                 # số đoạn tài liệu đưa vào prompt
+CHUNK_CHARS = 2400        # cắt mỗi đoạn còn bấy nhiêu ký tự
+CONTEXT_CHARS = 14000     # tổng ngân sách cho toàn bộ tài liệu tham khảo
 HISTORY_CHARS = 300       # mỗi lượt hỏi-đáp cũ chỉ giữ bấy nhiêu ký tự
 MIN_SCORE = 0.25          # dưới ngưỡng này coi như không liên quan, bỏ đi
-RETRIEVAL_CANDIDATES = 40 # lấy rộng rồi xếp hạng lại trước khi cắt top_k
-MAX_CHUNKS_PER_DOC = 2    # tránh một tài liệu chiếm hết mọi vị trí nguồn
+RETRIEVAL_CANDIDATES = 60 # lấy rộng rồi xếp hạng lại trước khi cắt top_k
+MAX_CHUNKS_PER_DOC = 3    # tránh một tài liệu chiếm hết mọi vị trí nguồn
 
 CHANNEL_LEVEL = {"public": "public", "internal": "internal", "portal": "client"}
 
@@ -283,12 +283,58 @@ def get_conversation_state(conversation_id, channel, client_id=None):
         return {}
 
 
-def fit_context(chunks, chunk_chars=None, budget=None):
+def _best_window(content: str, question: str, limit: int) -> str:
+    """Lấy khúc LIÊN QUAN NHẤT trong một đoạn dài, thay vì cắt từ đầu.
+
+    Một đoạn được lưu dài tới ~700 từ (khoảng 4000+ ký tự), trong khi ngân sách
+    chỉ cho vài nghìn ký tự. Cắt thẳng `content[:limit]` là đọc phần ĐẦU đoạn —
+    nhưng câu trả lời thường nằm ở giữa hoặc cuối. Bot vì thế nhận được đúng
+    tài liệu mà vẫn không thấy chỗ chứa đáp án, nên không gắn nổi trích dẫn.
+
+    Cách làm: trượt theo từng câu, cộng điểm cho câu chứa từ khoá của câu hỏi,
+    rồi giữ lại cửa sổ liên tiếp ghi điểm cao nhất. Không tra cứu gì thêm, chỉ
+    là đếm chữ nên gần như không tốn thời gian.
+    """
+    content = content or ""
+    if len(content) <= limit:
+        return content
+    qtokens = _tokens(question)
+    # Không có từ khoá nào để bám thì giữ hành vi cũ — cắt từ đầu.
+    if not qtokens:
+        return content[:limit].rstrip() + "…"
+
+    # Tách theo câu, giữ nguyên dấu câu để đoạn trích còn đọc được.
+    sentences = re.split(r"(?<=[.!?;:\n])\s+", content)
+    scores = [len(qtokens & _tokens(s)) for s in sentences]
+
+    best_start, best_score, best_end = 0, -1, 0
+    start = 0
+    while start < len(sentences):
+        length, score, end = 0, 0, start
+        while end < len(sentences) and length + len(sentences[end]) + 1 <= limit:
+            length += len(sentences[end]) + 1
+            score += scores[end]
+            end += 1
+        if end == start:            # một câu dài hơn cả ngân sách
+            end = start + 1
+            score = scores[start]
+        if score > best_score:
+            best_start, best_score, best_end = start, score, end
+        start += 1
+
+    window = " ".join(sentences[best_start:best_end]).strip()[:limit]
+    prefix = "… " if best_start > 0 else ""
+    suffix = " …" if best_end < len(sentences) else ""
+    return f"{prefix}{window}{suffix}"
+
+
+def fit_context(chunks, chunk_chars=None, budget=None, question=""):
     """Cắt danh sách đoạn cho vừa ngân sách ký tự, giữ nguyên thứ tự liên quan.
 
-    Mỗi đoạn bị cắt về `chunk_chars`, và dừng nhận thêm khi đã đủ `budget`. Đoạn
-    xếp trên là đoạn khớp nhất nên bị cắt sau cùng — cắt từ đuôi danh sách là
-    mất phần ít liên quan nhất.
+    Mỗi đoạn được thu về `chunk_chars` bằng cách giữ KHÚC LIÊN QUAN NHẤT (xem
+    `_best_window`), và dừng nhận thêm khi đã đủ `budget`. Đoạn xếp trên là đoạn
+    khớp nhất nên bị cắt sau cùng — cắt từ đuôi danh sách là mất phần ít liên
+    quan nhất.
     """
     chunk_chars = chunk_chars or settings.get_int("chunk_char_limit", CHUNK_CHARS)
     budget = budget or settings.get_int("context_char_budget", CONTEXT_CHARS)
@@ -296,7 +342,7 @@ def fit_context(chunks, chunk_chars=None, budget=None):
     for c in chunks:
         if used >= budget:
             break
-        content = (c.get("content") or "")[:chunk_chars]
+        content = _best_window(c.get("content") or "", question, chunk_chars)
         room = budget - used
         if len(content) > room:
             content = content[:room].rstrip() + "…"
@@ -321,7 +367,8 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
         parts.append(company + "\n")
     # Ngân sách áp cho CẢ tài liệu trong kho lẫn file tạm đính kèm — nếu không,
     # một file tải lên trong chat vẫn đủ sức thổi prompt lên quá cỡ.
-    all_ctx = fit_context(list(chunks) + list(temp_chunks or []), chunk_chars, budget)
+    all_ctx = fit_context(list(chunks) + list(temp_chunks or []), chunk_chars,
+                          budget, question=question)
     if all_ctx:
         parts.append("TÀI LIỆU THAM KHẢO ĐÃ ĐƯỢC PHÉP DÙNG:")
         for i, c in enumerate(all_ctx, 1):
@@ -352,6 +399,11 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                  "thúc bằng đúng một hoặc nhiều ký hiệu [Nguồn n]. Chỉ được dùng số nguồn "
                  "đang có ở trên; không có đoạn hỗ trợ thì nói 'chưa đủ căn cứ trong nguồn', "
                  "không suy đoán và không tự điền tên/ngày/số tiền/chức danh. "
+                 "Khi dẫn quy định pháp luật, chép ĐÚNG tên văn bản và số hiệu như ghi "
+                 "trong nguồn (vd 'khoản 2 Điều 35 Bộ luật Lao động số 45/2019/QH14'); "
+                 "nguồn nào có sẵn dòng [Thông tư/Nghị định… — Chương… — Điều…] ở đầu thì "
+                 "dùng nguyên dòng đó làm căn cứ, KHÔNG viết chung chung 'theo quy định "
+                 "pháp luật' và KHÔNG tự bịa số hiệu. "
                  "Khi câu hỏi liên quan hiệu lực/thời hạn (hợp đồng còn hạn không, ai "
                  "còn hợp đồng, vụ nào quá hạn), TỰ so từng ngày kết thúc trong tài liệu "
                  "với HÔM NAY ở đầu prompt: ngày kết thúc đã qua = ĐÃ HẾT HẠN, ĐỪNG coi "
@@ -444,6 +496,64 @@ def resolve_model(model_choice, question, configured_model=None, quality_require
 
 _CITATION_RE = re.compile(r"\[\s*Nguồn\s+(\d+)\s*\]", re.IGNORECASE)
 
+# Tỉ lệ chữ của một đoạn phải tìm thấy trong đoạn tài liệu thì mới được coi là
+# có căn cứ. 0.6 là mức đòi hỏi đoạn văn phải thực sự lấy từ nguồn, chứ không
+# chỉ tình cờ trùng vài từ phổ thông.
+AUTOCITE_MIN_COVERAGE = 0.6
+
+# Từ quá phổ thông thì trùng nhau cũng không chứng minh được gì.
+_STOP_TOKENS = {
+    "va", "cua", "cho", "trong", "voi", "duoc", "cac", "nhung", "mot", "la",
+    "co", "khong", "den", "tu", "theo", "tai", "ve", "nay", "do", "se", "da",
+    "thi", "ma", "nhu", "hoac", "neu", "khi", "boi", "tren", "duoi", "ben",
+}
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Chữ mang nghĩa của một câu — bỏ hư từ để phép so khớp có sức nặng."""
+    return {t for t in _tokens(text) if t not in _STOP_TOKENS}
+
+
+def autocite(text, chunks, min_coverage=AUTOCITE_MIN_COVERAGE):
+    """Tự gắn [Nguồn n] cho những đoạn CHỨNG MINH ĐƯỢC là lấy từ tài liệu.
+
+    Model nhỏ hay quên ký hiệu trích dẫn dù nội dung hoàn toàn đúng và lấy từ
+    nguồn. Chặn sạch câu trả lời vì lỗi hình thức đó là phí phạm — người dùng
+    mất luôn phần nội dung đúng.
+
+    Đây KHÔNG phải bịa nguồn: chỉ gắn khi phần lớn chữ mang nghĩa của đoạn văn
+    thực sự có mặt trong đúng đoạn tài liệu đó, tức là trích dẫn được KIẾM ĐƯỢC
+    bằng đối chiếu chứ không phải gán bừa. Đoạn không đạt ngưỡng vẫn để nguyên
+    cho bước kiểm tra phía sau xử lý.
+    """
+    if not chunks or not (text or "").strip():
+        return text, 0
+    chunk_tokens = [_content_tokens(c.get("content") or "") for c in chunks]
+
+    blocks = re.split(r"(\n\s*\n)", text)
+    attached = 0
+    for index in range(0, len(blocks), 2):
+        block = blocks[index]
+        if _CITATION_RE.search(block):
+            continue
+        body_lines = [line for line in block.splitlines()
+                      if not line.lstrip().startswith(("#", ">"))]
+        body = re.sub(r"[`*_>#-]", "", " ".join(body_lines)).strip()
+        if len(body) < 35 or "[CẦN BỔ SUNG" in body.upper():
+            continue
+        btokens = _content_tokens(body)
+        if len(btokens) < 4:
+            continue
+        best_n, best_cov = 0, 0.0
+        for n, ctokens in enumerate(chunk_tokens, 1):
+            coverage = len(btokens & ctokens) / len(btokens)
+            if coverage > best_cov:
+                best_n, best_cov = n, coverage
+        if best_n and best_cov >= min_coverage:
+            blocks[index] = block.rstrip() + f" [Nguồn {best_n}]"
+            attached += 1
+    return "".join(blocks), attached
+
 
 def validate_grounding(text, chunks, answer_mode="grounded", strict=True):
     """Kiểm tra citation có trỏ tới nguồn thật; fail-closed khi hoàn toàn mất nguồn.
@@ -455,6 +565,10 @@ def validate_grounding(text, chunks, answer_mode="grounded", strict=True):
     text = (text or "").strip()
     if not chunks or answer_mode not in {"grounded", "mixed"}:
         return text, "verified" if answer_mode == "structured" else "not_applicable"
+
+    # BƯỚC 1: cứu những đoạn đúng nội dung nhưng thiếu ký hiệu trích dẫn. Làm
+    # trước khi kiểm tra để lỗi hình thức của model không xoá mất nội dung đúng.
+    text, _ = autocite(text, chunks)
 
     valid_max = len(chunks)
     seen_valid = []
@@ -493,10 +607,17 @@ def validate_grounding(text, chunks, answer_mode="grounded", strict=True):
         return cleaned, "partial" if unsupported else "verified"
     if not strict or answer_mode == "mixed":
         return cleaned, "uncited"
+    # Tới đây nghĩa là autocite cũng không đối chiếu được đoạn nào với nguồn:
+    # nội dung sinh ra KHÔNG nằm trong tài liệu đã tìm được. Với công cụ pháp lý
+    # thì đó là câu phải giữ lại, không phải câu để hiển thị.
     return (
-        "Mình đã tìm thấy tài liệu liên quan nhưng câu trả lời sinh ra không gắn "
-        "được trích dẫn kiểm chứng, nên hệ thống đã chặn nội dung đó. Bạn hãy hỏi "
-        "cụ thể hơn hoặc chọn trực tiếp tài liệu cần dùng trong Bộ nguồn."
+        "Mình tìm được tài liệu liên quan (xem phần **Nguồn trích dẫn** bên dưới) "
+        "nhưng chưa đoạn nào nói thẳng vào câu bạn hỏi, nên mình không đưa ra câu "
+        "trả lời để tránh suy đoán.\n\n"
+        "Bạn thử một trong ba cách:\n"
+        "- Hỏi cụ thể hơn (nêu tên khách, tên vụ việc, số hợp đồng hoặc mốc thời gian).\n"
+        "- Mở **Nguồn trích dẫn** bên dưới, chọn đúng tài liệu cần dùng rồi hỏi lại.\n"
+        "- Nếu hồ sơ chưa có trong kho, tải tệp lên rồi hỏi lại."
     ), "uncited_blocked"
 
 
@@ -630,7 +751,8 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     timings["bo_qua_doan_yeu"] = len(chunks) - len(kept)
     chunks = fit_context(kept,
                          _num("chunk_char_limit", CHUNK_CHARS, int),
-                         _num("context_char_budget", CONTEXT_CHARS, int))
+                         _num("context_char_budget", CONTEXT_CHARS, int),
+                         question=search_question)
     timings["vector_db_ms"] = int((time.time() - vector_started) * 1000)
     timings["tim_kiem_ms"] = timings["embed_ms"] + timings["vector_db_ms"]
     clock[0] = time.time()

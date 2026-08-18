@@ -530,7 +530,23 @@ export interface DriveSyncRun {
   error_items: DriveSyncItem[];
 }
 
+/** Một tài liệu có trong Drive nhưng chưa học được, còn tồn qua nhiều lần quét. */
+export interface IngestFailure {
+  id: number;
+  file_name: string;
+  location: string | null;
+  error_code: string;
+  error_message: string | null;
+  hint: string | null;
+  attempts: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  drive_file_id: string | null;
+}
+
 export interface DriveSyncStatus {
   configured: boolean;
   last_run: DriveSyncRun | null;
+  /** Lỗi tích luỹ, KHÁC last_run.error_items vốn chỉ là ảnh chụp lần quét cuối. */
+  failures: IngestFailure[];
 }

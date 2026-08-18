@@ -1118,6 +1118,32 @@ let mockState = {
     ],
     error_items: [],
   },
+  ingestFailures: [
+    {
+      id: 1,
+      file_name: 'Quyet dinh 1234 (ban scan).pdf',
+      location: 'Hồ sơ khách hàng / [SPQ] SunPhuQuoc / Hồ sơ nộp cơ quan',
+      error_code: 'pdf_no_text',
+      error_message: 'PDF không có lớp văn bản và OCR không đọc được nội dung.',
+      hint: 'Cài gói OCR tiếng Việt trên máy chủ, hoặc thay bằng bản PDF gốc có chữ.',
+      attempts: 3,
+      first_seen_at: '2026-08-14 02:10:00',
+      last_seen_at: '2026-08-19 02:10:00',
+      drive_file_id: 'drv_err_1',
+    },
+    {
+      id: 2,
+      file_name: 'Bang ke chi phi Q2.xlsx',
+      location: 'Hồ sơ khách hàng / [SPQ] SunPhuQuoc / Công nợ - Tài chính',
+      error_code: 'office_archive_too_large',
+      error_message: 'File Office sau giải nén vượt giới hạn cho phép.',
+      hint: 'Tách file hoặc bỏ ảnh nhúng quá lớn rồi tải lại.',
+      attempts: 1,
+      first_seen_at: '2026-08-19 02:10:00',
+      last_seen_at: '2026-08-19 02:10:00',
+      drive_file_id: 'drv_err_2',
+    },
+  ],
   matterAlerts: [
     {
       matter_id: 1, matter_code: 'M-2026-001',
@@ -1689,7 +1715,11 @@ Với câu hỏi "${question}":
   }
 
   if (endpoint === '/drive/sync-status') {
-    return { configured: true, last_run: mockState.driveSyncStatus };
+    return {
+      configured: true,
+      last_run: mockState.driveSyncStatus,
+      failures: mockState.ingestFailures,
+    };
   }
 
   if (endpoint.startsWith('/alerts')) {

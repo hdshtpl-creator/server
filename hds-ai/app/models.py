@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:8b")
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen3:14b")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 EMBED_DIM = int(os.getenv("EMBED_DIM", "1024"))
 

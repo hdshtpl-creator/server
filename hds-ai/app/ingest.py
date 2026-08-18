@@ -18,8 +18,8 @@ from xml.etree import ElementTree
 from app import db
 from app.models import embed, summarize
 
-CHUNK_WORDS = 700
-CHUNK_OVERLAP = 100
+CHUNK_WORDS = 320
+CHUNK_OVERLAP = 60
 SUPPORTED_EXTENSIONS = frozenset({".txt", ".md", ".docx", ".doc", ".pdf", ".xlsx", ".csv"})
 
 
@@ -538,22 +538,131 @@ def clean(text: str) -> str:
 RE_DIEU = re.compile(r"^\s*(Điều\s+\d+[a-z]?)\s*[.:]?", re.MULTILINE | re.IGNORECASE)
 
 
-def chunk_law(text):
-    marks = [(m.start(), m.group(1)) for m in RE_DIEU.finditer(text)]
+def document_citation(text: str) -> str:
+    """Đọc SỐ HIỆU VĂN BẢN ở đầu văn bản luật, ví dụ 'Thông tư 01/2021/TT-BXD'.
+
+    Không có dòng này thì mọi đoạn cắt ra đều là 'Điều 5' trơ trọi — người đọc
+    không biết Điều 5 của văn bản nào, và câu trả lời của bot không dẫn nguồn
+    được theo chuẩn hành nghề. Vì vậy số hiệu phải được gắn vào TỪNG đoạn.
+
+    Chỉ soi phần đầu: số hiệu luôn nằm ở phần mở đầu, còn thân văn bản thì đầy
+    số hiệu của văn bản KHÁC (điều khoản dẫn chiếu) — quét cả bài là lấy nhầm.
+    """
+    head = text[:4000]
+    # 45/2019/QH14, 01/2021/TT-BXD, 15/2020/NĐ-CP…
+    number = re.search(
+        r"\bS[ốô]\s*:?\s*(\d+\s*/\s*\d{4}\s*/\s*[A-ZĐ][A-ZĐ0-9\-]*)", head)
+    if not number:
+        number = re.search(r"\b(\d+/\d{4}/[A-ZĐ][A-ZĐ0-9\-]+)\b", head)
+    kind = re.search(
+        r"\b(BỘ LUẬT|LUẬT|PHÁP LỆNH|NGHỊ ĐỊNH|NGHỊ QUYẾT|THÔNG TƯ LIÊN TỊCH|"
+        r"THÔNG TƯ|QUYẾT ĐỊNH|CHỈ THỊ|CÔNG VĂN|Bộ luật|Luật|Pháp lệnh|"
+        r"Nghị định|Nghị quyết|Thông tư liên tịch|Thông tư|Quyết định)\b", head)
+    parts = []
+    if kind:
+        parts.append(kind.group(1).title() if kind.group(1).isupper() else kind.group(1))
+    if number:
+        parts.append("số " + re.sub(r"\s+", "", number.group(1)))
+    return " ".join(parts).strip()
+
+
+# Cấp bậc trong văn bản quy phạm pháp luật Việt Nam, từ lớn tới nhỏ.
+RE_PHAN = re.compile(r"^\s*(Phần\s+(?:thứ\s+)?[^\n]{0,60})$", re.MULTILINE | re.IGNORECASE)
+RE_CHUONG = re.compile(r"^\s*(Chương\s+[IVXLCDM\d]+[^\n]{0,80})$", re.MULTILINE | re.IGNORECASE)
+RE_MUC = re.compile(r"^\s*(Mục\s+\d+[^\n]{0,80})$", re.MULTILINE | re.IGNORECASE)
+
+
+def _heading_path(text: str, position: int) -> str:
+    """Chương/Mục đang có hiệu lực tại vị trí này — tiêu đề gần nhất phía trên.
+
+    Điều 5 nằm trong Chương II khác hẳn Điều 5 của Chương V. Không giữ đường dẫn
+    này thì hai điều trùng số bị trộn vào nhau khi tra cứu.
+    """
+    path = []
+    for pattern in (RE_PHAN, RE_CHUONG, RE_MUC):
+        last = None
+        for match in pattern.finditer(text):
+            if match.start() < position:
+                last = match.group(1).strip()
+            else:
+                break
+        if last:
+            path.append(re.sub(r"\s+", " ", last))
+    return ", ".join(path)
+
+
+RE_TRANG = re.compile(r"^\[Trang\s+(\d+)\]\s*$", re.MULTILINE | re.IGNORECASE)
+
+
+def _page_at(text: str, position: int):
+    """Số trang PDF của vị trí này — mốc [Trang n] gần nhất phía trên.
+
+    Cắt luật theo điều nên không còn đi theo từng trang nữa, nhưng số trang vẫn
+    cần cho người muốn mở đúng chỗ trong file gốc.
+    """
+    page = None
+    for match in RE_TRANG.finditer(text):
+        if match.start() < position:
+            page = int(match.group(1))
+        else:
+            break
+    return page
+
+
+def chunk_law_structured(text: str) -> list[ChunkPiece]:
+    """Cắt văn bản luật theo ĐIỀU, giữ nguyên đường dẫn trích dẫn của từng điều.
+
+    Mỗi đoạn trả về đều tự mang đủ thông tin để trích dẫn: số hiệu văn bản,
+    Chương/Mục, và số Điều. Nhờ vậy khi bot dẫn nguồn, người đọc tra ngược được
+    tới đúng điều khoản mà không phải mở lại cả file.
+
+    Điều quá dài vẫn phải cắt nhỏ, nhưng mỗi phần đều lặp lại nhãn để không có
+    mảnh nào mất danh tính.
+    """
+    citation = document_citation(text)
+    marks = [(m.start(), m.group(1).strip()) for m in RE_DIEU.finditer(text)]
     if not marks:
-        return chunk_generic(text)
-    out = []
-    for i, (pos, label) in enumerate(marks):
-        end = marks[i + 1][0] if i + 1 < len(marks) else len(text)
-        body = text[pos:end].strip()
+        return [ChunkPiece(content=piece,
+                           section_title=citation or None,
+                           source_locator="document")
+                for piece in chunk_generic(text)]
+
+    pieces: list[ChunkPiece] = []
+    for index, (position, label) in enumerate(marks):
+        end = marks[index + 1][0] if index + 1 < len(marks) else len(text)
+        body = text[position:end].strip()
         if len(body) < 20:
             continue
+        path = _heading_path(text, position)
+        page = _page_at(text, position)
+        # Tiêu đề đầy đủ: "Thông tư số 01/2021/TT-BXD — Chương II, Mục 1, Điều 5"
+        section = " — ".join(x for x in (citation, path, label) if x)
+        number = re.search(r"(\d+[a-z]?)", label)
+        locator = f"dieu:{number.group(1)}" if number else "document"
+
         if len(body.split()) > CHUNK_WORDS * 2:
-            for j, sub in enumerate(chunk_generic(body), 1):
-                out.append(f"[{label} - phần {j}]\n{sub}")
+            parts = chunk_generic(body)
+            for order, sub in enumerate(parts, 1):
+                # Nhãn nằm TRONG nội dung, không chỉ ở metadata: đoạn được đưa
+                # vào prompt dưới dạng văn bản thuần, model chỉ đọc được cái gì
+                # nằm trong nội dung.
+                header = f"[{section} — phần {order}/{len(parts)}]"
+                pieces.append(ChunkPiece(
+                    content=f"{header}\n{sub}", page_number=page,
+                    section_title=section,
+                    source_locator=f"{locator};phan:{order}"))
         else:
-            out.append(body)
-    return out
+            header = f"[{section}]" if citation or path else ""
+            content = f"{header}\n{body}" if header else body
+            pieces.append(ChunkPiece(content=content, page_number=page,
+                                     section_title=section,
+                                     source_locator=locator))
+    return pieces
+
+
+def chunk_law(text):
+    """Bản trả về chuỗi, giữ cho các chỗ gọi cũ (split_document) không vỡ."""
+    return [piece.content for piece in chunk_law_structured(text)]
 
 
 def chunk_generic(text):
@@ -642,12 +751,21 @@ def _chunk_locator(segment: _SourceSegment, content: str, source_format: str):
 def split_document_with_metadata(extraction: ExtractionResult, doc_type):
     """Chia đoạn nhưng không làm mất trang/mục/sheet dùng cho trích dẫn chính xác."""
     output = []
+    # Văn bản luật phải được cắt trên TOÀN VĂN, không cắt theo từng trang PDF:
+    # một Điều thường vắt qua hai trang, và Chương/Mục thì nằm cách đó vài chục
+    # trang. Cắt theo trang là băm nát điều khoản và mất luôn đường dẫn trích dẫn.
+    if doc_type == "law":
+        full_text = clean(extraction.text)
+        if full_text:
+            for piece in chunk_law_structured(full_text):
+                output.append(piece)
+        return output
+
     for segment in _segments_from_extraction(extraction):
         segment_text = clean(segment.content)
         if not segment_text:
             continue
-        pieces = chunk_law(segment_text) if doc_type == "law" else chunk_generic(segment_text)
-        for piece in pieces:
+        for piece in chunk_generic(segment_text):
             output.append(ChunkPiece(
                 content=piece,
                 page_number=segment.page_number,

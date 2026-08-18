@@ -139,13 +139,16 @@ hds-ai/
 
 ---
 
-## Model AI — có thể nâng cấp
+## Model AI — mặc định và cách hạ cấp
 
-Đang chạy qwen3:8b (~6GB). Card 16GB dư sức lên `qwen3:14b` (~10GB, thông minh hơn):
+Mặc định chạy `qwen3:14b` (~10GB): trả lời chuẩn hơn hẳn ở câu hỏi pháp lý
+nhiều điều khoản, và bám trích dẫn tốt hơn model nhỏ. Card 16GB chạy thoải mái.
+
+Máy yếu (RAM/VRAM dưới 12GB) thì hạ xuống bản nhẹ:
 
 ```bash
-ollama pull qwen3:14b
-# sửa .env: LLM_MODEL=qwen3:14b
+ollama pull qwen3:8b
+# sửa .env: LLM_MODEL=qwen3:8b
 ```
 
 Không đổi code. GPU chỉ nạp model khi có câu hỏi rồi nhả sau ~5 phút — thấy VRAM "rảnh" là bình thường.

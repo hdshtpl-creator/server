@@ -426,6 +426,50 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
     return True
 
 
+def _record_failure(drive_file_id, name, location, error):
+    """Ghi/cập nhật một file KHÔNG HỌC ĐƯỢC để dashboard thấy được lâu dài.
+
+    Lần quét sau, nếu file vẫn hỏng thì chỉ tăng `attempts` chứ không tạo dòng
+    mới — admin cần biết "hỏng từ bao giờ, đã thử mấy lần", không cần một trang
+    dài toàn dòng trùng nhau.
+    """
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO ingest_failures
+                         (drive_file_id,file_name,location,error_code,error_message,hint)
+                       VALUES (%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (drive_file_id) DO UPDATE SET
+                         file_name=EXCLUDED.file_name,
+                         location=EXCLUDED.location,
+                         error_code=EXCLUDED.error_code,
+                         error_message=EXCLUDED.error_message,
+                         hint=EXCLUDED.hint,
+                         attempts=ingest_failures.attempts+1,
+                         last_seen_at=now(),
+                         resolved_at=NULL""",
+                    (drive_file_id, name, location, error.get("code") or "unknown",
+                     error.get("message"), error.get("hint")))
+    except Exception as exc:
+        # Không để việc ghi báo cáo làm hỏng cả lần quét.
+        print(f"     [CẢNH BÁO] không ghi được nhật ký lỗi học: {exc}")
+
+
+def _clear_failure(drive_file_id):
+    """Đánh dấu đã xử lý khi file học được — thẻ trên dashboard tự biến mất."""
+    if not drive_file_id:
+        return
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""UPDATE ingest_failures SET resolved_at=now()
+                                WHERE drive_file_id=%s AND resolved_at IS NULL""",
+                            (drive_file_id,))
+    except Exception:
+        pass
+
+
 def _write_status(started_at, folder_id, counts, new_items, updated_items,
                   skipped_items, error_items, warning_items=None, finished=True):
     """Ghi tóm tắt lần quét gần nhất vào app_settings để dashboard đọc được.
@@ -544,6 +588,8 @@ def run(dry_run=False):
                         "warnings": extraction_info["warnings"],
                         "requires_review": not extraction_info.get("approved", False),
                     })
+                # Học được rồi thì gỡ khỏi danh sách lỗi cũ (nếu có).
+                _clear_failure(f.get("id"))
                 if row:
                     n_upd += 1
                 else:
@@ -561,6 +607,7 @@ def run(dry_run=False):
                     "code": error.get("code"), "error": error.get("message"),
                     "hint": error.get("hint"), "preserved_existing": bool(row),
                 })
+                _record_failure(f.get("id"), f["name"], loc, error)
         except Exception as e:
             print(f"     [LỖI] {f['name']}: {e}")
             if isinstance(e, ExtractionError):

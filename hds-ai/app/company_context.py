@@ -843,18 +843,11 @@ def structured_answer(question, channel, client_id=None, dept_ids=None,
 
     employees = _employees_with_latest_contract()
     if not employees:
-        return {
-            "answer": (
-                "Hệ thống **chưa có sổ nhân sự có cấu trúc**, nên mình chưa thể xác định "
-                "chính xác quân số, danh sách người lao động hoặc số người còn HĐLĐ. "
-                f"Hiện có {len(accounts)} tài khoản nội bộ đang hoạt động, nhưng không được "
-                "coi con số tài khoản đó là số nhân sự. Hãy nhập dữ liệu vào mục Nhân sự/HĐLĐ."
-            ),
-            "answer_mode": "insufficient_evidence", "grounding_status": "insufficient",
-            "evidence": [_system_evidence("Sổ nhân sự HDS", "employees",
-                                          "Không có bản ghi nhân sự đang hoạt động")],
-            "state": next_state,
-        }
+        # Chưa có sổ nhân sự có cấu trúc KHÔNG có nghĩa là không biết gì. Hợp
+        # đồng lao động và hồ sơ nhân sự đã học vẫn trả lời được câu này. Trả
+        # None để rơi xuống luồng tra tài liệu, thay vì chặn người dùng bằng một
+        # câu từ chối trong khi tài liệu đang nằm sẵn trong kho.
+        return None
 
     if intent == "employment_contract":
         current = [row for row in employees if _contract_is_current(row)]

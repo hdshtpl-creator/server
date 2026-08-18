@@ -9,6 +9,7 @@ import {
   FilePlus2,
   FileClock,
   FileCheck2,
+  FileWarning,
   AlertTriangle,
   ChevronDown,
   ChevronUp,
@@ -48,6 +49,7 @@ export const DriveSyncStatusCard: React.FC = () => {
   const [status, setStatus] = useState<DriveSyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showSkipped, setShowSkipped] = useState(false);
+  const [showFailures, setShowFailures] = useState(false);
 
   const load = async () => {
     setIsLoading(true);
@@ -92,6 +94,7 @@ export const DriveSyncStatusCard: React.FC = () => {
   }
 
   const run = status.last_run;
+  const failures = status.failures ?? [];
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm space-y-3">
@@ -191,6 +194,61 @@ export const DriveSyncStatusCard: React.FC = () => {
             </p>
           )}
         </>
+      )}
+
+      {/* Tài liệu KHÔNG ĐỌC ĐƯỢC — nằm ngoài khối `run` vì đây là lỗi tích luỹ
+          qua mọi lần quét, không phải ảnh chụp lần quét cuối. File hỏng từ lần
+          trước sẽ không xuất hiện trong `run` (nội dung không đổi nên không
+          được học lại), nhưng vẫn đang thiếu trong kho và phải hiện ở đây. */}
+      {failures.length > 0 && (
+        <div className="pt-3 mt-3 border-t border-slate-200 dark:border-slate-700">
+          <button
+            onClick={() => setShowFailures((v) => !v)}
+            className="flex items-center justify-between w-full text-[11px] font-semibold bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-950/60 text-red-900 dark:text-red-200 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 transition-colors"
+          >
+            <span className="flex items-center gap-1.5 text-left">
+              <FileWarning className="w-3.5 h-3.5 shrink-0" />
+              {failures.length} tài liệu có trong Drive nhưng bot chưa đọc được — đang thiếu trong kho
+            </span>
+            {showFailures ? (
+              <ChevronUp className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+            )}
+          </button>
+
+          {showFailures && (
+            <ul className="mt-2 space-y-1.5">
+              {failures.map((it) => (
+                <li
+                  key={it.id}
+                  className="text-[11px] bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg p-2.5"
+                >
+                  <div className="font-semibold text-slate-800 dark:text-slate-100 break-words">
+                    {it.file_name}
+                  </div>
+                  {it.location && (
+                    <div className="text-slate-400 dark:text-slate-500 font-mono text-[10px] mt-0.5 break-words">
+                      {it.location}
+                    </div>
+                  )}
+                  <div className="text-red-700 dark:text-red-300 mt-1 leading-relaxed">
+                    {it.error_message || it.error_code}
+                  </div>
+                  {it.hint && (
+                    <div className="text-emerald-700 dark:text-emerald-300 mt-1 leading-relaxed">
+                      Cách sửa: {it.hint}
+                    </div>
+                  )}
+                  <div className="text-slate-400 dark:text-slate-500 text-[10px] mt-1">
+                    Đã thử {it.attempts} lần · lần đầu {it.first_seen_at.slice(0, 10)}
+                    {' · '}mã lỗi <span className="font-mono">{it.error_code}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );

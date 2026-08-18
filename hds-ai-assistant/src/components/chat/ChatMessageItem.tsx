@@ -136,9 +136,15 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
           cls: 'bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800',
         };
       case 'uncited':
+        return {
+          label: 'Chưa gắn được trích dẫn',
+          cls: 'bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800',
+        };
+      // Đã đối chiếu từng đoạn với nguồn mà không đoạn nào khớp → nội dung sinh
+      // ra không nằm trong tài liệu. Đây là cảnh báo nặng, giữ màu đỏ.
       case 'uncited_blocked':
         return {
-          label: 'Chưa có trích dẫn kiểm chứng',
+          label: 'Không tìm thấy căn cứ trong nguồn',
           cls: 'bg-red-50 dark:bg-red-950/50 text-red-800 dark:text-red-300 border-red-200 dark:border-red-800',
         };
       case 'insufficient':

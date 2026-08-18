@@ -17,7 +17,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt
 
-from app import models
+from app import models, rag
 
 
 PLACEHOLDER_RE = re.compile(
@@ -184,6 +184,39 @@ KHUNG TÀI LIỆU:
     return prompt, system
 
 
+def _autocite_draft(text: str, evidence: list[dict]) -> str:
+    """Gắn [Nn] cho khối chứng minh được là lấy từ trích đoạn bằng chứng.
+
+    Dùng chung ngưỡng và cách đối chiếu với phần hỏi đáp (app/rag.py) để một
+    đoạn văn được coi là "có nguồn" theo cùng một tiêu chuẩn ở cả hai nơi.
+    """
+    if not evidence or not (text or "").strip():
+        return text
+    keys = [item.get("citation_key") for item in evidence]
+    excerpts = [rag._content_tokens(item.get("excerpt") or "") for item in evidence]
+
+    blocks = re.split(r"(\n\s*\n)", text)
+    for index in range(0, len(blocks), 2):
+        block = blocks[index]
+        plain = block.strip()
+        if (not plain or plain.startswith(("#", ">")) or len(plain) < 30
+                or CITATION_RE.search(block) or PLACEHOLDER_RE.search(block)):
+            continue
+        btokens = rag._content_tokens(re.sub(r"[`*_>#-]", "", plain))
+        if len(btokens) < 4:
+            continue
+        best_key, best_cov = None, 0.0
+        for key, etokens in zip(keys, excerpts):
+            if not key:
+                continue
+            coverage = len(btokens & etokens) / len(btokens)
+            if coverage > best_cov:
+                best_key, best_cov = key, coverage
+        if best_key and best_cov >= rag.AUTOCITE_MIN_COVERAGE:
+            blocks[index] = block.rstrip() + f" [{best_key}]"
+    return "".join(blocks)
+
+
 def clean_and_score(content: str, evidence: list[dict]) -> tuple[str, str, int]:
     """Loại citation giả và đánh dấu cả đoạn không có bằng chứng.
 
@@ -205,6 +238,12 @@ def clean_and_score(content: str, evidence: list[dict]) -> tuple[str, str, int]:
         return "[CẦN BỔ SUNG: nguồn kiểm chứng]"
 
     text = CITATION_RE.sub(replace, text)
+    # Gắn lại nguồn cho khối nội dung ĐỐI CHIẾU ĐƯỢC với trích đoạn bằng chứng.
+    # Model hay quên ký hiệu dù câu chữ lấy nguyên từ nguồn; bắt reviewer đi dò
+    # thủ công những khối như vậy là lãng phí. Chỉ gắn khi phần lớn chữ mang
+    # nghĩa của khối thật sự có trong đúng trích đoạn đó — trích dẫn được đối
+    # chiếu ra, không phải gán bừa.
+    text = _autocite_draft(text, evidence)
     cited = {f"N{n}" for n in CITATION_RE.findall(text)}
     placeholders = len(PLACEHOLDER_RE.findall(text))
     unsupported_blocks = 0

@@ -159,7 +159,7 @@ APP_DB_USER=hds_app
 APP_DB_PASSWORD=$APP_PW
 
 OLLAMA_URL=http://localhost:11434
-LLM_MODEL=qwen3:8b
+LLM_MODEL=qwen3:14b
 EMBED_MODEL=bge-m3
 EMBED_DIM=1024
 OLLAMA_KEEP_ALIVE=30m
@@ -369,7 +369,7 @@ fi
 if ! curl -s --max-time 3 http://localhost:11434/api/tags >/dev/null 2>&1; then
   echo
   c_warn "Ollama chưa chạy — ĐĂNG NHẬP và phần Quản trị vẫn hoạt động, nhưng HỎI ĐÁP AI sẽ lỗi."
-  c_warn "Cài & tải model:  curl -fsSL https://ollama.com/install.sh | sh  &&  ollama pull qwen3:8b bge-m3"
+  c_warn "Cài & tải model:  curl -fsSL https://ollama.com/install.sh | sh  &&  ollama pull qwen3:14b bge-m3"
 fi
 
 # ---------- Tổng kết ----------

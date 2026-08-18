@@ -14,7 +14,7 @@ Vì giao diện và API cùng một tên miền nên **không cần CORS, không
 ## Yêu cầu máy chủ
 
 - **Ubuntu 22.04 / 24.04**, quyền `sudo`.
-- **RAM ≥ 16 GB** nếu chạy Ollama cùng máy (mô hình `qwen3:8b` + `bge-m3` khá nặng).
+- **RAM ≥ 24 GB** nếu chạy Ollama cùng máy (mặc định `qwen3:14b` + `bge-m3`). Máy 16 GB nên đổi sang `qwen3:8b` trong `.env`.
 - Đặt mã nguồn ở `/home/<user>/` hoặc `/opt/` — **đừng** đặt trong `/root/` (nginx không đọc được).
 - Cổng 80/443 mở ra Internet nếu dùng tên miền + HTTPS.
 
@@ -176,7 +176,7 @@ phải có **IP công khai** và mở cổng 80/443 ra Internet — không thể
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:8b
+ollama pull qwen3:14b
 ollama pull bge-m3
 ```
 
@@ -196,6 +196,39 @@ bash deploy/auto-learn.sh --dry-run              # xem sẽ học gì
 bash deploy/auto-learn.sh                          # học một lần
 sudo bash deploy/auto-learn.sh --install-timer     # tự học mỗi 15 phút
 ```
+
+### Kiểm tra kho đã học có ổn không
+
+```bash
+bash deploy/kiem-tra-vector.sh
+```
+
+Chỉ đọc và báo cáo, không sửa gì. Nó trả lời: pgvector đã cài chưa, chỉ mục
+còn không, có đoạn nào thiếu vector không, model tạo vector còn chạy không, và
+**tài liệu nào có trong Drive mà chưa học được**.
+
+### Tài liệu có trong Drive nhưng bot không đọc được
+
+Xem ở **Quản trị → Kho tài liệu đã học**, khối đỏ trên cùng. Mỗi dòng ghi rõ
+tên tệp, vị trí trong Drive, lý do, **cách sửa**, và đã thử bao nhiêu lần.
+
+Khối này giữ lỗi cho tới khi tệp học được — khác báo cáo "lần quét gần nhất"
+vốn chỉ hiện những tệp vừa được đụng tới. Trước đây một tệp hỏng từ ba lần quét
+trước sẽ biến mất khỏi báo cáo (lần sau nó không đổi nên không được học lại) và
+không ai biết là kho đang thiếu.
+
+### Học lại toàn bộ từ đầu
+
+Cần khi vừa đổi cách tách đoạn, hoặc nghi kho vector bị lỗi:
+
+```bash
+sudo bash deploy/hoc-lai-tu-dau.sh
+```
+
+Script tự sao lưu hai bảng `documents`/`chunks` trước khi xoá, hỏi xác nhận
+bằng cách gõ `XOA`, rồi học lại toàn bộ từ Drive. **Tệp gốc trên Drive không bị
+đụng tới**; lịch sử hội thoại, ghi chú, bản nháp, khách hàng, vụ việc cũng giữ
+nguyên. Kho vài trăm tài liệu có thể mất nhiều giờ — nên chạy ngoài giờ làm.
 
 ## Bot trả lời chậm / lỗi 524
 

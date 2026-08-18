@@ -960,10 +960,37 @@ def drive_sync_status(user=Depends(current_user)):
     không cần SSH vào máy chủ xem log."""
     require_reviewer(user)
     raw = settings.get("drive_sync_status")
-    if not raw:
-        return {"configured": bool(os.getenv("DRIVE_FOLDER_ID")), "last_run": None}
-    data = json.loads(raw)
-    return {"configured": True, "last_run": data}
+    data = json.loads(raw) if raw else None
+    return {
+        "configured": bool(raw) or bool(os.getenv("DRIVE_FOLDER_ID")),
+        "last_run": data,
+        # Lỗi CHƯA XỬ LÝ, tích luỹ qua mọi lần quét. Khác `last_run.error_items`
+        # vốn chỉ là ảnh chụp lần quét cuối: file hỏng từ lần trước không được
+        # quét lại (nội dung không đổi) nên sẽ vắng mặt ở đó và không ai biết.
+        "failures": _open_ingest_failures(),
+    }
+
+
+def _open_ingest_failures(limit: int = 200):
+    """Tài liệu có trong Drive nhưng chưa học được, kèm cách sửa."""
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT id,file_name,location,error_code,error_message,hint,
+                              attempts,first_seen_at,last_seen_at,drive_file_id
+                         FROM ingest_failures
+                        WHERE resolved_at IS NULL
+                        ORDER BY last_seen_at DESC LIMIT %s""", (limit,))
+                rows = cur.fetchall()
+    except Exception:
+        # Máy chủ chưa chạy migration mới thì coi như chưa có lỗi nào để hiện,
+        # không làm sập cả trang dashboard.
+        return []
+    return [{"id": r[0], "file_name": r[1], "location": r[2], "error_code": r[3],
+             "error_message": r[4], "hint": r[5], "attempts": r[6],
+             "first_seen_at": str(r[7])[:19], "last_seen_at": str(r[8])[:19],
+             "drive_file_id": r[9]} for r in rows]
 
 
 @app.get("/documents/browse")

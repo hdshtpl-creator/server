@@ -710,3 +710,26 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE INDEX IF NOT EXISTS idx_notes_user ON notes(user_id, created_at DESC);
 GRANT SELECT, INSERT, UPDATE, DELETE ON notes TO hds_app;
 GRANT USAGE, SELECT ON SEQUENCE notes_id_seq TO hds_app;
+
+-- ============================================================
+-- TÀI LIỆU CÓ TRONG DRIVE NHƯNG KHÔNG HỌC ĐƯỢC
+-- ------------------------------------------------------------
+-- Trước đây lỗi đọc file chỉ nằm trong JSON của LẦN QUÉT GẦN NHẤT. File hỏng
+-- từ ba lần quét trước sẽ biến mất khỏi báo cáo (lần sau nó không đổi nên
+-- không được quét lại), nên không ai biết mà đi sửa — tài liệu cứ thiếu âm
+-- thầm trong kho. Bảng này giữ lỗi cho tới khi file được học thành công.
+CREATE TABLE IF NOT EXISTS ingest_failures (
+  id            SERIAL PRIMARY KEY,
+  drive_file_id TEXT UNIQUE,
+  file_name     TEXT NOT NULL,
+  location      TEXT,                    -- đường dẫn thư mục trong Drive
+  error_code    TEXT NOT NULL,           -- mã ổn định: pdf_no_text, unsupported…
+  error_message TEXT,
+  hint          TEXT,                    -- cách sửa, hiện thẳng cho admin
+  attempts      INT DEFAULT 1,
+  first_seen_at TIMESTAMPTZ DEFAULT now(),
+  last_seen_at  TIMESTAMPTZ DEFAULT now(),
+  resolved_at   TIMESTAMPTZ              -- có giá trị = đã học được, chỉ để đối chiếu
+);
+CREATE INDEX IF NOT EXISTS idx_ingest_failures_open
+  ON ingest_failures(resolved_at, last_seen_at DESC);

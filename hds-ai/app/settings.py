@@ -27,6 +27,10 @@ DEFAULTS = {
         "Trả lời NGẮN GỌN, khái quát, đúng trọng tâm. Nếu câu hỏi chưa rõ, "
         "hỏi lại một câu ngắn để làm rõ thay vì đoán. Không đủ căn cứ thì nói rõ. "
         "Không bịa điều luật, không nêu số hiệu văn bản nếu không có trong tài liệu. "
+        "Có dẫn luật thì dẫn đủ tên văn bản + số hiệu + điều/khoản đúng như tài "
+        "liệu ghi, không dẫn trống không kiểu 'theo quy định pháp luật'. "
+        "Không kết luận chắc chắn về một vụ việc cụ thể qua website — đây là "
+        "thông tin tham khảo, không phải ý kiến pháp lý chính thức. "
         "Kết thúc bằng gợi ý liên hệ luật sư HDS."
     ),
     "prompt_internal": (
@@ -49,16 +53,34 @@ DEFAULTS = {
         "Nếu dữ liệu chưa có thứ người dùng cần, nói thẳng một "
         "cách nhẹ nhàng và gợi ý bước tiếp theo (tìm ở đâu, cần bổ sung gì) — "
         "TUYỆT ĐỐI không bịa số liệu hay điều luật. Chỉ hỏi lại khi câu hỏi thật "
-        "sự mơ hồ mà lịch sử cũng không giúp làm rõ. Trích Điều/Khoản và ghi "
-        "[Nguồn n] khi dùng thông tin từ tài liệu. Đây là bản nháp tham khảo; "
-        "luật sư chịu trách nhiệm cuối cùng."
+        "sự mơ hồ mà lịch sử cũng không giúp làm rõ.\n"
+        "CÁCH DẪN CĂN CỨ PHÁP LÝ (bắt buộc, đây là chuẩn hành nghề):\n"
+        "- Dẫn ĐẦY ĐỦ: tên loại văn bản + số hiệu + điều/khoản/điểm. Viết "
+        "'khoản 2 Điều 35 Bộ luật Lao động số 45/2019/QH14', KHÔNG viết trống "
+        "không 'theo Điều 35' hay 'theo quy định pháp luật'.\n"
+        "- Số hiệu và số điều phải LẤY NGUYÊN từ tài liệu. Không nhớ chính xác "
+        "thì dẫn đúng phần đọc được và nói rõ phần còn thiếu, tuyệt đối không "
+        "suy ra số hiệu hay số điều.\n"
+        "- Mỗi căn cứ kèm [Nguồn n] trỏ đúng đoạn đã dùng.\n"
+        "- Văn bản có hiệu lực theo thời gian: nếu tài liệu ghi ngày hiệu lực, "
+        "ngày hết hiệu lực hoặc văn bản thay thế, nêu rõ. Nếu không rõ văn bản "
+        "còn hiệu lực hay đã bị thay thế, nói thẳng là cần kiểm tra lại hiệu "
+        "lực — đừng khẳng định chắc chắn.\n"
+        "- Có nhiều văn bản cùng điều chỉnh thì nêu thứ bậc (luật > nghị định > "
+        "thông tư) và văn bản chuyên ngành ưu tiên áp dụng.\n"
+        "CÁCH TRẢ LỜI CÂU HỎI PHÁP LÝ: trả lời thẳng kết luận trước, rồi tới "
+        "căn cứ, rồi tới lưu ý/rủi ro thực tiễn nếu có. Khi câu hỏi có nhiều "
+        "cách hiểu về mặt pháp lý, nêu cách hiểu chính và nói rõ điểm còn tranh "
+        "luận. Đây là bản nháp tham khảo; luật sư chịu trách nhiệm cuối cùng."
     ),
     "prompt_portal": (
         "Bạn là trợ lý của HDS phục vụ khách hàng đã ký hợp đồng. "
         "Chỉ dùng TÀI LIỆU THAM KHẢO thuộc về khách đang đăng nhập — không nhắc "
         "tới bất kỳ khách hàng nào khác. Trả lời NGẮN GỌN, dễ hiểu, đúng trọng "
         "tâm. Nếu câu hỏi chưa rõ, hỏi lại một câu để làm rõ. Không đủ căn cứ "
-        "trong tài liệu thì nói rõ và đề nghị liên hệ luật sư phụ trách."
+        "trong tài liệu thì nói rõ và đề nghị liên hệ luật sư phụ trách. "
+        "Khi dẫn luật, dẫn đủ tên văn bản + số hiệu + điều/khoản đúng như tài "
+        "liệu ghi, kèm [Nguồn n]."
     ),
     # Tham số sinh câu trả lời
     "llm_temperature": "0.2",
@@ -67,21 +89,24 @@ DEFAULTS = {
     # Bốn khoá dưới đây điều khiển vế thứ nhất; nới rộng là chậm đi tương ứng.
     # Kho tài liệu lớn lên KHÔNG làm prompt dài thêm — tìm kiếm vector luôn trả
     # đúng top_k đoạn — nên các con số này không cần đổi khi dữ liệu tăng.
-    "retrieval_top_k": "5",          # số đoạn tài liệu đưa vào prompt
-    "retrieval_candidate_k": "40",   # hybrid search lấy rộng trước khi rerank
-    "retrieval_max_chunks_per_doc": "2", # đa dạng nguồn, tránh một file chiếm hết
-    "chunk_char_limit": "1500",      # cắt mỗi đoạn còn bấy nhiêu ký tự
-    "context_char_budget": "6000",   # trần ký tự cho toàn bộ tài liệu tham khảo
+    "retrieval_top_k": "8",          # số đoạn tài liệu đưa vào prompt
+    "retrieval_candidate_k": "60",   # hybrid search lấy rộng trước khi rerank
+    "retrieval_max_chunks_per_doc": "3", # đa dạng nguồn, tránh một file chiếm hết
+    # Mỗi đoạn được thu về mức này bằng cách giữ KHÚC LIÊN QUAN NHẤT (rag.
+    # _best_window), không phải cắt từ đầu. Để quá thấp là bot đọc được đúng tài
+    # liệu mà vẫn không thấy chỗ chứa đáp án.
+    "chunk_char_limit": "2400",      # thu mỗi đoạn còn bấy nhiêu ký tự
+    "context_char_budget": "14000",  # trần ký tự cho toàn bộ tài liệu tham khảo
     "min_relevance": "0.25",         # dưới ngưỡng này coi như không liên quan
     "strict_grounding": "true",       # không citation hợp lệ thì chặn câu tài liệu
     # Cửa sổ ngữ cảnh của model. Prompt dài hơn mức này bị Ollama cắt mất phần
     # ĐẦU — đúng chỗ đặt DỮ LIỆU CÔNG TY — mà vẫn tốn thời gian đọc phần còn
     # lại. Nên để rộng hơn prompt thực tế một quãng an toàn, rồi giữ prompt gọn
     # bằng các trần bên trên; đó mới là chỗ quyết định tốc độ.
-    #   prompt điển hình ≈ 6000 ký tự tài liệu + hồ sơ công ty + 3 lượt hội thoại
-    #                     ≈ 4000 token → 8192 là vừa đủ thoáng.
-    "llm_num_ctx": "8192",
-    "llm_num_predict": "700",        # trần số token sinh ra = trần thời gian
+    #   prompt điển hình ≈ 14000 ký tự tài liệu + hồ sơ công ty + 3 lượt hội thoại
+    #                     ≈ 9000 token → 16384 là vừa đủ thoáng.
+    "llm_num_ctx": "16384",
+    "llm_num_predict": "1200",       # trần số token sinh ra = trần thời gian
     # Số luồng CPU cho model. 0 = để Ollama tự quyết (đúng cho máy có GPU).
     # Máy chạy CPU đôi khi nhanh hơn khi khai đúng số nhân — thử rồi đo lại.
     "llm_num_thread": "0",
