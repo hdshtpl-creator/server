@@ -85,7 +85,8 @@ def _smalltalk_answer(question: str):
 
 def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
              top_k=None, can_finance=False, doc_types=None, document_ids=None,
-             candidate_k=None, max_per_document=None, query_vector=None):
+             candidate_k=None, max_per_document=None, query_vector=None,
+             neighbours=True):
     """Hybrid retrieval: vector + từ khoá chính xác rồi xếp hạng lại.
 
     RLS vẫn là ranh giới bảo mật. `document_ids` chỉ THU HẸP bộ nguồn người dùng
@@ -120,7 +121,7 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                        1-(c.embedding <=> %s::vector) AS semantic_score,
                        {lexical} AS lexical_score,
                        c.page_number,c.section_title,c.source_locator,
-                       d.source_version
+                       d.source_version,c.chunk_index
                   FROM chunks c JOIN documents d ON d.id=c.document_id"""
     where = """ WHERE c.embedding IS NOT NULL AND d.approved AND d.label_verified
                        AND coalesce(d.active,true)
@@ -169,6 +170,7 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
             "semantic_score": float(r[5] or 0), "lexical_score": 0.0,
             "page_number": r[7], "section_title": r[8],
             "source_locator": r[9], "source_version": r[10],
+            "chunk_index": r[11],
         })
         item["semantic_score"] = max(item["semantic_score"], float(r[5] or 0))
         item["lexical_score"] = max(item["lexical_score"], float(r[6] or 0))
@@ -202,6 +204,73 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
         if item["chunk_id"] not in used:
             chosen.append(item)
             used.add(item["chunk_id"])
+    return _with_neighbours(chosen, level, client_id, dept_ids, is_banqt,
+                            can_finance) if neighbours else chosen
+
+
+def _with_neighbours(chosen, level, client_id, dept_ids, is_banqt, can_finance,
+                     top_n=3):
+    """Kèm đoạn LIỀN TRƯỚC và LIỀN SAU của mấy đoạn khớp nhất.
+
+    Tra cứu trả về từng đoạn rời rạc, nên câu trả lời hay bị cụt ở chỗ ý vắt
+    sang đoạn kế: điều khoản nêu điều kiện ở đoạn này và ngoại lệ ở đoạn sau,
+    bot chỉ thấy một nửa rồi khẳng định chắc nịch nửa ấy.
+
+    Chỉ mở rộng cho `top_n` đoạn đầu — mở rộng tất cả thì ngân sách ngữ cảnh bị
+    đoạn phụ chiếm mất chỗ của đoạn chính. Đoạn hàng xóm mang điểm thấp hơn
+    đoạn gốc một chút để khi sắp xếp/cắt bớt thì chúng nhường chỗ trước.
+    """
+    if not chosen:
+        return chosen
+    wanted = []
+    for item in chosen[:top_n]:
+        index = item.get("chunk_index")
+        if index is None:
+            continue
+        for neighbour in (index - 1, index + 1):
+            if neighbour >= 0:
+                wanted.append((item["document_id"], neighbour, item["score"]))
+    if not wanted:
+        return chosen
+
+    have = {(c["document_id"], c.get("chunk_index")) for c in chosen}
+    pairs = [(d, i) for d, i, _ in wanted if (d, i) not in have]
+    if not pairs:
+        return chosen
+    score_of = {(d, i): s for d, i, s in wanted}
+    # Hai mảng song song rồi ghép bằng unnest. Truyền thẳng danh sách cặp vào
+    # ANY(%s) đòi hỏi một kiểu composite trong CSDL — psycopg3 không tự dựng.
+    doc_ids = [d for d, _ in pairs]
+    idxs = [i for _, i in pairs]
+
+    with db.session(role=level, client_id=client_id, dept_ids=dept_ids,
+                    is_banqt=is_banqt, can_finance=can_finance) as conn:
+        with conn.cursor() as cur:
+            # RLS vẫn chặn ở đây: đoạn hàng xóm nằm ngoài quyền sẽ không trả về.
+            cur.execute("""SELECT c.id,c.content,c.document_id,d.title,d.drive_file_id,
+                                  c.page_number,c.section_title,c.source_locator,
+                                  d.source_version,c.chunk_index
+                             FROM chunks c JOIN documents d ON d.id=c.document_id
+                            WHERE (c.document_id, c.chunk_index) IN (
+                                    SELECT * FROM unnest(%s::int[], %s::int[]))
+                              AND d.approved AND d.label_verified
+                              AND coalesce(d.active,true)
+                              AND coalesce(d.extraction_status,'ready')='ready'""",
+                        (doc_ids, idxs))
+            rows = cur.fetchall()
+
+    for r in rows:
+        chosen.append({
+            "chunk_id": r[0], "content": r[1], "document_id": r[2],
+            "title": r[3], "drive_file_id": r[4],
+            "semantic_score": 0.0, "lexical_score": 0.0,
+            "page_number": r[5], "section_title": r[6],
+            "source_locator": r[7], "source_version": r[8],
+            "chunk_index": r[9],
+            # Thấp hơn đoạn gốc: hàng xóm là ngữ cảnh bổ trợ, không phải căn cứ chính.
+            "score": max(0.0, score_of.get((r[2], r[9]), 0.3) - 0.05),
+            "is_neighbour": True,
+        })
     return chosen
 
 
@@ -760,6 +829,28 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     min_score = _num("min_relevance", MIN_SCORE, float)
     kept = [c for c in chunks if c["score"] >= min_score]
     timings["bo_qua_doan_yeu"] = len(chunks) - len(kept)
+
+    # Câu hỏi về nhân sự HDS: BẢO ĐẢM hồ sơ nhân sự có mặt trong nguồn.
+    #
+    # Điều lệ công ty đầy chữ "thành viên", "người quản lý", "danh sách những
+    # người có liên quan" nên xét ngữ nghĩa nó khớp câu hỏi nhân sự rất cao, đủ
+    # để chiếm hết top-k và đẩy hợp đồng lao động ra ngoài — người dùng thấy bot
+    # dẫn Điều lệ cho câu hỏi "ai đang làm ở đây".
+    #
+    # Không thu hẹp cứng về ho_so_ns: cụm "hợp đồng lao động" cũng nằm trong từ
+    # khoá nhân sự, mà câu hỏi PHÁP LÝ về HĐLĐ thì cần Bộ luật Lao động. Vì vậy
+    # chỉ CHÈN THÊM, không loại bỏ thứ gì.
+    if channel == "internal" and company_context.is_staff_query(question):
+        hr_extra = retrieve(
+            search_question, channel, client_id, dept_ids=dept_ids,
+            is_banqt=is_banqt, top_k=3, can_finance=can_finance,
+            doc_types=["ho_so_ns"], document_ids=source_document_ids,
+            query_vector=query_vector,
+        )
+        seen_ids = {c["chunk_id"] for c in kept}
+        # Đặt LÊN TRƯỚC để không bị ngân sách ký tự cắt mất ở cuối danh sách.
+        kept = [c for c in hr_extra if c["chunk_id"] not in seen_ids] + kept
+        timings["ho_so_ns_them"] = len(kept) - len(seen_ids)
     chunks = fit_context(kept,
                          _num("chunk_char_limit", CHUNK_CHARS, int),
                          _num("context_char_budget", CONTEXT_CHARS, int),

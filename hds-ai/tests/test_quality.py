@@ -30,6 +30,24 @@ class IntentTests(unittest.TestCase):
             "employment_contract",
         )
 
+    def test_bare_nhan_su_is_staff_query(self):
+        """Lỗi thực tế: 'tất cả nhân sự trước giờ…' trượt hết từ khoá.
+
+        Danh sách cũ chỉ có cụm ghép ('danh sách nhân sự', 'nhân sự công ty'),
+        nên câu hỏi tự nhiên nhất lại không được nhận là câu nhân sự — bot mò
+        bằng vector, vớ phải Điều lệ công ty và trả lời công ty có 01 người.
+        """
+        self.assertTrue(company_context.is_staff_query(
+            "tất cả nhân sự trước giờ bao gồm cả hết hạn"))
+        self.assertTrue(company_context.is_staff_query("công ty có mấy nhân viên"))
+
+    def test_unrelated_legal_question_is_not_staff_query(self):
+        """Không được bắt nhầm: 'nhân thân' không phải 'nhân sự'."""
+        self.assertFalse(company_context.is_staff_query(
+            "quy định về nhân thân người phạm tội"))
+        self.assertFalse(company_context.is_staff_query(
+            "thủ tục thành lập doanh nghiệp"))
+
     def test_followup_uses_structured_state(self):
         state = {"intent": "staff_directory", "last_question": "cty tôi có mấy người"}
         self.assertEqual(

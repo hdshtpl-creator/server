@@ -18,8 +18,13 @@ from xml.etree import ElementTree
 from app import db
 from app.models import embed, summarize
 
+# Kích thước ĐOẠN MỤC TIÊU, không phải kích thước cố định. `chunk_generic` cắt
+# theo tiêu đề mục và câu trọn vẹn, nên đoạn thực tế ngắn/dài quanh con số này
+# tuỳ nội dung — mục ngắn giữ nguyên một đoạn, mục dài tách ở chỗ chuyển ý.
 CHUNK_WORDS = 320
-CHUNK_OVERLAP = 60
+# Số CÂU chồng lấn giữa hai đoạn liền nhau (không phải số từ): câu đầu đoạn sau
+# nhắc lại ý cuối đoạn trước để đọc rời từng đoạn vẫn không đứt mạch.
+CHUNK_OVERLAP_UNITS = 1
 SUPPORTED_EXTENSIONS = frozenset({".txt", ".md", ".docx", ".doc", ".pdf", ".xlsx", ".csv"})
 
 
@@ -665,17 +670,167 @@ def chunk_law(text):
     return [piece.content for piece in chunk_law_structured(text)]
 
 
-def chunk_generic(text):
-    words = text.split()
-    if not words:
+# Viết tắt tiếng Việt hay gặp — dấu chấm sau chúng KHÔNG kết thúc câu.
+# Thiếu danh sách này thì "Nghị định số 01/2021/NĐ-CP." hay "TP. Hà Nội" bị
+# tách làm đôi, và đoạn cắt ra mất nghĩa ngay giữa một cụm danh từ.
+_ABBREV = {
+    "tp", "tt", "nđ", "cp", "qh", "ubnd", "hđnd", "tnhh", "vd", "vv", "stt",
+    "ts", "ths", "gs", "pgs", "bs", "ls", "kts", "ks", "nxb", "tr", "gđ",
+    "ông", "bà", "số", "kèm", "đ", "đv", "tk", "hđ", "hđlđ",
+}
+
+# Ranh giới câu: dấu kết câu + khoảng trắng + chữ hoa/số bắt đầu câu mới.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=[\"'“(\[]?[A-ZĐÀ-Ỹ0-9])")
+
+
+def _is_heading(line: str) -> bool:
+    """Dòng này có phải TIÊU ĐỀ MỤC không — chỗ được phép ngắt đoạn.
+
+    Ngắt ở tiêu đề luôn tốt hơn ngắt giữa chừng: mỗi đoạn ra sẽ trọn một ý,
+    và tiêu đề đi kèm cho biết đoạn đó nói về cái gì.
+    """
+    s = (line or "").strip()
+    if not s or len(s) > 120:
+        return False
+    if re.match(r"^#{1,6}\s", s):                       # markdown
+        return True
+    if re.match(r"^(Điều|Chương|Mục|Phần|Khoản)\s+[\dIVXLC]", s, re.I):
+        return True
+    if re.match(r"^([IVXLC]+|\d+(\.\d+)*|[A-Z])[.)]\s+\S", s):   # 1. / 1.1. / I. / A.
+        return True
+    if re.match(r"^\[(Bảng|Trang|Cột)\b", s, re.I):     # mốc do bộ trích xuất chèn
+        return True
+    letters = [c for c in s if c.isalpha()]
+    if len(letters) >= 3 and all(c.isupper() for c in letters):
+        return True                                     # DÒNG VIẾT HOA TOÀN BỘ
+    return s.endswith(":") and len(s) <= 80
+
+
+def _split_units(text: str) -> list[str]:
+    """Chia văn bản thành ĐƠN VỊ KHÔNG ĐƯỢC PHÉP CẮT ĐÔI.
+
+    Mỗi đơn vị là một câu trọn vẹn, hoặc một dòng với nội dung theo dòng (dòng
+    bảng tính `[Dòng 5] …`, gạch đầu dòng). Cắt giữa câu là cách chắc chắn nhất
+    để một đoạn trở nên vô nghĩa với cả người đọc lẫn model.
+    """
+    units: list[str] = []
+    for para in re.split(r"\n\s*\n|\n", text or ""):
+        para = para.strip()
+        if not para:
+            continue
+        # Nội dung theo dòng (bảng, danh sách, tiêu đề) giữ nguyên cả dòng.
+        if _is_heading(para) or re.match(r"^[-·•*]\s", para):
+            units.append(para)
+            continue
+        parts = _SENTENCE_SPLIT.split(para)
+        buffer = ""
+        for part in parts:
+            candidate = (buffer + " " + part).strip() if buffer else part
+            # Kết thúc bằng viết tắt thì câu chưa hết — nối tiếp phần sau.
+            last = re.sub(r"[^\wÀ-ỹ]", "", candidate.split()[-1]).lower() if candidate.split() else ""
+            if last in _ABBREV:
+                buffer = candidate
+                continue
+            units.append(candidate)
+            buffer = ""
+        if buffer:
+            units.append(buffer)
+    return units
+
+
+def _cohesion(left: list[str], right: list[str]) -> float:
+    """Mạch văn giữa hai bên có liền nhau không — đo bằng từ dùng chung.
+
+    Ý tưởng của TextTiling: hai phần cùng bàn một chuyện thì lặp lại nhiều từ;
+    khi chủ đề chuyển, lượng từ chung tụt xuống. Chỗ tụt sâu nhất chính là chỗ
+    nên ngắt. Rẻ (chỉ đếm từ), không cần gọi model, và cho kết quả y hệt nhau ở
+    mọi lần chạy — điều kiện cần để lỗi tra cứu còn tái hiện được.
+    """
+    lt = {w for w in re.findall(r"[\wÀ-ỹ]+", " ".join(left).lower()) if len(w) > 2}
+    rt = {w for w in re.findall(r"[\wÀ-ỹ]+", " ".join(right).lower()) if len(w) > 2}
+    if not lt or not rt:
+        return 0.0
+    return len(lt & rt) / min(len(lt), len(rt))
+
+
+def chunk_generic(text, target_words=None, overlap_units=CHUNK_OVERLAP_UNITS):
+    """Cắt đoạn THEO NGỮ CẢNH: tiêu đề → câu trọn vẹn → chỗ mạch văn đứt.
+
+    Bản cũ cắt cứng mỗi 320 từ bất kể nội dung, nên thường xuyên cắt ngang câu,
+    ngang điều khoản, ngang một dòng bảng. Đoạn hỏng kiểu đó vẫn được tạo vector
+    và vẫn được trả về khi tra cứu — model đọc phải một mẩu cụt và trả lời cụt
+    theo.
+
+    Ba tầng, từ chắc chắn nhất tới suy đoán nhất:
+      1. Ngắt ở TIÊU ĐỀ MỤC — ranh giới do chính tác giả văn bản đặt ra.
+      2. Trong mỗi mục, gom CÂU TRỌN VẸN cho tới khi đủ dài; không bao giờ cắt
+         giữa câu.
+      3. Mục dài hơn ngân sách thì chọn điểm ngắt ở chỗ hai bên ÍT DÙNG CHUNG
+         TỪ NHẤT trong vùng cho phép — tức chỗ chủ đề chuyển.
+
+    Kích thước đoạn vì vậy KHÔNG cố định: mục ngắn giữ nguyên một đoạn, mục dài
+    tự tách ở đúng chỗ chuyển ý.
+    """
+    target = target_words or CHUNK_WORDS
+    units = _split_units(text)
+    if not units:
         return []
-    out, i, step = [], 0, CHUNK_WORDS - CHUNK_OVERLAP
-    while i < len(words):
-        piece = " ".join(words[i:i + CHUNK_WORDS])
-        if piece.strip():
-            out.append(piece)
-        i += step
-    return out
+
+    def wc(items):
+        return sum(len(u.split()) for u in items)
+
+    # ---- Tầng 1: gom theo mục, mỗi tiêu đề mở một mục mới ----------------
+    sections: list[list[str]] = []
+    current: list[str] = []
+    for unit in units:
+        if _is_heading(unit) and current:
+            sections.append(current)
+            current = [unit]
+        else:
+            current.append(unit)
+    if current:
+        sections.append(current)
+
+    # Mục quá ngắn thì nhập vào mục kế: một tiêu đề trơ trọi không thành đoạn.
+    merged: list[list[str]] = []
+    for section in sections:
+        if merged and wc(merged[-1]) < target * 0.35:
+            merged[-1].extend(section)
+        else:
+            merged.append(section)
+    sections = merged
+
+    # ---- Tầng 2+3: trong mỗi mục, gom câu tới hạn rồi tìm chỗ ngắt tốt ----
+    out: list[str] = []
+    for section in sections:
+        if wc(section) <= target:
+            out.append(" ".join(section).strip())      # đủ ngắn → giữ trọn mục
+            continue
+        start = 0
+        while start < len(section):
+            end, count = start, 0
+            while end < len(section) and count < target:
+                count += len(section[end].split())
+                end += 1
+            # Vùng được phép xê dịch điểm ngắt: 25% cuối đoạn. Trong vùng đó
+            # chọn chỗ hai bên ít dùng chung từ nhất — chỗ chuyển ý rõ nhất.
+            if end < len(section):
+                low = max(start + 1, end - max(1, (end - start) // 4))
+                best, best_score = end, 2.0
+                for cut in range(low, end + 1):
+                    score = _cohesion(section[start:cut], section[cut:cut + 3])
+                    if score < best_score:
+                        best, best_score = cut, score
+                end = best
+            piece = " ".join(section[start:end]).strip()
+            if piece:
+                out.append(piece)
+            if end >= len(section):
+                break
+            # Chồng lấn bằng CẢ CÂU, không phải vài chục từ lẻ: câu đầu đoạn sau
+            # nhắc lại ý cuối đoạn trước để không mất mạch khi đọc rời từng đoạn.
+            start = max(start + 1, end - overlap_units)
+    return [piece for piece in out if piece]
 
 
 def split_document(text, doc_type):

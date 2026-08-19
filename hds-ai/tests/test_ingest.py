@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 from app import auto_learn
 from app.auto_learn import auto_approve_from_env, drive_fingerprint
-from app.ingest import (ExtractionError, ExtractionResult, chunk_law_structured,
+from app.ingest import (ExtractionError, ExtractionResult, _split_units,
+                        chunk_generic, chunk_law_structured,
                         document_citation, extract_text,
                         extract_text_with_metadata, safe_path_component,
                         split_document_with_metadata)
@@ -206,6 +207,62 @@ class AutoLearnSafetyTests(unittest.TestCase):
         self.assertEqual("Nhân sự", chunk_call[1][4])
         self.assertEqual("sheet:Nhân sự;rows:2-2", chunk_call[1][5])
         self.assertEqual("xlsx", diagnostics["method"])
+
+
+class SmartChunkingTests(unittest.TestCase):
+    """Cắt đoạn theo ngữ cảnh: không cắt giữa câu, ngắt ở chỗ chuyển ý."""
+
+    def test_short_document_stays_whole(self):
+        """Sơ yếu lý lịch một trang không có lý do gì để bị xé nhỏ."""
+        text = "Họ tên: Bạc Thị Mai. Chức danh Trưởng phòng. Vào làm năm 2022."
+        self.assertEqual(len(chunk_generic(text)), 1)
+
+    def test_never_cuts_mid_sentence(self):
+        long_text = " ".join(
+            f"Câu số {i} nói về một nội dung dài vừa phải để kiểm tra việc cắt đoạn."
+            for i in range(200))
+        for piece in chunk_generic(long_text, target_words=60):
+            # Mọi đoạn phải bắt đầu bằng đầu một câu và kết thúc bằng dấu câu.
+            self.assertTrue(piece.strip().startswith("Câu số"), piece[:60])
+            self.assertTrue(piece.strip().endswith("."), piece[-60:])
+
+    def test_abbreviation_does_not_end_sentence(self):
+        """'Nghị định số 01/2021/NĐ-CP.' không được tách làm hai đơn vị."""
+        units = _split_units("Áp dụng theo NĐ. 01/2021 của Chính phủ. Hết.")
+        self.assertTrue(any("NĐ. 01/2021" in u for u in units),
+                        f"Bị tách sai: {units}")
+
+    def test_heading_starts_new_chunk(self):
+        text = ("THÔNG TIN CHUNG\n"
+                + "Nội dung phần một nói về hợp đồng và các bên tham gia. " * 12
+                + "\nĐIỀU KHOẢN THANH TOÁN\n"
+                + "Nội dung phần hai nói về tiền và thời hạn trả. " * 12)
+        pieces = chunk_generic(text, target_words=80)
+        # Hai tiêu đề phải nằm ở ĐẦU hai đoạn khác nhau, không lẫn vào giữa.
+        starts = [p.split("\n")[0][:30] for p in pieces]
+        self.assertTrue(any(s.startswith("THÔNG TIN CHUNG") for s in starts), starts)
+        self.assertTrue(any(s.startswith("ĐIỀU KHOẢN THANH TOÁN") for s in starts), starts)
+
+    def test_table_rows_are_not_split(self):
+        text = "\n".join(f"[Dòng {i}] Tên: Người {i} | Chức danh: Nhân viên"
+                         for i in range(1, 40))
+        for piece in chunk_generic(text, target_words=40):
+            # Không đoạn nào được kết thúc giữa chừng một dòng bảng.
+            self.assertFalse(piece.rstrip().endswith("|"), piece[-40:])
+
+    def test_chunk_sizes_follow_content_not_a_fixed_ruler(self):
+        """Mục ngắn giữ trọn một đoạn; mục dài mới bị tách — nên độ dài KHÔNG đều.
+
+        Đây là điểm khác biệt so với bản cắt cứng 320 từ: kích thước đoạn do nội
+        dung quyết định, không do một con số định sẵn.
+        """
+        text = ("MỤC A\n" + "Nội dung ngắn. " * 8
+                + "\nMỤC B\n" + "Nội dung dài hơn nhiều lần so với mục trước. " * 30)
+        sizes = [len(p.split()) for p in chunk_generic(text, target_words=40)]
+        self.assertGreater(len(sizes), 2)
+        # Mục A (~26 từ) phải nhỏ hơn hẳn ngân sách, không bị độn cho đủ 40.
+        self.assertLess(min(sizes), 35, f"Mục ngắn bị độn: {sizes}")
+        self.assertGreater(max(sizes) - min(sizes), 5, f"Kích thước quá đều: {sizes}")
 
 
 class LawChunkingTests(unittest.TestCase):

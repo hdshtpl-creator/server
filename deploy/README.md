@@ -217,6 +217,25 @@ vốn chỉ hiện những tệp vừa được đụng tới. Trước đây m�
 trước sẽ biến mất khỏi báo cáo (lần sau nó không đổi nên không được học lại) và
 không ai biết là kho đang thiếu.
 
+### Cách bot cắt đoạn tài liệu
+
+Đoạn **không có kích thước cố định**. Thứ tự ưu tiên khi cắt:
+
+1. **Tiêu đề mục** — `Điều 5`, `CHƯƠNG II`, `1.1.`, dòng viết hoa toàn bộ, dòng
+   ngắn kết thúc bằng dấu hai chấm. Đây là ranh giới do chính tác giả đặt ra.
+2. **Câu trọn vẹn** — không bao giờ cắt giữa câu. Viết tắt tiếng Việt (`NĐ.`,
+   `TP.`, `ông.`) không bị hiểu nhầm là hết câu.
+3. **Chỗ chuyển ý** — mục dài hơn ngân sách thì tìm điểm ngắt ở chỗ hai bên
+   dùng chung ít từ nhất, tức chỗ chủ đề chuyển.
+
+Nhờ vậy một sơ yếu lý lịch một trang giữ nguyên một đoạn, còn một bộ luật thì
+tách theo từng Điều. Văn bản luật (`doc_type=law`) đi theo nhánh riêng, mỗi đoạn
+mang sẵn số hiệu văn bản + Chương/Mục/Điều.
+
+Khi tra cứu, đoạn khớp nhất được kèm thêm **đoạn liền trước và liền sau** để câu
+trả lời không bị cụt ở chỗ ý vắt sang đoạn kế (điều kiện ở đoạn này, ngoại lệ ở
+đoạn sau).
+
 ### Học lại toàn bộ từ đầu
 
 Cần khi vừa đổi cách tách đoạn, hoặc nghi kho vector bị lỗi:

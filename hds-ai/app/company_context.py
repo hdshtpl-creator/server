@@ -31,7 +31,7 @@ MAX_NOTE_CHARS = 700      # cắt ghi chú dài để prompt không phình
 MAX_SUMMARY_CHARS = 3000  # ngân sách ký tự cho file tổng hợp thông tin khách
 MAX_FINANCE_CHARS = 1500  # ngân sách ký tự cho tài liệu công nợ
 MAX_WORK_CHARS = 2500     # ngân sách ký tự cho nội dung hợp đồng/công việc của khách
-MAX_HR_CHARS = 5000       # ngân sách ký tự cho hồ sơ nhân sự của chính HDS
+MAX_HR_CHARS = 9000       # ngân sách nội dung hồ sơ nhân sự (danh mục tính riêng)
 
 # Mã vụ việc theo quy ước [M-2026-001]
 RE_MATTER_CODE = re.compile(r"\b([A-Z]{1,3}-\d{4}-\d{1,4})\b", re.I)
@@ -304,6 +304,13 @@ def _staff_intent(q_folded: str) -> bool:
     do khối dữ liệu tự nói rõ, không phải bằng cách giấu dữ liệu đi."""
     if re.search(r"(?:^|\s)nv(?:$|\s)", q_folded):
         return True
+    # "nhân sự" / "nhân viên" ĐỨNG MỘT MÌNH cũng là câu hỏi nhân sự. Trước đây
+    # danh sách chỉ có các cụm ghép ("danh sách nhân sự", "nhân sự công ty"),
+    # nên câu rất tự nhiên như "tất cả nhân sự trước giờ gồm những ai" trượt
+    # hết — không ghim hồ sơ, không bổ sung nguồn, bot phải mò bằng vector và
+    # vớ phải Điều lệ công ty rồi kết luận công ty có 01 người.
+    if re.search(r"(?:^|\s)nhan (?:su|vien)(?:$|\s)", q_folded):
+        return True
     return any(w in q_folded for w in STAFF_WORDS)
 
 
@@ -358,6 +365,18 @@ def is_directory_query(question: str) -> bool:
     if _detail_intent(q) or _staff_intent(q):
         return False
     return _roster_intent(q)
+
+
+def is_staff_query(question: str) -> bool:
+    """Câu hỏi này đang hỏi về NGƯỜI LAO ĐỘNG của HDS hay không.
+
+    rag.prepare dùng để thu hẹp tìm kiếm về đúng loại 'hồ sơ nhân sự'. Cần thiết
+    vì Điều lệ công ty đầy chữ 'thành viên', 'người quản lý', 'danh sách những
+    người có liên quan' — xét theo ngữ nghĩa thì nó khớp câu hỏi nhân sự rất
+    cao, đủ để đẩy hợp đồng lao động ra khỏi top-k.
+    """
+    q = _fold(question)
+    return _staff_intent(q) or _employment_contract_intent(q)
 
 
 def _staff_block(cur, is_banqt):
@@ -419,11 +438,55 @@ def _staff_block(cur, is_banqt):
     # GHIM nội dung HỒ SƠ NHÂN SỰ đã học (HĐLĐ, quyết định, sơ yếu lý lịch…).
     # Đây mới là nguồn sự thật về nhân sự công ty. Không ghim thì bot phải trông
     # vào may mắn của tìm kiếm vector, và dễ trả lời bằng số tài khoản.
-    hr = _pinned_text(cur, None, ["ho_so_ns"], MAX_HR_CHARS)
-    if hr:
-        out.append("- HỒ SƠ NHÂN SỰ ĐÃ HỌC (nguồn sự thật về người lao động — "
-                   "đọc kỹ để trả lời về quân số, họ tên, chức danh, thời hạn HĐLĐ):")
-        out += hr
+    out += _hr_block(cur)
+    return out
+
+
+def _hr_block(cur, budget=MAX_HR_CHARS):
+    """Hồ sơ nhân sự: DANH MỤC ĐẦY ĐỦ trước, nội dung chi tiết sau.
+
+    Bản cũ đổ nguyên văn từng đoạn cho tới khi hết ngân sách. Một hồ sơ dài 55
+    đoạn ngốn sạch 5000 ký tự trước khi tới lượt hồ sơ người thứ hai, nên bot
+    đọc mười file của cùng một người rồi kết luận "công ty có 01 nhân sự" —
+    trung thực với thứ nó nhìn thấy, nhưng sai với thực tế.
+
+    Câu hỏi "công ty có mấy người" cần BIẾT ĐỦ TÊN chứ không cần đọc sâu từng
+    hồ sơ. Vì vậy: liệt kê mọi hồ sơ trước (mỗi hồ sơ một dòng — rẻ và không
+    bao giờ bỏ sót ai), rồi mới chia đều phần ngân sách còn lại cho nội dung.
+    """
+    cur.execute("""SELECT d.id, d.title, d.summary
+                     FROM documents d
+                    WHERE d.client_id IS NULL AND d.doc_type = 'ho_so_ns'
+                      AND d.approved AND d.label_verified
+                      AND coalesce(d.active, true)
+                    ORDER BY d.title""")
+    docs = cur.fetchall()
+    if not docs:
+        return []
+
+    out = [f"- HỒ SƠ NHÂN SỰ ĐÃ HỌC — {len(docs)} hồ sơ (nguồn sự thật về người "
+           "lao động; đọc kỹ để trả lời quân số, họ tên, chức danh, thời hạn HĐLĐ).",
+           "  DANH MỤC ĐẦY ĐỦ (không hồ sơ nào bị bỏ sót — đếm người theo danh "
+           "mục này, một người có thể có NHIỀU hồ sơ nên phải gộp theo TÊN):"]
+    for _, title, summary in docs:
+        line = f"  · {title}"
+        if summary:
+            line += f" — {_cut(summary, 180)}"
+        out.append(line)
+
+    # Phần còn lại chia ĐỀU cho từng hồ sơ, không để hồ sơ nào chiếm hết.
+    share = max(300, budget // max(1, len(docs)))
+    out.append("  NỘI DUNG TRÍCH TỪ TỪNG HỒ SƠ:")
+    for doc_id, title, _ in docs:
+        cur.execute("""SELECT content FROM chunks
+                        WHERE document_id = %s
+                        ORDER BY chunk_index LIMIT 3""", (doc_id,))
+        rows = cur.fetchall()
+        if not rows:
+            continue
+        text = _cut(" ".join((r[0] or "").strip() for r in rows), share)
+        out.append(f"  ── {title} ──")
+        out.append("  " + text.replace("\n", "\n  "))
     return out
 
 
