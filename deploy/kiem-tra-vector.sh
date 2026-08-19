@@ -30,20 +30,34 @@ DB_URL="$(getenv DATABASE_URL)"
 EMBED_MODEL="$(getenv EMBED_MODEL)"; EMBED_MODEL="${EMBED_MODEL:-bge-m3}"
 OLLAMA_URL="$(getenv OLLAMA_URL)";   OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 
-if [ -z "$DB_URL" ]; then
-  c_bad "Thiếu DATABASE_URL trong .env"
+# --- Chọn cách gọi psql ----------------------------------------------
+# setup.sh dựng PostgreSQL trong container `hds-postgres`, nên máy chủ THƯỜNG
+# KHÔNG có psql và cũng không có socket /var/run/postgresql. Gọi thẳng psql ở
+# host là lỗi "No such file or directory" — không phải CSDL hỏng, chỉ là gọi
+# nhầm chỗ. Dò container trước, host chỉ là phương án hai.
+PG_CONTAINER="${PG_CONTAINER:-hds-postgres}"
+if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$PG_CONTAINER"; then
+  DB_MODE="docker"
+  q() { docker exec -i "$PG_CONTAINER" psql -U hds -d hdsai -tAX -c "$1" 2>/dev/null; }
+elif command -v psql >/dev/null 2>&1 && [ -n "$DB_URL" ]; then
+  DB_MODE="host"
+  q() { psql "$DB_URL" -tAX -c "$1" 2>/dev/null; }
+else
+  c_bad "Không tìm được cách kết nối CSDL."
+  echo "     · Container '$PG_CONTAINER' không chạy — kiểm tra: docker ps"
+  echo "     · Máy chủ cũng không có lệnh psql."
   exit 1
 fi
-
-q() { psql "$DB_URL" -tAX -c "$1" 2>/dev/null; }
 
 # =====================================================================
 c_head "1. Kết nối CSDL và tiện ích pgvector"
-if ! q "SELECT 1" >/dev/null; then
-  c_bad "Không kết nối được PostgreSQL. Kiểm tra DATABASE_URL và dịch vụ postgres."
+if [ "$(q 'SELECT 1')" != "1" ]; then
+  c_bad "Không kết nối được PostgreSQL (đang dùng cách: $DB_MODE)."
+  [ "$DB_MODE" = "docker" ] && echo "     Kiểm tra: docker ps | grep $PG_CONTAINER"
+  [ "$DB_MODE" = "host" ]   && echo "     Kiểm tra DATABASE_URL trong $ENV_FILE"
   exit 1
 fi
-c_ok "Kết nối PostgreSQL bình thường."
+c_ok "Kết nối PostgreSQL bình thường (qua $DB_MODE)."
 
 if [ "$(q "SELECT count(*) FROM pg_extension WHERE extname='vector'")" = "1" ]; then
   c_ok "Tiện ích pgvector đã cài."
@@ -139,7 +153,7 @@ c_head "6. Tài liệu có trong Drive nhưng KHÔNG học được"
 FAILS="$(q "SELECT count(*) FROM ingest_failures WHERE resolved_at IS NULL")"
 if [ -z "${FAILS:-}" ]; then
   c_warn "Chưa có bảng ingest_failures — máy chủ chưa chạy migration mới."
-  echo "     Chạy: psql \"\$DATABASE_URL\" -f $BACKEND_DIR/sql/schema.sql"
+  echo "     Chạy: sudo bash deploy/update.sh   (script này tự nạp sql/schema.sql)"
 elif [ "$FAILS" = "0" ]; then
   c_ok "Không có tài liệu nào bị lỗi đọc."
 else

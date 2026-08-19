@@ -23,9 +23,30 @@ c_head() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 [ -f "$ENV_FILE" ] || { c_bad "Không thấy $ENV_FILE — chạy trên máy chủ đã cài backend."; exit 1; }
 DB_URL="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
-[ -n "$DB_URL" ] || { c_bad "Thiếu DATABASE_URL trong .env"; exit 1; }
 
-q() { psql "$DB_URL" -tAX -c "$1" 2>/dev/null; }
+# setup.sh dựng PostgreSQL trong container `hds-postgres`; máy chủ thường không
+# có psql. Dò container trước, host chỉ là phương án hai. Ba hàm dưới là toàn
+# bộ chỗ script này chạm vào CSDL, nên đổi cách kết nối chỉ cần sửa ở đây.
+PG_CONTAINER="${PG_CONTAINER:-hds-postgres}"
+if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$PG_CONTAINER"; then
+  q()       { docker exec -i "$PG_CONTAINER" psql -U hds -d hdsai -tAX -c "$1" 2>/dev/null; }
+  psql_in() { docker exec -i "$PG_CONTAINER" psql -U hds -d hdsai -v ON_ERROR_STOP=1; }
+  dump_docs() { docker exec -i "$PG_CONTAINER" pg_dump -U hds -d hdsai -t documents -t chunks 2>/dev/null; }
+elif command -v psql >/dev/null 2>&1 && [ -n "$DB_URL" ]; then
+  q()       { psql "$DB_URL" -tAX -c "$1" 2>/dev/null; }
+  psql_in() { psql "$DB_URL" -v ON_ERROR_STOP=1; }
+  dump_docs() { pg_dump "$DB_URL" -t documents -t chunks 2>/dev/null; }
+else
+  c_bad "Không tìm được cách kết nối CSDL."
+  echo "     · Container '$PG_CONTAINER' không chạy — kiểm tra: docker ps"
+  echo "     · Máy chủ cũng không có lệnh psql."
+  exit 1
+fi
+
+if [ "$(q 'SELECT 1')" != "1" ]; then
+  c_bad "Không kết nối được PostgreSQL. Kiểm tra: docker ps | grep $PG_CONTAINER"
+  exit 1
+fi
 
 # --- Cho xem sẽ mất gì TRƯỚC khi hỏi ---------------------------------
 c_head "Sắp xoá khỏi CSDL (tệp gốc trên Drive KHÔNG bị đụng tới):"
@@ -50,7 +71,7 @@ fi
 BACKUP="/var/backups/hds-ai-tailieu-$(date +%Y%m%d-%H%M%S).sql.gz"
 mkdir -p /var/backups 2>/dev/null || BACKUP="$HOME/hds-ai-tailieu-$(date +%Y%m%d-%H%M%S).sql.gz"
 c_head "Sao lưu trước khi xoá → $BACKUP"
-if pg_dump "$DB_URL" -t documents -t chunks 2>/dev/null | gzip > "$BACKUP"; then
+if dump_docs | gzip > "$BACKUP" && [ -s "$BACKUP" ]; then
   c_ok "Đã sao lưu ($(du -h "$BACKUP" | cut -f1))."
 else
   c_bad "Sao lưu THẤT BẠI. Dừng lại để bạn không mất dữ liệu không phục hồi được."
@@ -63,7 +84,7 @@ fi
 # nếu không lệnh DELETE sẽ bị khoá ngoại chặn lại. Làm trong MỘT giao dịch:
 # hỏng giữa chừng thì quay về nguyên trạng, không để kho nửa vời.
 c_head "Đang xoá kho đã học..."
-psql "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+psql_in <<'SQL'
 BEGIN;
 UPDATE messages SET promoted_doc_id = NULL WHERE promoted_doc_id IS NOT NULL;
 DELETE FROM chunks;
