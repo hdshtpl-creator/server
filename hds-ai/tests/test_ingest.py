@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 from app import auto_learn
 from app.auto_learn import auto_approve_from_env, drive_fingerprint
-from app.ingest import (ExtractionError, ExtractionResult, extract_text,
+from app.ingest import (ExtractionError, ExtractionResult, chunk_law_structured,
+                        document_citation, extract_text,
                         extract_text_with_metadata, safe_path_component,
                         split_document_with_metadata)
 
@@ -205,6 +206,64 @@ class AutoLearnSafetyTests(unittest.TestCase):
         self.assertEqual("Nhân sự", chunk_call[1][4])
         self.assertEqual("sheet:Nhân sự;rows:2-2", chunk_call[1][5])
         self.assertEqual("xlsx", diagnostics["method"])
+
+
+class LawChunkingTests(unittest.TestCase):
+    """Văn bản quy phạm phải cắt theo Điều và mang theo số hiệu văn bản.
+
+    Không có số hiệu thì mọi đoạn đều là 'Điều 5' trơ trọi — bot dẫn nguồn kiểu
+    'theo quy định pháp luật', không dùng được trong hành nghề luật.
+    """
+
+    LAW = """BỘ LUẬT LAO ĐỘNG
+Số: 45/2019/QH14
+
+Chương I
+NHỮNG QUY ĐỊNH CHUNG
+
+Điều 1. Phạm vi điều chỉnh
+Bộ luật này quy định tiêu chuẩn lao động và quan hệ lao động.
+
+Điều 2. Đối tượng áp dụng
+Người lao động và người sử dụng lao động trên lãnh thổ Việt Nam.
+
+Chương II
+VIỆC LÀM
+
+Điều 35. Quyền đơn phương chấm dứt hợp đồng
+Người lao động có quyền đơn phương chấm dứt hợp đồng lao động.
+"""
+
+    def test_document_number_is_read_from_header(self):
+        self.assertIn("45/2019/QH14", document_citation(self.LAW))
+
+    def test_reference_in_body_does_not_override_header(self):
+        """Số hiệu phải lấy ở phần đầu; thân bài đầy số hiệu do dẫn chiếu."""
+        text = self.LAW + "\nĐiều 99. Dẫn chiếu\nTheo Nghị định 145/2020/NĐ-CP.\n"
+        self.assertIn("45/2019/QH14", document_citation(text))
+
+    def test_each_article_becomes_one_chunk(self):
+        pieces = chunk_law_structured(self.LAW)
+        self.assertEqual(len(pieces), 3)
+
+    def test_chunk_carries_full_citation_path(self):
+        pieces = chunk_law_structured(self.LAW)
+        last = pieces[-1]
+        # Đoạn cuối phải biết mình là Điều 35, Chương II, của văn bản nào.
+        self.assertIn("Điều 35", last.section_title)
+        self.assertIn("Chương II", last.section_title)
+        self.assertIn("45/2019/QH14", last.section_title)
+        self.assertEqual("dieu:35", last.source_locator)
+
+    def test_citation_is_inside_content_not_only_metadata(self):
+        """Đoạn vào prompt dưới dạng văn bản thuần — model chỉ đọc được nội dung."""
+        pieces = chunk_law_structured(self.LAW)
+        self.assertIn("45/2019/QH14", pieces[-1].content)
+
+    def test_text_without_articles_falls_back_to_generic(self):
+        pieces = chunk_law_structured("Một văn bản không có điều khoản nào cả.")
+        self.assertTrue(pieces)
+        self.assertEqual("document", pieces[0].source_locator)
 
 
 if __name__ == "__main__":

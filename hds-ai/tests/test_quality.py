@@ -80,10 +80,14 @@ class GroundingTests(unittest.TestCase):
         self.assertNotIn("Nguồn 9", text)
 
     def test_document_answer_without_citation_is_blocked(self):
-        text, status = rag.validate_grounding(
-            "Một kết luận không có nguồn.", self.chunks, "grounded", True)
+        claim = "Một kết luận không có nguồn."
+        text, status = rag.validate_grounding(claim, self.chunks, "grounded", True)
         self.assertEqual(status, "uncited_blocked")
-        self.assertIn("đã chặn", text)
+        # Kiểm tra TÍNH CHẤT AN TOÀN, không kiểm câu chữ: nội dung không có căn
+        # cứ tuyệt đối không được lọt ra ngoài. Bản cũ soi chữ "đã chặn" trong
+        # lời thông báo nên chỉ cần sửa lời văn là test đỏ, dù hành vi y nguyên.
+        self.assertNotIn(claim, text)
+        self.assertTrue(text.strip(), "Phải thay bằng lời hướng dẫn, không trả rỗng")
 
     def test_uncited_long_block_is_hidden_not_marked_verified(self):
         text, status = rag.validate_grounding(
@@ -100,6 +104,63 @@ class GroundingTests(unittest.TestCase):
             "Có 3 khách hàng.", [], "structured", True)
         self.assertEqual(status, "verified")
         self.assertEqual(text, "Có 3 khách hàng.")
+
+
+class AutociteTests(unittest.TestCase):
+    """`autocite` gắn lại trích dẫn cho đoạn ĐỐI CHIẾU ĐƯỢC với nguồn.
+
+    Ranh giới sống còn của cả hệ thống nằm ở đây: gắn lỏng tay là bịa nguồn —
+    người đọc thấy [Nguồn 1] và tin rằng tài liệu có nói điều đó.
+    """
+
+    def setUp(self):
+        self.chunks = [
+            {"content": "Người lao động được nghỉ hằng năm mười hai ngày làm việc "
+                        "khi làm đủ mười hai tháng cho một người sử dụng lao động."},
+            {"content": "Doanh nghiệp phải nộp báo cáo tài chính năm chậm nhất "
+                        "chín mươi ngày kể từ ngày kết thúc năm tài chính."},
+        ]
+
+    def test_paragraph_copied_from_source_gets_cited(self):
+        text, attached = rag.autocite(
+            "Người lao động được nghỉ hằng năm mười hai ngày làm việc khi làm "
+            "đủ mười hai tháng cho một người sử dụng lao động.", self.chunks)
+        self.assertEqual(attached, 1)
+        self.assertIn("[Nguồn 1]", text)
+
+    def test_invented_claim_is_never_cited(self):
+        """Nội dung không có trong nguồn TUYỆT ĐỐI không được gắn trích dẫn."""
+        text, attached = rag.autocite(
+            "Mức phạt vi phạm hành chính trong lĩnh vực xây dựng là hai trăm "
+            "triệu đồng theo quy định mới nhất hiện hành.", self.chunks)
+        self.assertEqual(attached, 0)
+        self.assertNotIn("[Nguồn", text)
+
+    def test_existing_citation_is_left_alone(self):
+        original = "Đoạn đã có nguồn sẵn rồi. [Nguồn 2]"
+        text, attached = rag.autocite(original, self.chunks)
+        self.assertEqual(attached, 0)
+        self.assertEqual(text, original)
+
+    def test_short_filler_line_is_not_cited(self):
+        """Câu nối ngắn không phải khẳng định, không cần và không được gắn nguồn."""
+        text, attached = rag.autocite("Tóm lại như sau:", self.chunks)
+        self.assertEqual(attached, 0)
+
+
+class ContextWindowTests(unittest.TestCase):
+    """`_best_window` giữ khúc LIÊN QUAN trong đoạn dài, không cắt từ đầu."""
+
+    def test_relevant_tail_survives_truncation(self):
+        filler = "Nội dung mở đầu không liên quan. " * 40
+        answer = "Thời hiệu khởi kiện tranh chấp thương mại là hai năm."
+        window = rag._best_window(filler + answer, "thời hiệu khởi kiện", 300)
+        self.assertIn("Thời hiệu khởi kiện", window)
+        self.assertLessEqual(len(window), 320)
+
+    def test_short_chunk_is_returned_untouched(self):
+        content = "Một đoạn ngắn."
+        self.assertEqual(rag._best_window(content, "bất kỳ", 1000), content)
 
 
 if __name__ == "__main__":
