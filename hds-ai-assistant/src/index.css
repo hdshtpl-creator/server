@@ -1,6 +1,27 @@
 @import "tailwindcss";
 
 /* ------------------------------------------------------------------
+   Nguồn quét class — KHAI BÁO TƯỜNG MINH, đừng bỏ đi.
+
+   Mặc định Tailwind v4 TỰ DÒ lấy mã nguồn để biết cần sinh utility nào.
+   Cơ chế đó phụ thuộc vào môi trường (vị trí `.git`, `.gitignore`, thư
+   mục chạy lệnh) nên cùng một mã có thể ra kết quả khác nhau giữa máy
+   dev và máy chủ.
+
+   Bản chạy trên máy chủ 08/2026 từng ra CSS chỉ ~23KB, có phần theme/base
+   nhưng KHÔNG một utility nào (`flex`, `px-4`, `bg-hds-navy`…) trong khi
+   máy dev ra ~72KB đầy đủ. Build vẫn báo thành công, nginx vẫn trả 200,
+   nên lỗi chỉ lộ ra ở giao diện: mất sạch bố cục, chữ xếp dọc.
+
+   Khai báo rõ đường dẫn ở đây thì việc sinh utility không còn phụ thuộc
+   vào phép tự dò. Đường dẫn tính từ chính tệp CSS này.
+------------------------------------------------------------------- */
+@source "./**/*.{ts,tsx,js,jsx}";
+@source "../index.html";
+@source "./**/*.{ts,tsx,js,jsx}";
+@source "../index.html";
+
+/* ------------------------------------------------------------------
    Chế độ tối theo class (.dark trên <html>)
    Tailwind v4 mặc định gắn `dark:` vào prefers-color-scheme của hệ điều
    hành, nên nút bật/tắt trong Header sẽ không có tác dụng nếu thiếu dòng
