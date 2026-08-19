@@ -130,6 +130,38 @@ class GroundingTests(unittest.TestCase):
         self.assertEqual(text, "Có 3 khách hàng.")
 
 
+class PromptShapeTests(unittest.TestCase):
+    """Prompt không được tự tay mớm cho model một câu từ chối.
+
+    Lỗi thực tế 19/08/2026: prompt viết «không có đoạn hỗ trợ thì nói 'chưa đủ
+    căn cứ trong nguồn'». Model nhỏ gặp prompt dài với mấy đoạn tài liệu lạc đề
+    đã chép nguyên văn câu trong dấu nháy đó và trả lời đúng một dòng, dù DỮ
+    LIỆU CÔNG TY ngay trên có đủ câu trả lời.
+    """
+
+    CHUNKS = [{"content": "Nội dung tài liệu mẫu.", "title": "Tài liệu A"}]
+
+    def test_prompt_does_not_hand_model_a_ready_made_refusal(self):
+        prompt = rag.build_prompt("cty tôi có bao nhiêu nhân sự", self.CHUNKS)
+        self.assertNotIn("'chưa đủ căn cứ trong nguồn'", prompt)
+        self.assertNotIn('"chưa đủ căn cứ trong nguồn"', prompt)
+
+    def test_company_data_is_declared_highest_authority(self):
+        """Có DỮ LIỆU CÔNG TY thì prompt phải nói rõ đó là căn cứ mạnh nhất."""
+        prompt = rag.build_prompt(
+            "cty tôi có bao nhiêu nhân sự", self.CHUNKS,
+            company="### Nhân sự: 2 người\n · HĐLĐ-Nhi\n · CV — Bạc Thị Mai")
+        self.assertIn("CĂN CỨ CÓ GIÁ TRỊ CAO NHẤT", prompt)
+        self.assertIn("không được nói là thiếu căn cứ", prompt)
+        # Và phải dặn gộp theo tên người, vì một người có nhiều hồ sơ.
+        self.assertIn("GỘP THEO TÊN NGƯỜI", prompt)
+
+    def test_no_company_data_means_no_such_claim(self):
+        """Không có dữ liệu hệ thống thì đừng khẳng định có — tránh bịa."""
+        prompt = rag.build_prompt("câu hỏi bất kỳ", self.CHUNKS)
+        self.assertNotIn("CĂN CỨ CÓ GIÁ TRỊ CAO NHẤT", prompt)
+
+
 class AutociteTests(unittest.TestCase):
     """`autocite` gắn lại trích dẫn cho đoạn ĐỐI CHIẾU ĐƯỢC với nguồn.
 

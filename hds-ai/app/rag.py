@@ -466,8 +466,10 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                  "Nếu đây là câu nói lại/chỉnh lại câu trước, hiểu theo diễn biến ở "
                  "trên và trả lời luôn. MỖI đoạn có khẳng định lấy từ tài liệu phải kết "
                  "thúc bằng đúng một hoặc nhiều ký hiệu [Nguồn n]. Chỉ được dùng số nguồn "
-                 "đang có ở trên; không có đoạn hỗ trợ thì nói 'chưa đủ căn cứ trong nguồn', "
-                 "không suy đoán và không tự điền tên/ngày/số tiền/chức danh. "
+                 "đang có ở trên. KHÔNG suy đoán và không tự điền tên/ngày/số tiền/chức danh. "
+                 "Thiếu căn cứ cho một ý nào thì bỏ ý đó và nói rõ còn thiếu thông tin gì, "
+                 "nhưng vẫn phải trả lời đầy đủ những phần ĐÃ có căn cứ — không được từ chối "
+                 "cả câu khi mới chỉ thiếu một phần. "
                  "Khi dẫn quy định pháp luật, chép ĐÚNG tên văn bản và số hiệu như ghi "
                  "trong nguồn (vd 'khoản 2 Điều 35 Bộ luật Lao động số 45/2019/QH14'); "
                  "nguồn nào có sẵn dòng [Thông tư/Nghị định… — Chương… — Điều…] ở đầu thì "
@@ -478,8 +480,19 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                  "với HÔM NAY ở đầu prompt: ngày kết thúc đã qua = ĐÃ HẾT HẠN, ĐỪNG coi "
                  "là còn hiệu lực. Nói rõ hợp đồng nào còn, hợp đồng nào đã hết và hết từ khi nào.")
     if company:
-        parts.append("Phần DỮ LIỆU CÔNG TY là số liệu thực tế trong hệ thống — dùng trực tiếp, "
-                     "không cần ghi [Nguồn]. Nêu rõ ngày/hạn khi trả lời về tiến độ vụ việc.")
+        # Đặt CUỐI CÙNG và viết mạnh: đây là thứ model đọc ngay trước khi viết.
+        # Trước đây phần này chỉ là một dòng nhắc nhẹ giữa hàng loạt yêu cầu về
+        # trích dẫn, nên model gặp mấy đoạn tài liệu lạc đề là kết luận "không
+        # đủ căn cứ" trong khi câu trả lời nằm sẵn ở DỮ LIỆU CÔNG TY ngay trên.
+        parts.append(
+            "QUAN TRỌNG NHẤT: phần DỮ LIỆU CÔNG TY ở đầu prompt là số liệu THẬT lấy "
+            "trực tiếp từ hệ thống HDS — nó là CĂN CỨ CÓ GIÁ TRỊ CAO NHẤT, cao hơn "
+            "tài liệu tra cứu. Câu hỏi nào trả lời được từ phần đó thì PHẢI trả lời, "
+            "dùng thẳng số liệu và tên trong đó, KHÔNG cần ghi [Nguồn], và TUYỆT ĐỐI "
+            "không được nói là thiếu căn cứ. Riêng danh mục hồ sơ nhân sự: một người "
+            "thường có nhiều hồ sơ (hợp đồng, CV, đơn từ, báo cáo) — hãy GỘP THEO TÊN "
+            "NGƯỜI rồi mới đếm, đừng đếm số hồ sơ. Nêu rõ ngày/hạn khi trả lời về "
+            "tiến độ vụ việc.")
     return "\n".join(parts)
 
 
