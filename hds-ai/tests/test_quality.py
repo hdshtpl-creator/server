@@ -62,6 +62,30 @@ class IntentTests(unittest.TestCase):
             "employment_contract",
         )
 
+    def test_document_store_count_is_inventory(self):
+        """Lỗi thực tế 19/08/2026: 'có mấy tài liệu bản án' đi qua RAG nên model
+        phải đoán từ vài đoạn tìm được — đếm kho là câu metadata, đếm bằng SQL."""
+        self.assertEqual(
+            company_context.infer_intent("hds đang có mấy tài liệu bản án"),
+            "doc_inventory",
+        )
+        self.assertEqual(
+            company_context.infer_intent("kho dữ liệu đang có bao nhiêu tài liệu"),
+            "doc_inventory",
+        )
+
+    def test_topic_search_is_not_inventory(self):
+        """'bao nhiêu bản án VỀ tranh chấp đất' là tra cứu nội dung, không phải đếm kho."""
+        self.assertIsNone(
+            company_context.infer_intent("có bao nhiêu bản án về tranh chấp đất đai"))
+
+    def test_hr_dossier_count_stays_staff(self):
+        """Câu về hồ sơ nhân sự vẫn thuộc luồng nhân sự, không bị intent kho nuốt."""
+        self.assertEqual(
+            company_context.infer_intent("hds đang có mấy bộ hồ sơ nhân sự"),
+            "staff_directory",
+        )
+
 
 class RetrievalQuestionTests(unittest.TestCase):
     def test_followup_is_rewritten_before_retrieval(self):
@@ -160,6 +184,22 @@ class PromptShapeTests(unittest.TestCase):
         """Không có dữ liệu hệ thống thì đừng khẳng định có — tránh bịa."""
         prompt = rag.build_prompt("câu hỏi bất kỳ", self.CHUNKS)
         self.assertNotIn("CĂN CỨ CÓ GIÁ TRỊ CAO NHẤT", prompt)
+
+    def test_client_document_is_labeled_with_owner(self):
+        """Lỗi thực tế 19/08/2026: 'Giấy đề nghị ĐKDN' của khách không mang tên
+        chủ sở hữu, model đọc 'tổng số lao động (dự kiến): 02' và trả lời như
+        thể đó là quân số của chính HDS."""
+        chunks = [{"content": "Tổng số lao động (dự kiến): 02 người.",
+                   "title": "1. Giấy đề nghị", "client_id": 7,
+                   "client_name": "CÔNG TY TNHH AGENT PRO"}]
+        prompt = rag.build_prompt("cty tôi có bao nhiêu nhân sự", chunks)
+        self.assertIn("(HỒ SƠ KHÁCH HÀNG — CÔNG TY TNHH AGENT PRO)", prompt)
+        self.assertIn("PHÂN BIỆT CHỦ THỂ", prompt)
+
+    def test_hds_only_sources_need_no_owner_warning(self):
+        """Không có hồ sơ khách trong bộ nguồn thì đừng chèn chỉ dẫn thừa."""
+        prompt = rag.build_prompt("câu hỏi bất kỳ", self.CHUNKS)
+        self.assertNotIn("PHÂN BIỆT CHỦ THỂ", prompt)
 
 
 class AutociteTests(unittest.TestCase):

@@ -127,10 +127,33 @@ số đầu cũng không có ngoặc) → **bot bỏ qua** để tránh gắn nh
 > `1696` là mã khách — đúng. Còn `1.`, `2.` (một chữ số) bị coi là số thứ tự mục,
 > không phải mã.
 
-**2. Vụ việc cũng dùng ngoặc vuông: `[MÃ_VỤ_VIỆC] Tên vụ việc`**
+**2. Vụ việc: ngoặc vuông `[MÃ] Tên` HOẶC quy ước số `1572. Tên vụ việc`**
 
-Đặt trong `2. Dự án - Vụ việc/`. Mã khớp mã vụ việc trong hệ thống → tài liệu tự gắn đúng
-vụ việc, hiện lên trong Hồ sơ khách 360°. Không có mã cũng không sao, chỉ là không tự gắn.
+Đặt trong `2. Dự án/` (hoặc `2. Dự án - Vụ việc/`). Nhận cả ba kiểu tên:
+
+- `[M-2026-001] Tái cấu trúc vốn`
+- `1572. Thành lập mới Công ty TNHH Học viện Ngôn ngữ Hoa Hạ`
+- `160426. 1593. Thành lập mới CÔNG TY TNHH AGENT PRO` (ngày + mã — bot ưu tiên
+  cụm số đứng sát tên, tức `1593`)
+
+Mã khớp mã vụ việc trong hệ thống → tài liệu tự gắn đúng vụ việc, hiện lên trong
+Hồ sơ khách 360°. Không có mã / chưa tạo vụ việc trong web cũng không sao, chỉ là
+không tự gắn — **tạo vụ việc trên web với đúng mã số đó rồi chạy lại auto-learn
+là gắn lại được**.
+
+Năm thư mục con chuẩn trong mỗi dự án được gán loại tự động:
+
+| Thư mục con | Loại giấy tờ |
+|---|---|
+| `1. Tài liệu khách hàng cung cấp/` | khác (`other`) |
+| `2. Hồ sơ soạn thảo/` | hồ sơ nộp (`filing`) |
+| `3. Hồ sơ hoàn thiện/` | hồ sơ nộp (`filing`) |
+| `4. Hợp đồng dịch vụ/` | hợp đồng (`contract`) |
+| `5. Kết quả vụ việc/` | hồ sơ nộp (`filing`) |
+
+Riêng `1. Thông tin khách hàng/` (hoặc `1. Tổng hợp thông tin khách hàng/`) giữ
+loại `ho_so_kh` — chỉ file trong đó mới được GHIM làm "file tổng hợp luôn đọc".
+Nhờ vậy giấy ủy quyền/hướng dẫn ký trong dự án không chen mất chỗ của file tổng hợp.
 
 **3. Không để file trơ ở thư mục gốc**
 
@@ -196,6 +219,14 @@ bash deploy/auto-learn.sh --dry-run           # xem sẽ học file nào, nhãn 
 bash deploy/auto-learn.sh                     # học thật
 sudo bash deploy/auto-learn.sh --install-timer # tự học mỗi 15 phút
 ```
+
+> **Nâng cấp 08/2026 — cần học lại kho một lần.** Bộ nạp đã đổi ba điểm:
+> (1) Excel được đọc theo **giá trị đã tính** thay vì công thức thô (`=G14*8%`);
+> (2) tự nhận **dòng tiêu đề cột** của báo cáo có dòng tên báo cáo phía trên;
+> (3) mỗi đoạn được nhúng **dòng danh tính** (tên tài liệu, loại, khách sở hữu)
+> để bot không nhầm hồ sơ của khách với dữ liệu của chính HDS.
+> Tài liệu học TRƯỚC nâng cấp chưa có các cải tiến này — chạy
+> `sudo bash deploy/hoc-lai-tu-dau.sh` một lần (ngoài giờ làm việc) để học lại.
 
 Bot chỉ xử lý file **mới hoặc đã sửa** (file thường so checksum; Google Docs/Sheets
 so `modifiedTime`) → chạy lại rất nhanh.

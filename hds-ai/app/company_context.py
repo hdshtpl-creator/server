@@ -144,6 +144,18 @@ ROSTER_WORDS = {
     "liet ke khach", "cac khach hang", "khach hang nao",
 }
 
+# Câu hỏi ĐẾM / LIỆT KÊ chính KHO TÀI LIỆU ("HDS có mấy tài liệu bản án",
+# "kho có bao nhiêu văn bản luật"). Đây là câu metadata về kho — phải đếm bằng
+# SQL trên bảng documents, không để model đoán từ vài đoạn tìm được rồi trả
+# lời "không thấy" trong khi câu hỏi là về SỐ LƯỢNG.
+INVENTORY_TYPE_WORDS = {
+    "ban an": "ban_an", "an le": "an_le",
+    "van ban luat": "law", "van ban phap luat": "law",
+    "hop dong mau": "mau_hd", "mau hop dong": "mau_hd",
+    "thu mau": "thu_mau", "quy trinh": "quy_trinh",
+    "nhan hieu": "nhan_hieu", "thu tu van": "advisory",
+}
+
 # Câu hỏi về chính công ty mình: quân số, ai làm phòng nào. Dữ liệu nằm ở bảng
 # users/departments — không nằm trong tài liệu nào để mà tìm bằng vector, nên
 # phải rút bằng SQL giống cách làm với khách hàng.
@@ -317,6 +329,30 @@ def _staff_intent(q_folded: str) -> bool:
 def _account_intent(q_folded: str) -> bool:
     """Người hỏi đang hỏi rõ về tài khoản phần mềm, không phải nhân sự HR."""
     return any(w in q_folded for w in ACCOUNT_WORDS)
+
+
+def _doc_inventory_intent(q_folded: str) -> bool:
+    """Câu hỏi ĐẾM/LIỆT KÊ kho tài liệu — 'HDS có mấy tài liệu bản án'.
+
+    Cố tình chặt để không nuốt câu tra cứu NỘI DUNG: 'bao nhiêu bản án VỀ
+    tranh chấp đất' là hỏi về một chủ đề — phải đi tìm tài liệu thật, không
+    phải đếm kho, nên có ' ve ' là bỏ qua.
+    """
+    if " ve " in f" {q_folded} ":
+        return False
+    counting = bool(re.search(
+        r"\b(bao nhieu|co may|dang co may|may|danh sach|liet ke|thong ke)\b",
+        q_folded))
+    if not counting and not re.search(r"\btai lieu (nao|gi)\b", q_folded):
+        return False
+    if re.search(r"\b(tai lieu|van ban|kho du lieu|kho tai lieu)\b", q_folded):
+        return True
+    return any(w in q_folded for w in INVENTORY_TYPE_WORDS)
+
+
+def _requested_doc_types(q_folded: str) -> list[str]:
+    """Loại tài liệu được nhắc đích danh trong câu đếm kho (có thể rỗng)."""
+    return sorted({dt for w, dt in INVENTORY_TYPE_WORDS.items() if w in q_folded})
 
 
 def _employment_contract_intent(q_folded: str) -> bool:
@@ -755,6 +791,8 @@ def infer_intent(question, history=None, state=None):
         return "staff_directory"
     if _alert_intent(topic):
         return "matter_alerts"
+    if _doc_inventory_intent(topic):
+        return "doc_inventory"
     return None
 
 
@@ -885,6 +923,48 @@ def structured_answer(question, channel, client_id=None, dept_ids=None,
             "grounding_status": "verified",
             "evidence": [_system_evidence("Cảnh báo vụ việc HDS", "v_matter_alerts",
                                           lines[0])],
+            "state": next_state,
+        }
+
+    if intent == "doc_inventory":
+        # RLS trên documents áp theo phiên: mỗi người chỉ đếm được đúng phần
+        # kho mình được xem (công nợ, hồ sơ phòng khác tự bị loại).
+        wanted = _requested_doc_types(_fold(_topic_question(question, history)))
+        with db.session(role="internal", dept_ids=dept_ids, is_banqt=is_banqt,
+                        can_finance=can_finance) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT coalesce(doc_type,'other') AS dt, count(*)
+                                 FROM documents
+                                WHERE approved AND label_verified
+                                  AND coalesce(active,true)
+                                GROUP BY 1 ORDER BY count(*) DESC, 1""")
+                rows = cur.fetchall()
+        counts = dict(rows)
+        total = sum(counts.values())
+        lines = []
+        for dt in wanted:
+            n = counts.get(dt, 0)
+            label = DOC_TYPE_VN.get(dt, dt)
+            if n:
+                lines.append(f"Kho hiện có **{n} tài liệu {label}** đã duyệt "
+                             f"(tính đến {date.today()}).")
+            else:
+                lines.append(f"Kho **chưa có tài liệu {label} nào** được duyệt "
+                             f"(tính đến {date.today()}). Muốn bot trả lời được "
+                             f"về {label}, thả file vào đúng thư mục trên Drive "
+                             "rồi chờ đồng bộ/duyệt.")
+        if total:
+            lines.append(f"Toàn kho có {total} tài liệu đã duyệt trong phạm vi "
+                         "bạn được xem:")
+            lines += [f"- {DOC_TYPE_VN.get(dt, dt)}: {n}" for dt, n in rows]
+        else:
+            lines.append("Kho chưa có tài liệu nào được duyệt trong phạm vi bạn được xem.")
+        return {
+            "answer": "\n".join(lines), "answer_mode": "structured",
+            "grounding_status": "verified",
+            "evidence": [_system_evidence(
+                "Kho tài liệu HDS", "documents",
+                f"tổng={total}" + (f"; loại được hỏi={', '.join(wanted)}" if wanted else ""))],
             "state": next_state,
         }
 

@@ -117,12 +117,19 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
 
     qjson = json.dumps(query_vector if query_vector is not None else embed(question))
     level = CHANNEL_LEVEL[channel]
+    # LEFT JOIN clients để mỗi đoạn tự biết nó thuộc hồ sơ của KHÁCH NÀO.
+    # Không có cột này thì "Giấy đề nghị ĐKDN" của khách đọc y hệt tài liệu của
+    # chính HDS, và model từng lấy "tổng số lao động dự kiến: 02" của công ty
+    # khách ra trả lời câu "công ty tôi có bao nhiêu nhân sự". Bảng clients
+    # không có RLS nhưng chunks/documents có — hàng không được phép xem đã bị
+    # chặn từ trước khi join.
     select = """SELECT c.id,c.content,c.document_id,d.title,d.drive_file_id,
                        1-(c.embedding <=> %s::vector) AS semantic_score,
                        {lexical} AS lexical_score,
                        c.page_number,c.section_title,c.source_locator,
-                       d.source_version,c.chunk_index
-                  FROM chunks c JOIN documents d ON d.id=c.document_id"""
+                       d.source_version,c.chunk_index,d.doc_type,d.client_id,cl.name
+                  FROM chunks c JOIN documents d ON d.id=c.document_id
+                  LEFT JOIN clients cl ON cl.id=d.client_id"""
     where = """ WHERE c.embedding IS NOT NULL AND d.approved AND d.label_verified
                        AND coalesce(d.active,true)
                        AND coalesce(d.extraction_status,'ready')='ready'"""
@@ -170,7 +177,8 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
             "semantic_score": float(r[5] or 0), "lexical_score": 0.0,
             "page_number": r[7], "section_title": r[8],
             "source_locator": r[9], "source_version": r[10],
-            "chunk_index": r[11],
+            "chunk_index": r[11], "doc_type": r[12], "client_id": r[13],
+            "client_name": r[14],
         })
         item["semantic_score"] = max(item["semantic_score"], float(r[5] or 0))
         item["lexical_score"] = max(item["lexical_score"], float(r[6] or 0))
@@ -249,8 +257,10 @@ def _with_neighbours(chosen, level, client_id, dept_ids, is_banqt, can_finance,
             # RLS vẫn chặn ở đây: đoạn hàng xóm nằm ngoài quyền sẽ không trả về.
             cur.execute("""SELECT c.id,c.content,c.document_id,d.title,d.drive_file_id,
                                   c.page_number,c.section_title,c.source_locator,
-                                  d.source_version,c.chunk_index
+                                  d.source_version,c.chunk_index,
+                                  d.doc_type,d.client_id,cl.name
                              FROM chunks c JOIN documents d ON d.id=c.document_id
+                             LEFT JOIN clients cl ON cl.id=d.client_id
                             WHERE (c.document_id, c.chunk_index) IN (
                                     SELECT * FROM unnest(%s::int[], %s::int[]))
                               AND d.approved AND d.label_verified
@@ -266,7 +276,8 @@ def _with_neighbours(chosen, level, client_id, dept_ids, is_banqt, can_finance,
             "semantic_score": 0.0, "lexical_score": 0.0,
             "page_number": r[5], "section_title": r[6],
             "source_locator": r[7], "source_version": r[8],
-            "chunk_index": r[9],
+            "chunk_index": r[9], "doc_type": r[10], "client_id": r[11],
+            "client_name": r[12],
             # Thấp hơn đoạn gốc: hàng xóm là ngữ cảnh bổ trợ, không phải căn cứ chính.
             "score": max(0.0, score_of.get((r[2], r[9]), 0.3) - 0.05),
             "is_neighbour": True,
@@ -420,6 +431,25 @@ def fit_context(chunks, chunk_chars=None, budget=None, question=""):
     return out
 
 
+def _source_owner_tag(chunk) -> str:
+    """Nhãn CHỦ SỞ HỮU đặt trước tên tài liệu trong prompt.
+
+    Tên file kiểu '1. Giấy đề nghị' không nói lên nó là hồ sơ của ai. Thiếu
+    nhãn này, model đọc 'tổng số lao động (dự kiến): 02' trong hồ sơ đăng ký
+    doanh nghiệp CỦA KHÁCH và trả lời như thể đó là quân số của chính HDS.
+    """
+    client = (chunk.get("client_name") or "").strip()
+    if client:
+        return f"(HỒ SƠ KHÁCH HÀNG — {client}) "
+    if chunk.get("client_id"):
+        return "(HỒ SƠ KHÁCH HÀNG) "
+    doc_type = chunk.get("doc_type")
+    if doc_type == "ho_so_ns":
+        return "(hồ sơ nhân sự của chính HDS) "
+    label = company_context.DOC_TYPE_VN.get(doc_type or "")
+    return f"({label}) " if label and doc_type != "other" else ""
+
+
 def build_prompt(question, chunks, temp_chunks=None, method=None,
                  company="", history=None, chunk_chars=None, budget=None):
     # Model KHÔNG tự biết hôm nay là ngày nào. Không nói cho nó thì nó đọc "hợp
@@ -447,7 +477,19 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             if c.get("section_title"):
                 locator = (locator + ", " if locator else "") + c["section_title"]
             label = f" — {locator}" if locator else ""
-            parts.append(f"[Nguồn {i}] {c.get('title','')}{label}\n{c['content']}\n")
+            owner = _source_owner_tag(c)
+            parts.append(f"[Nguồn {i}] {owner}{c.get('title','')}{label}\n{c['content']}\n")
+        # Chỉ dẫn phân biệt chủ thể — chỉ chèn khi thật sự có hồ sơ khách trong
+        # bộ nguồn, để câu hỏi thuần pháp lý không phải cõng thêm chữ thừa.
+        if any(c.get("client_id") or c.get("client_name") for c in all_ctx):
+            parts.append(
+                "PHÂN BIỆT CHỦ THỂ: nguồn mang nhãn (HỒ SƠ KHÁCH HÀNG — X) là hồ "
+                "sơ HDS thực hiện CHO công ty khách X. Mọi số liệu trong đó — số "
+                "lao động, vốn điều lệ, thành viên, người đại diện theo pháp luật "
+                "— là CỦA CÔNG TY KHÁCH X, tuyệt đối KHÔNG phải của HDS. Khi "
+                "người hỏi nói 'công ty tôi' / 'HDS' thì KHÔNG được lấy số liệu "
+                "từ các nguồn đó để trả lời; hãy dùng DỮ LIỆU CÔNG TY và các "
+                "nguồn hồ sơ nhân sự của chính HDS.\n")
     elif not company:
         # Chỉ báo "không có tài liệu" khi cũng KHÔNG có dữ liệu công ty. Câu hỏi
         # đếm khách/nhân sự cố tình không tra tài liệu — lúc đó dòng này thừa và
@@ -937,9 +979,17 @@ def format_sources(chunks):
         if len(quote) > 600:
             quote = quote[:600].rstrip() + "…"
         score = round(float(c.get("score") or 0), 3)
+        # Tên khách đứng ngay trong tiêu đề nguồn: người đọc panel trích dẫn
+        # phải thấy được '1. Giấy đề nghị' là hồ sơ của khách nào mà không cần
+        # mở file gốc.
+        title = c.get("title") or "(không tiêu đề)"
+        if (c.get("client_name") or "").strip():
+            title = f"[KH: {c['client_name'].strip()}] {title}"
         out.append({
             "n": i, "kind": "document", "chunk_id": c.get("chunk_id"),
-            "title": c.get("title") or "(không tiêu đề)",
+            "title": title,
+            "doc_type": c.get("doc_type"),
+            "client_name": c.get("client_name"),
             "document_id": c.get("document_id"),
             "drive_file_id": c.get("drive_file_id"),
             "source_version": c.get("source_version"),

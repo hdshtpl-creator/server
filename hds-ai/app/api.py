@@ -1558,6 +1558,15 @@ def feedback_review(fid: int, body: FeedbackReviewIn, user=Depends(current_user)
 from app.draft_api import build_router as _build_draft_router
 app.include_router(_build_draft_router(current_user, require_reviewer))
 
+# ---------- 12. Sổ nhân sự (employees + employment_contracts) ----------
+# Đây là NGUỒN SỰ THẬT cho câu "công ty có bao nhiêu nhân sự": có dữ liệu ở đây
+# thì structured_answer trả lời xác định bằng SQL, không đi qua model sinh văn
+# bản. Router /hr (kèm import CSV/XLSX) đã viết và test sẵn nhưng trước đây
+# quên đăng ký nên bảng employees không có đường nhập — câu đếm nhân sự vì thế
+# luôn rơi xuống RAG và từng trả lời bằng số lao động dự kiến của công ty khách.
+from app.hr_api import build_router as _build_hr_router
+app.include_router(_build_hr_router(current_user))
+
 
 # ---------- 9. Giao diện quản trị ----------
 @app.get("/admin", response_class=HTMLResponse)

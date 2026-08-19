@@ -152,6 +152,43 @@ def _validate_office_archive(path, invalid_code="invalid_office_archive"):
             "Tách file/bỏ ảnh nhúng quá lớn trước khi học.")
 
 
+def _looks_texty(value: str) -> bool:
+    """Ô 'chữ' — có ký tự chữ cái và không phải công thức. Dùng để phân biệt
+    dòng tiêu đề cột với dòng tên báo cáo (ít ô) và dòng số liệu (toàn số)."""
+    return bool(value) and not value.startswith("=") and any(ch.isalpha() for ch in value)
+
+
+# Số dòng không rỗng đầu bảng được giữ lại để chọn dòng tiêu đề cột.
+_HEADER_SCAN_ROWS = 8
+
+
+def _pick_header(scanned):
+    """Vị trí dòng TIÊU ĐỀ CỘT trong các dòng đầu bảng đã quét.
+
+    Bản cũ lấy dòng không rỗng ĐẦU TIÊN làm tiêu đề. Báo cáo thực tế thường mở
+    đầu bằng vài dòng tên công ty/tên báo cáo (1-2 ô có nội dung), nên tên cột
+    thật bị đẩy xuống thành dữ liệu và mọi dòng sau mang tên cột vô nghĩa
+    'Cột 3', 'Cột 8' — đoạn cắt ra tra cứu được mà không đọc được.
+
+    Luật chọn: lấy dòng ĐẦU TIÊN có từ 2 ô trở lên, số ô không quá lép so với
+    dòng dày nhất trong vùng quét (≥60%), và quá nửa số ô là chữ. Không dòng
+    nào đạt thì lùi về dòng nhiều ô nhất, cuối cùng mới tới dòng đầu tiên
+    (giữ hành vi cũ cho bảng một cột).
+    """
+    if not scanned:
+        return 0
+    max_count = max(sum(1 for v in values if v) for _, values in scanned)
+    need = max(2, -(-max_count * 3 // 5))          # ceil(0.6 * max_count)
+    for pos, (_, values) in enumerate(scanned):
+        filled = [v for v in values if v]
+        if len(filled) >= need and sum(_looks_texty(v) for v in filled) * 2 > len(filled):
+            return pos
+    for pos, (_, values) in enumerate(scanned):
+        if sum(1 for v in values if v) == max_count:
+            return pos
+    return 0
+
+
 def _tabular_text(rows, title, row_limit=MAX_SPREADSHEET_ROWS):
     """Biến bảng thành text có tên cột để truy vấn ngữ nghĩa chính xác hơn."""
     output = [f"[Bảng: {title}]"]
@@ -161,8 +198,63 @@ def _tabular_text(rows, title, row_limit=MAX_SPREADSHEET_ROWS):
     cell_truncated = False
     column_truncated = False
     output_chars = len(output[0])
+    scanned = []          # các dòng đầu, giữ tới khi chọn được dòng tiêu đề
+
+    def emit(line):
+        nonlocal output_chars, data_rows, truncated
+        output.append(line)
+        output_chars += len(line)
+        data_rows += 1
+        if output_chars >= MAX_EXTRACTED_CHARS:
+            truncated = True
+        return not truncated
+
+    def build_headers(values):
+        names, used = [], set()
+        for index, value in enumerate(values, 1):
+            base = value or f"Cột {index}"
+            name = base
+            duplicate = 2
+            while name.casefold() in used:
+                name = f"{base} ({duplicate})"
+                duplicate += 1
+            used.add(name.casefold())
+            names.append(name)
+        return names
+
+    def data_line(source_index, values):
+        if len(values) > len(headers):
+            headers.extend(f"Cột {i}" for i in range(len(headers) + 1, len(values) + 1))
+        cells = [f"{headers[i]}: {value}" for i, value in enumerate(values) if value]
+        return f"[Dòng {source_index}] " + " | ".join(cells) if cells else None
+
+    def flush_scanned():
+        """Chọn tiêu đề trong các dòng đã quét rồi xả ra output đúng thứ tự."""
+        nonlocal headers
+        pending = scanned[:]
+        scanned.clear()
+        if not pending:
+            return True
+        pick = _pick_header(pending)
+        for pos, (source_index, values) in enumerate(pending):
+            if pos < pick:
+                # Dòng mở đầu (tên báo cáo, kỳ báo cáo…) đứng TRƯỚC tiêu đề
+                # cột: giữ nguyên nội dung, không ép vào khung 'tên cột: giá trị'.
+                if not emit(f"[Dòng {source_index}] " + " | ".join(v for v in values if v)):
+                    return False
+            elif pos == pick:
+                headers = build_headers(values)
+                if not emit("[Cột] " + " | ".join(headers)):
+                    return False
+            else:
+                line = data_line(source_index, values)
+                if line and not emit(line):
+                    return False
+        return True
 
     for source_index, row in enumerate(rows, 1):
+        if truncated:
+            break
         if source_index > row_limit:
             truncated = True
             break
@@ -176,37 +268,15 @@ def _tabular_text(rows, title, row_limit=MAX_SPREADSHEET_ROWS):
         if any(v is not None and len(str(v)) > MAX_CELL_CHARS for v in row):
             cell_truncated = True
         if headers is None:
-            headers = []
-            used = set()
-            for index, value in enumerate(values, 1):
-                base = value or f"Cột {index}"
-                name = base
-                duplicate = 2
-                while name.casefold() in used:
-                    name = f"{base} ({duplicate})"
-                    duplicate += 1
-                used.add(name.casefold())
-                headers.append(name)
-            line = "[Cột] " + " | ".join(headers)
-            output.append(line)
-            output_chars += len(line)
-            data_rows += 1
-            if output_chars >= MAX_EXTRACTED_CHARS:
-                truncated = True
+            scanned.append((source_index, values))
+            if len(scanned) >= _HEADER_SCAN_ROWS and not flush_scanned():
                 break
             continue
-
-        if len(values) > len(headers):
-            headers.extend(f"Cột {i}" for i in range(len(headers) + 1, len(values) + 1))
-        cells = [f"{headers[i]}: {value}" for i, value in enumerate(values) if value]
-        if cells:
-            line = f"[Dòng {source_index}] " + " | ".join(cells)
-            output.append(line)
-            output_chars += len(line)
-            data_rows += 1
-        if output_chars >= MAX_EXTRACTED_CHARS:
-            truncated = True
+        line = data_line(source_index, values)
+        if line and not emit(line):
             break
+    if headers is None:
+        flush_scanned()
 
     warnings = []
     if truncated:
@@ -248,21 +318,14 @@ def _extract_csv(path):
     }
 
 
-def _extract_xlsx(path):
-    try:
-        _validate_office_archive(path, "invalid_xlsx")
-        from openpyxl import load_workbook
-        workbook = load_workbook(str(path), read_only=True, data_only=False, keep_links=False)
-    except ExtractionError:
-        raise
-    except Exception as exc:
-        raise ExtractionError("invalid_xlsx", "Không mở được file Excel.",
-                              "Mở file bằng Excel/Google Sheets rồi lưu lại thành .xlsx.") from exc
-
+def _read_workbook(path, data_only):
     parts, warnings = [], []
     total_rows = 0
     visible_sheets = 0
     truncated = False
+    from openpyxl import load_workbook
+    workbook = load_workbook(str(path), read_only=True, data_only=data_only,
+                             keep_links=False)
     try:
         for sheet in workbook.worksheets:
             if sheet.sheet_state != "visible":
@@ -285,6 +348,36 @@ def _extract_xlsx(path):
                 break
     finally:
         workbook.close()
+    return parts, warnings, total_rows, visible_sheets, truncated
+
+
+def _extract_xlsx(path):
+    # data_only=True: đọc GIÁ TRỊ Excel đã tính sẵn, không phải công thức.
+    # Bản cũ để data_only=False nên chunk chứa nguyên văn '=G14*8%', '=Q14*1.5%'
+    # — model không tính được công thức, mọi câu hỏi số liệu đều thành vô dụng.
+    # File do Excel/Google Sheets lưu luôn có sẵn giá trị cache; chỉ file sinh
+    # bằng thư viện (chưa từng mở bằng Excel) mới thiếu — khi đó ô công thức trả
+    # None và ta lùi về đọc công thức kèm cảnh báo, còn hơn mất trắng nội dung.
+    try:
+        _validate_office_archive(path, "invalid_xlsx")
+        parts, warnings, total_rows, visible_sheets, truncated = _read_workbook(
+            path, data_only=True)
+    except ExtractionError:
+        raise
+    except Exception as exc:
+        raise ExtractionError("invalid_xlsx", "Không mở được file Excel.",
+                              "Mở file bằng Excel/Google Sheets rồi lưu lại thành .xlsx.") from exc
+
+    if not any(part.strip() for part in parts):
+        try:
+            parts, warnings, total_rows, visible_sheets, truncated = _read_workbook(
+                path, data_only=False)
+            if any(part.strip() for part in parts):
+                warnings.append(
+                    "File chưa lưu sẵn giá trị công thức nên phải đọc công thức thô; "
+                    "mở file bằng Excel/Google Sheets rồi lưu lại để bot đọc được số liệu thật.")
+        except Exception:
+            pass
 
     if truncated and not any("giới hạn" in warning for warning in warnings):
         warnings.append(
@@ -903,6 +996,58 @@ def _chunk_locator(segment: _SourceSegment, content: str, source_format: str):
     return f"{segment.source_locator};rows:{min(rows)}-{max(rows)}"
 
 
+def context_header(title: str, doc_type: str, client_name: str | None = None) -> str:
+    """Dòng DANH TÍNH gắn vào đầu mỗi đoạn TRƯỚC khi tạo vector.
+
+    Đoạn cắt rời khỏi file không tự biết nó là của ai: 'tổng số lao động: 02'
+    trong hồ sơ đăng ký doanh nghiệp CỦA KHÁCH đọc y hệt số liệu của chính HDS.
+    Nhúng danh tính vào nội dung được embedding có hai tác dụng: câu hỏi về
+    'công ty tôi' bớt khớp nhầm với hồ sơ khách, và khi đoạn được trích dẫn thì
+    cả model lẫn người đọc thấy ngay nó thuộc hồ sơ nào.
+    """
+    try:
+        from app.company_context import DOC_TYPE_VN
+    except Exception:
+        DOC_TYPE_VN = {}
+    bits = [f"Tài liệu: {title}"] if title else []
+    if client_name:
+        bits.append(f"hồ sơ khách hàng — {client_name}")
+    elif doc_type == "ho_so_ns":
+        bits.append("hồ sơ nhân sự của công ty luật HDS")
+    else:
+        label = DOC_TYPE_VN.get(doc_type or "")
+        if label and doc_type != "other":
+            bits.append(label)
+    return f"[{' | '.join(bits)}]" if bits else ""
+
+
+def apply_context_headers(pieces, title, doc_type, client_name=None):
+    """Gắn dòng danh tính vào từng đoạn. Đoạn LUẬT giữ nguyên — chúng đã tự
+    mang số hiệu văn bản + Chương/Điều trong nội dung (chunk_law_structured)."""
+    if doc_type == "law":
+        return pieces
+    header = context_header(title, doc_type, client_name)
+    if not header:
+        return pieces
+    for piece in pieces:
+        piece.content = f"{header}\n{piece.content}"
+    return pieces
+
+
+def client_display_name(client_id):
+    """Tên khách cho dòng danh tính; None khi tài liệu không thuộc khách nào."""
+    if not client_id:
+        return None
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT name FROM clients WHERE id=%s", (client_id,))
+                row = cur.fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
 def split_document_with_metadata(extraction: ExtractionResult, doc_type):
     """Chia đoạn nhưng không làm mất trang/mục/sheet dùng cho trích dẫn chính xác."""
     output = []
@@ -950,6 +1095,8 @@ def ingest_file(path: Path, doc_type="other", access_level="internal", client_id
     if not pieces:
         print("  [BỎ QUA] không chia được đoạn.")
         return None
+    pieces = apply_context_headers(pieces, path.stem, doc_type,
+                                   client_display_name(client_id))
     print(f"  {len(text)} ký tự → {len(pieces)} đoạn, đang tạo vector...")
     vecs = embed([piece.content for piece in pieces])
     print("  Đang tạo tóm tắt...")

@@ -66,6 +66,91 @@ class IngestExtractionTests(unittest.TestCase):
         self.assertEqual("Hợp đồng", chunks[0].section_title)
         self.assertIn("sheet:Hợp đồng;rows:2-2", chunks[0].source_locator)
 
+    def test_xlsx_title_rows_do_not_become_column_headers(self):
+        """Lỗi thực tế 19/08/2026: báo cáo mở đầu bằng dòng tên báo cáo nên dòng
+        tên cột thật bị đẩy xuống thành dữ liệu, mọi dòng sau mang tên cột vô
+        nghĩa 'Cột 3', 'Cột 8' — đoạn tra cứu được mà không đọc được."""
+        from openpyxl import Workbook
+
+        path = self.root / "bao-cao.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "BC Tháng 8"
+        sheet.append(["BÁO CÁO CÔNG VIỆC THÁNG 08 NĂM 2025"])
+        sheet.append([])
+        sheet.append(["Số", "Ngày", "Phí dịch vụ"])
+        sheet.append([1, "27/08/2025", 15600000])
+        workbook.save(path)
+
+        result = extract_text_with_metadata(path)
+
+        self.assertIn("[Cột] Số | Ngày | Phí dịch vụ", result.text)
+        self.assertIn("Phí dịch vụ: 15600000", result.text)
+        self.assertNotIn("Cột 2:", result.text)
+        # Dòng tên báo cáo vẫn được giữ làm ngữ cảnh, không biến thành tên cột.
+        self.assertIn("BÁO CÁO CÔNG VIỆC THÁNG 08 NĂM 2025", result.text)
+        self.assertNotIn("[Cột] BÁO CÁO", result.text)
+
+    def test_xlsx_formula_without_cached_value_is_not_learned_as_formula(self):
+        """data_only=True: đọc GIÁ TRỊ đã tính, không nhồi '=G14*8%' vào kho.
+        File sinh bằng thư viện chưa có giá trị cache thì ô công thức bị bỏ,
+        các ô giá trị thật vẫn được học."""
+        from openpyxl import Workbook
+
+        path = self.root / "cong-thuc.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Doanh thu", "Thuế"])
+        sheet.append([26000000, "=A2*8%"])
+        workbook.save(path)
+
+        result = extract_text_with_metadata(path)
+
+        self.assertIn("Doanh thu: 26000000", result.text)
+        self.assertNotIn("=A2*8%", result.text)
+
+    def test_xlsx_all_formula_file_falls_back_with_warning(self):
+        """File toàn công thức (không có giá trị cache) thì đọc công thức thô
+        kèm cảnh báo — còn hơn mất trắng nội dung."""
+        from openpyxl import Workbook
+
+        path = self.root / "toan-cong-thuc.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["=1+1", "=2+2"])
+        workbook.save(path)
+
+        result = extract_text_with_metadata(path)
+
+        self.assertIn("=1+1", result.text)
+        self.assertTrue(any("giá trị công thức" in warning
+                            for warning in result.warnings))
+
+    def test_context_header_marks_client_ownership(self):
+        """Đoạn thuộc hồ sơ khách phải tự mang tên khách trong nội dung được
+        embedding — 'Giấy đề nghị' của khách không được đọc y hệt hồ sơ HDS."""
+        from app.ingest import ChunkPiece, apply_context_headers, context_header
+
+        header = context_header("1. Giấy đề nghị", "filing", "CÔNG TY TNHH AGENT PRO")
+        self.assertIn("hồ sơ khách hàng — CÔNG TY TNHH AGENT PRO", header)
+
+        pieces = apply_context_headers(
+            [ChunkPiece(content="Tổng số lao động (dự kiến): 02 người.")],
+            "1. Giấy đề nghị", "filing", "CÔNG TY TNHH AGENT PRO")
+        self.assertTrue(pieces[0].content.startswith("[Tài liệu: 1. Giấy đề nghị"))
+        self.assertIn("Tổng số lao động", pieces[0].content)
+
+        hr = apply_context_headers(
+            [ChunkPiece(content="Hợp đồng lao động số 45HDLD-HDS.")],
+            "45HDLD-HDS", "ho_so_ns", None)
+        self.assertIn("hồ sơ nhân sự của công ty luật HDS", hr[0].content)
+
+        # Đoạn LUẬT đã tự mang số hiệu văn bản — giữ nguyên, không gắn thêm.
+        law = apply_context_headers(
+            [ChunkPiece(content="[Bộ luật Lao động số 45/2019/QH14 — Điều 35]\nNội dung.")],
+            "45_2019_QH14", "law", None)
+        self.assertFalse(law[0].content.startswith("[Tài liệu:"))
+
     def test_corrupt_docx_has_stable_error_code(self):
         path = self.root / "hong.docx"
         path.write_bytes(b"not-a-docx")
@@ -136,6 +221,21 @@ class AutoLearnSafetyTests(unittest.TestCase):
         self.assertFalse(auto_approve_from_env({"AUTO_LEARN_AUTO_APPROVE": "invalid"}))
         self.assertTrue(auto_approve_from_env({"AUTO_LEARN_REVIEW": "0"}))
         self.assertFalse(auto_approve_from_env({"AUTO_LEARN_REVIEW": "1"}))
+
+    def test_matter_code_candidates_support_hds_numeric_convention(self):
+        """Cây Drive thật đặt tên dự án bằng số ('1572. Thành lập…'), có khi kèm
+        ngày phía trước ('160426. 1593. …'). Bot phải bắt được các mã đó, ưu
+        tiên cụm số đứng sát tên, và không vớ số trong thân tên."""
+        from app.auto_learn import _matter_code_candidates
+
+        self.assertEqual(["M-2026-001"],
+                         _matter_code_candidates("[M-2026-001] Tái cấu trúc vốn"))
+        self.assertEqual(["1572"], _matter_code_candidates(
+            "1572. Thành lập mới Công ty TNHH Học viện Ngôn ngữ Hoa Hạ"))
+        self.assertEqual(["1593", "160426"], _matter_code_candidates(
+            "160426. 1593. Thành lập mới CÔNG TY TNHH AGENT PRO"))
+        self.assertEqual([], _matter_code_candidates(
+            "Mua bán sáp nhập 2026 - CTCP Đại Hữu"))
 
     def test_google_native_file_has_stable_modified_time_fingerprint(self):
         info = {"modifiedTime": "2026-08-19T12:00:00.000Z"}

@@ -161,6 +161,16 @@ DEFAULTS = {
                 "công nợ": "cong_no",
                 "công nợ - tài chính": "cong_no",
                 "tài chính": "cong_no",
+                # Quy ước thư mục DỰ ÁN thực tế của HDS (xem cây Drive tháng
+                # 08/2026): mỗi vụ có 5 thư mục con cố định. Không map thì mọi
+                # file rơi về ho_so_kh và khối "FILE TỔNG HỢP THÔNG TIN KHÁCH"
+                # bị giấy ủy quyền/hướng dẫn ký chen mất chỗ của file tổng hợp
+                # thật (xem company_context._client_lines ghim theo ho_so_kh).
+                "tài liệu khách hàng cung cấp": "other",
+                "hồ sơ soạn thảo": "filing",
+                "hồ sơ hoàn thiện": "filing",
+                "kết quả vụ việc": "filing",
+                "hợp đồng dịch vụ": "contract",
             },
         },
         ensure_ascii=False,

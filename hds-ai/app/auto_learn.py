@@ -51,6 +51,7 @@ from dotenv import load_dotenv
 
 from app import db, settings
 from app.ingest import (ExtractionError, MAX_SOURCE_BYTES, SUPPORTED_EXTENSIONS,
+                        apply_context_headers, client_display_name,
                         extract_text_with_metadata, safe_path_component,
                         split_document_with_metadata)
 from app.models import embed, summarize
@@ -132,12 +133,6 @@ def _norm(name: str) -> str:
     return s
 
 
-def _extract_code(name: str) -> str | None:
-    """Lấy mã trong [ ] ở đầu tên thư mục, vd '[SUNGROUP] Tập đoàn SunGroup' → SUNGROUP."""
-    m = RE_CODE.match(name or "")
-    return m.group(1).strip() if m else None
-
-
 def _client_code_and_name(folder: str):
     """Tách (mã khách, tên khách) từ tên thư mục khách. Hỗ trợ hai kiểu:
 
@@ -155,6 +150,34 @@ def _client_code_and_name(folder: str):
     if m:
         return m.group(1), m.group(2).strip()
     return None, None
+
+
+def _matter_code_candidates(segment: str) -> list[str]:
+    """Các mã vụ việc KHẢ DĨ trong tên một thư mục dự án, xếp theo độ ưu tiên.
+
+    HDS đặt tên dự án theo quy ước số giống mã khách — '1572. Thành lập mới…',
+    thậm chí kèm ngày phía trước: '160426. 1593. Thành lập mới…'. Kiểu ngoặc
+    vuông '[M-2026-001] Tên' vẫn được nhận như cũ.
+
+    Chỉ lấy các CỤM SỐ NỐI TIẾP NHAU Ở ĐẦU TÊN (không quét số trong thân tên,
+    tránh vớ nhầm năm/tỷ lệ), và cụm đứng SÁT TÊN xếp trước — trong
+    '160426. 1593. Thành lập' thì 1593 là mã, 160426 là ngày. An toàn vì nơi
+    gọi chỉ gắn khi hệ thống THẬT SỰ có vụ việc mang mã đó của đúng khách này.
+    """
+    out: list[str] = []
+    m = RE_CODE.match(segment or "")
+    if m:
+        out.append(m.group(1).strip().upper())
+    numbers: list[str] = []
+    rest = (segment or "").strip()
+    while True:
+        m = re.match(r"^(\d{3,})\s*[.)\-–]\s*", rest)
+        if not m:
+            break
+        numbers.append(m.group(1))
+        rest = rest[m.end():]
+    out.extend(reversed(numbers))
+    return out
 
 
 def _load_map():
@@ -259,17 +282,21 @@ def resolve_labels(parts, create_missing_client=True):
             elif key in cats:
                 doc_type = cats[key]["doc_type"]
 
-        # Vụ việc: thư mục dạng [MÃ_VỤ_VIỆC] Tên → tự gắn matter_id
+        # Vụ việc: '[MÃ] Tên' hoặc quy ước số '1572. Tên' / '160426. 1593. Tên'
+        # → tự gắn matter_id. Chỉ gắn khi mã khớp vụ việc CÓ THẬT của đúng
+        # khách này, nên tên thư mục không theo quy ước cũng không gắn nhầm.
         matter_id = None
         for seg in parts[2:]:
-            mcode = _extract_code(seg)
-            if not mcode:
+            candidates = _matter_code_candidates(seg)
+            if not candidates:
                 continue
             with db.session(role="internal", admin=True) as conn:
                 with conn.cursor() as cur:
                     cur.execute("""SELECT id FROM matters
-                                    WHERE upper(code)=upper(%s) AND client_id=%s""",
-                                (mcode, client_id))
+                                    WHERE upper(code)=ANY(%s) AND client_id=%s
+                                    ORDER BY array_position(%s::text[], upper(code))
+                                    LIMIT 1""",
+                                (candidates, client_id, candidates))
                     mrow = cur.fetchone()
             if mrow:
                 matter_id = mrow[0]
@@ -380,6 +407,10 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
         diagnostics["error"] = error.as_dict()
         print(f"     [BỎ QUA] [{error.code}] {error}")
         return False
+    # Danh tính (tên tài liệu + loại + khách sở hữu) nhúng thẳng vào nội dung
+    # được embedding — xem chú thích ở ingest.context_header.
+    pieces = apply_context_headers(pieces, path.stem, labels["doc_type"],
+                                   client_display_name(labels.get("client_id")))
     checksum = drive_md5 or hashlib.md5(text.encode()).hexdigest()
     should_approve = AUTO_APPROVE and extraction.status == "ok"
     diagnostics["approved"] = should_approve
