@@ -1271,11 +1271,15 @@ async function mockChatStream(payload, onEvent) {
   await wait(900); // mô phỏng giai đoạn đọc tài liệu — hiện chỉ báo "đang đọc…"
 
   const text =
-    `Với câu hỏi "${payload.question}": theo Điều 12 Luật Doanh nghiệp 2020 ` +
-    'và Nghị định 01/2021/NĐ-CP, doanh nghiệp phải thông báo thay đổi tới Cơ quan ' +
-    'Đăng ký Kinh doanh trong thời hạn luật định [Nguồn 1]. Cần rà soát biên bản họp ' +
-    'và quyết định của Hội đồng thành viên trước khi nộp [Nguồn 2]. ' +
-    'Đây là bản nháp — luật sư phụ trách cần kiểm chứng lại trước khi gửi khách.';
+    `Với câu hỏi "${payload.question}": doanh nghiệp **phải thông báo thay đổi** ` +
+    'tới Cơ quan Đăng ký Kinh doanh trong thời hạn luật định [Nguồn 1].\n\n' +
+    '**Căn cứ pháp lý:**\n' +
+    '- khoản 1 Điều 12 Luật Doanh nghiệp số 59/2020/QH14 [Nguồn 1]\n' +
+    '- Điều 15 Nghị định 01/2021/NĐ-CP về Đăng ký Doanh nghiệp [Nguồn 2]\n\n' +
+    '**Lưu ý thực tiễn:** cần rà soát biên bản họp và quyết định của Hội đồng ' +
+    'thành viên trước khi nộp hồ sơ [Nguồn 2].\n\n' +
+    '---\n' +
+    '*Đây là bản nháp tham khảo — luật sư phụ trách kiểm chứng lại trước khi gửi khách.*';
 
   const words = text.split(' ');
   for (let i = 0; i < words.length; i += 1) {

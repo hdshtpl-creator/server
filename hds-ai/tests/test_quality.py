@@ -90,13 +90,19 @@ class GroundingTests(unittest.TestCase):
         self.assertTrue(text.strip(), "Phải thay bằng lời hướng dẫn, không trả rỗng")
 
     def test_uncited_long_block_is_hidden_not_marked_verified(self):
+        uncited = ("Đây là một đoạn khẳng định rất dài nhưng hoàn toàn không có "
+                   "nguồn kiểm chứng đi kèm nên không được phép hiển thị như sự thật.")
         text, status = rag.validate_grounding(
-            "Thông tin có căn cứ. [Nguồn 1]\n\n"
-            "Đây là một đoạn khẳng định rất dài nhưng hoàn toàn không có nguồn "
-            "kiểm chứng đi kèm nên không được phép hiển thị như sự thật.",
+            "Thông tin có căn cứ. [Nguồn 1]\n\n" + uncited,
             self.chunks, "grounded", True)
         self.assertEqual(status, "partial")
-        self.assertIn("Đã ẩn đoạn", text)
+        # Tính chất phải giữ: nội dung vô căn cứ biến mất, phần có nguồn còn
+        # nguyên, và người đọc được BÁO là có đoạn bị lược (một lần, ở cuối —
+        # không rải placeholder vào giữa bài).
+        self.assertNotIn(uncited, text)
+        self.assertIn("[Nguồn 1]", text)
+        self.assertIn("Đã lược", text)
+        self.assertEqual(text.count("Đã lược"), 1)
         self.assertNotIn("hoàn toàn không có nguồn", text)
 
     def test_structured_answer_does_not_require_document_citation(self):

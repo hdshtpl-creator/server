@@ -596,14 +596,25 @@ def validate_grounding(text, chunks, answer_mode="grounded", strict=True):
                     and not _CITATION_RE.search(block)):
                 unsupported.append(index)
         if unsupported and strict and answer_mode == "grounded":
+            # BỎ HẲN khối không căn cứ thay vì chèn "[Đã ẩn đoạn…]" vào từng
+            # chỗ. Ba placeholder chen giữa nội dung đọc như tài liệu bị kiểm
+            # duyệt nham nhở — người dùng mất niềm tin vào cả phần ĐÚNG còn
+            # lại. Một ghi chú gọn ở cuối nói đủ điều cần nói: có N đoạn đã
+            # lược, và vì sao.
             for index in unsupported:
                 heading = "\n".join(
                     line for line in blocks[index].splitlines()
                     if line.lstrip().startswith("#")
                 )
-                hidden = "> [Đã ẩn đoạn chưa có trích dẫn kiểm chứng.]"
-                blocks[index] = f"{heading}\n{hidden}".strip() if heading else hidden
-            return "".join(blocks).strip(), "partial"
+                blocks[index] = heading.strip()
+                # Nuốt luôn dấu ngắt đoạn kề sau để không còn khoảng trắng kép.
+                if index + 1 < len(blocks):
+                    blocks[index + 1] = "" if not heading else "\n\n"
+            note = (f"\n\n---\n*Đã lược {len(unsupported)} đoạn chưa đối chiếu "
+                    "được với nguồn — mở **Nguồn trích dẫn** để tự kiểm tra, "
+                    "hoặc hỏi cụ thể hơn để mình tìm thêm căn cứ.*")
+            cleaned_out = re.sub(r"\n{3,}", "\n\n", "".join(blocks)).strip()
+            return cleaned_out + note, "partial"
         return cleaned, "partial" if unsupported else "verified"
     if not strict or answer_mode == "mixed":
         return cleaned, "uncited"

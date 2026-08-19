@@ -57,6 +57,12 @@ c_head "KHÔNG bị xoá:"
 echo "  · Toàn bộ tệp gốc trên Google Drive"
 echo "  · Lịch sử hội thoại, ghi chú, bản nháp đã soạn"
 echo "  · Khách hàng, vụ việc, nhân sự, hoá đơn, tài khoản người dùng"
+echo "  · Trạng thái đã duyệt: script tự ghi nhớ rồi trả lại sau khi học xong,"
+echo "    nên bạn KHÔNG phải ngồi duyệt tay lại từ đầu."
+
+c_head "Trong lúc chạy:"
+echo "  Bot sẽ TẠM THỜI không tra cứu được tài liệu nào cho tới khi học xong."
+echo "  Nên chạy ngoài giờ làm việc."
 
 printf '\n\033[1;33mGõ đúng chữ  XOA  rồi Enter để tiếp tục (Enter suông = huỷ): \033[0m'
 read -r CONFIRM
@@ -83,6 +89,26 @@ fi
 # messages.promoted_doc_id không có ON DELETE nên phải gỡ tham chiếu trước,
 # nếu không lệnh DELETE sẽ bị khoá ngoại chặn lại. Làm trong MỘT giao dịch:
 # hỏng giữa chừng thì quay về nguyên trạng, không để kho nửa vời.
+# --- Giữ lại quyết định duyệt của con người ---------------------------
+# Học lại đưa MỌI tài liệu vào hàng chờ duyệt (AUTO_LEARN_AUTO_APPROVE mặc định
+# tắt). Không giữ gì thì sau khi chạy xong bot mất sạch tài liệu dùng được, và
+# người ta phải ngồi duyệt tay lại từng file — trong khi chính họ đã duyệt
+# những file đó rồi, từ cùng thư mục Drive, cùng nhãn.
+#
+# Nhãn bám theo cấu trúc thư mục nên học lại cho ra nhãn y hệt; thứ duy nhất
+# đáng giữ là con dấu "đã có người xem và đồng ý". Ghi ra bảng thật (không phải
+# temp) vì nó phải sống qua nhiều phiên psql và cả lượt chạy python ở giữa.
+c_head "Ghi nhớ trạng thái duyệt hiện tại..."
+psql_in <<'SQL'
+DROP TABLE IF EXISTS relearn_approvals;
+CREATE TABLE relearn_approvals AS
+  SELECT drive_file_id, approved, label_verified
+    FROM documents
+   WHERE drive_file_id IS NOT NULL AND (approved OR label_verified);
+SQL
+KEPT="$(q 'SELECT count(*) FROM relearn_approvals')"
+c_ok "Đã ghi nhớ ${KEPT:-0} tài liệu từng được duyệt."
+
 c_head "Đang xoá kho đã học..."
 psql_in <<'SQL'
 BEGIN;
@@ -119,6 +145,27 @@ if [ -x "$(dirname "$0")/auto-learn.sh" ]; then
 else
   cd "$BACKEND_DIR" && "$BACKEND_DIR/.venv/bin/python" -m app.auto_learn
 fi
+
+# --- Trả lại con dấu duyệt --------------------------------------------
+# Chỉ trả cho tài liệu đọc SẠCH lần này. File nào lần này bị cảnh báo trích xuất
+# (OCR mờ, bảng bị cắt) thì phải để người xem lại, dù trước đây đã duyệt — nội
+# dung đã khác đi thì con dấu cũ không còn nói lên điều gì.
+c_head "Trả lại trạng thái duyệt cho tài liệu đã được duyệt trước đây..."
+psql_in <<'SQL'
+UPDATE documents d
+   SET approved       = d.approved OR r.approved,
+       label_verified = d.label_verified OR r.label_verified,
+       updated_at     = now()
+  FROM relearn_approvals r
+ WHERE d.drive_file_id = r.drive_file_id
+   AND coalesce(d.extraction_status,'ready') = 'ready';
+DROP TABLE IF EXISTS relearn_approvals;
+SQL
+
+USABLE="$(q "SELECT count(*) FROM documents WHERE approved AND label_verified AND coalesce(active,true) AND coalesce(extraction_status,'ready')='ready'")"
+PENDING="$(q "SELECT count(*) FROM documents WHERE NOT (approved AND label_verified)")"
+c_ok "Bot dùng được ${USABLE:-0} tài liệu."
+[ "${PENDING:-0}" != "0" ] && printf '\033[33m  ! %s tài liệu đang chờ duyệt — mở Quản trị → Duyệt nhãn tài liệu.\033[0m\n' "$PENDING"
 
 c_head "Xong. Kiểm tra lại kho:"
 echo "  bash deploy/kiem-tra-vector.sh"

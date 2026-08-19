@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { MessageMarkdown } from './MessageMarkdown';
 import type { ChatMessage, ChatTimings } from '../../types';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
@@ -111,6 +112,31 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
   // để câu trả lời gọn gàng chứ không bị danh sách nguồn đẩy dài màn hình.
   const [showSources, setShowSources] = useState(false);
   const [showTiming, setShowTiming] = useState(false);
+  // Nguồn đang được soi (bấm chip số trong câu trả lời) — sáng viền vài giây
+  // để mắt bắt được đúng nguồn giữa danh sách.
+  const [focusSource, setFocusSource] = useState<number | null>(null);
+
+  const handleCitationClick = (n: number) => {
+    setShowSources(true);
+    setFocusSource(n);
+    // requestAnimationFrame: chờ panel nguồn render xong rồi mới cuộn tới.
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`msg-${message.id}-src-${n}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+    window.setTimeout(() => setFocusSource(null), 2500);
+  };
+
+  const validSources = React.useMemo(
+    () =>
+      new Set(
+        (message.sources || [])
+          .map((s) => s.n)
+          .filter((n): n is number => typeof n === 'number'),
+      ),
+    [message.sources],
+  );
 
   const canReport = !isUser && !isError && typeof message.serverMessageId === 'number';
   // Chỉ cho ghi chú / báo cáo khi câu trả lời đã viết xong — lưu bản dở dang
@@ -356,13 +382,27 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             </div>
           ) : (
             <div
-              className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${
+              className={
                 isError
-                  ? 'text-red-800 dark:text-red-200 font-medium'
+                  ? 'text-sm leading-relaxed whitespace-pre-wrap break-words text-red-800 dark:text-red-200 font-medium'
                   : 'text-slate-800 dark:text-slate-200'
-              }`}
+              }
             >
-              {message.text}
+              {isUser || isError ? (
+                <span className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+                  {message.text}
+                </span>
+              ) : (
+                /* Bot: render markdown + chip nguồn bấm được, kiểu NotebookLM.
+                   Trong lúc streaming vẫn render được — mỗi delta chỉ là chuỗi
+                   dài thêm, renderer parse lại từ đầu (vài nghìn ký tự, không
+                   đáng kể). */
+                <MessageMarkdown
+                  text={message.text}
+                  onCitationClick={handleCitationClick}
+                  validSources={validSources}
+                />
+              )}
               {/* Con trỏ nhấp nháy trong lúc chữ còn đang chảy về */}
               {message.isStreaming && (
                 <span
@@ -405,7 +445,12 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                     return (
                       <li
                         key={`${src.doc_id ?? 'src'}-${idx}`}
-                        className="bg-hds-soft dark:bg-slate-800/50 border border-blue-100 dark:border-slate-700 rounded-lg p-2.5 text-xs flex items-start justify-between gap-3"
+                        id={typeof src.n === 'number' ? `msg-${message.id}-src-${src.n}` : undefined}
+                        className={`bg-hds-soft dark:bg-slate-800/50 border rounded-lg p-2.5 text-xs flex items-start justify-between gap-3 transition-all ${
+                          focusSource != null && src.n === focusSource
+                            ? 'border-hds-gold ring-2 ring-hds-gold/40'
+                            : 'border-blue-100 dark:border-slate-700'
+                        }`}
                       >
                         <div className="flex items-start gap-2 min-w-0">
                           <BookOpen className="w-3.5 h-3.5 text-hds-navy dark:text-blue-300 shrink-0 mt-0.5" />

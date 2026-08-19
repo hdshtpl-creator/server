@@ -10,6 +10,7 @@
 set -euo pipefail
 
 c_ok()   { printf '\033[32m  ✓ %s\033[0m\n' "$*"; }
+c_warn() { printf '\033[33m  ! %s\033[0m\n' "$*"; }
 c_info() { printf '\033[36m» %s\033[0m\n' "$*"; }
 die()    { printf '\033[31m  ✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -31,6 +32,21 @@ fi
 c_info "1/5  Cập nhật thư viện Python"
 run_as "cd '$BACKEND_DIR' && .venv/bin/pip install -q -r requirements.txt"
 c_ok "Xong"
+
+# Công cụ đọc tài liệu ở tầng hệ điều hành. setup.sh cài chúng cho máy MỚI,
+# nhưng máy đã cài từ bản trước không tự có — update.sh phải bù, nếu không mọi
+# PDF scan và file .doc cứ âm thầm rơi vào danh sách "không học được".
+NEED_PKGS=""
+command -v tesseract >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS tesseract-ocr"
+tesseract --list-langs 2>/dev/null | grep -q '^vie$' || NEED_PKGS="$NEED_PKGS tesseract-ocr-vie"
+command -v pdftoppm >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS poppler-utils"
+command -v soffice >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS libreoffice-writer"
+if [ -n "$NEED_PKGS" ]; then
+  c_info "Cài công cụ đọc tài liệu còn thiếu:$NEED_PKGS"
+  apt-get update -qq && apt-get install -y -qq $NEED_PKGS >/dev/null \
+    && c_ok "Đã cài$NEED_PKGS" \
+    || c_warn "Không cài được$NEED_PKGS — PDF scan/.doc sẽ không học được"
+fi
 
 c_info "2/5  Cập nhật schema (bắt buộc chạy trước code mới)"
 [ -f "$BACKEND_DIR/.env" ] || die "Thiếu $BACKEND_DIR/.env — không thể migrate an toàn"
