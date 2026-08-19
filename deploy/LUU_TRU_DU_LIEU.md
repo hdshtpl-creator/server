@@ -27,7 +27,7 @@ flowchart TB
 
     EXT["<b>Trích văn bản</b><br/>pdfplumber · python-docx<br/>OCR tesseract-vie cho bản scan"]
     EXT --> CHUNK
-    CHUNK["<b>Chia đoạn</b><br/>700 từ, chồng lấn 100<br/>văn bản luật: cắt theo Điều"]
+    CHUNK["<b>Chia đoạn</b><br/>theo tiêu đề mục &amp; câu trọn vẹn, ~320 từ<br/>văn bản luật: cắt theo Điều"]
     CHUNK --> EMB
     PROMO["<b>Nạp câu trả lời đã duyệt</b><br/>HỎI + TRẢ LỜI → 1 tài liệu"]
     PROMO --> EMB

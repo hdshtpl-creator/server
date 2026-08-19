@@ -313,35 +313,56 @@ def resolve_labels(parts, create_missing_client=True):
         if key in cats:
             hit = cats[key]
     if hit:
-        return {"doc_type": hit.get("doc_type", "other"),
-                "access_level": hit.get("access_level", "internal"),
-                "client_id": None, "department_id": None, "matter_id": None}, None
+        labels = {"doc_type": hit.get("doc_type", "other"),
+                  "access_level": hit.get("access_level", "internal"),
+                  "client_id": None, "department_id": None, "matter_id": None}
+        if labels["doc_type"] == "ho_so_ns":
+            # Thư mục con dưới "8. HỒ SƠ NHÂN SỰ" là TÊN NGƯỜI ("Ngân", "Mai").
+            # Tên file lại chung chung ("Sơ yếu lý lịch.pdf") nên ba nhân sự là
+            # ba tài liệu trùng tên — nguồn trích dẫn không biết của ai, và
+            # dòng danh tính nhúng vào embedding cũng không mang tên người.
+            # Giữ lại thư mục con (đoạn sâu nhất KHÔNG phải nhãn) để learn_one
+            # ghép vào tiêu đề: "Ngân — Sơ yếu lý lịch".
+            for seg in parts[1:]:
+                key = _norm(seg)
+                if key not in cats and key not in subs:
+                    labels["title_context"] = seg.strip()
+        return labels, None
 
     return None, (f"thư mục '{parts[0]}' chưa có trong bản đồ nhãn "
                   f"(thêm ở web: Cài đặt AI → Bản đồ thư mục Drive)")
 
 
 def existing(drive_id):
-    """(doc_id, checksum, doc_type, access_level, client_id, department_id, matter_id)
-    của tài liệu đã học từ file Drive này, hoặc None."""
+    """(doc_id, checksum, doc_type, access_level, client_id, department_id,
+    matter_id, approved, label_verified, title) của tài liệu đã học từ file
+    Drive này, hoặc None. Cột mới nằm CUỐI để chỗ khác dùng row[0..6] không
+    xê dịch."""
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT id, checksum, doc_type, access_level,
-                                  client_id, department_id, matter_id
+                                  client_id, department_id, matter_id,
+                                  approved, label_verified, title
                              FROM documents WHERE drive_file_id=%s""", (drive_id,))
             return cur.fetchone()
 
 
-def relabel(doc_id, labels):
+def relabel(doc_id, labels, title=None):
     """Cập nhật NHÃN cho tài liệu mà không nạp lại nội dung (file không đổi, chỉ
-    đổi khách/loại). Trigger sync_chunk_labels tự lan nhãn xuống các chunk."""
+    đổi khách/loại). Trigger sync_chunk_labels tự lan nhãn xuống các chunk.
+
+    ``title``: tiêu đề hiển thị mới (vd hồ sơ nhân sự học trước khi tiêu đề
+    mang tên người). Chỉ đổi phần hiển thị/nguồn trích dẫn — vector đã lưu giữ
+    nguyên, muốn danh tính vào cả embedding thì học lại file."""
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""UPDATE documents SET doc_type=%s, access_level=%s, client_id=%s,
-                           department_id=%s, matter_id=%s, updated_at=now() WHERE id=%s""",
+                           department_id=%s, matter_id=%s,
+                           title=coalesce(%s, title), updated_at=now() WHERE id=%s""",
                         (labels["doc_type"], labels["access_level"], labels["client_id"],
-                         labels["department_id"], labels.get("matter_id"), doc_id))
-        db.audit(conn, None, "auto_relabel", "documents", doc_id, {"labels": labels})
+                         labels["department_id"], labels.get("matter_id"), title, doc_id))
+        db.audit(conn, None, "auto_relabel", "documents", doc_id,
+                 {"labels": labels, **({"title": title} if title else {})})
 
 
 def download(service, f, parts):
@@ -381,8 +402,24 @@ def download(service, f, parts):
     return out
 
 
-def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=None):
-    """Học một file; ``diagnostics`` nhận method/warnings/lỗi mà không phá API bool cũ."""
+def compose_title(stem: str, title_context=None) -> str:
+    """Tiêu đề hiển thị: 'Ngân — Sơ yếu lý lịch' khi biết thư mục con tên người.
+
+    Không ghép trùng: file người dùng đã tự đặt 'Ngân. KPI quý.xlsx' thì thôi.
+    """
+    ctx = (title_context or "").strip()
+    if not ctx or _norm(ctx) in _norm(stem):
+        return stem
+    return f"{ctx} — {stem}"
+
+
+def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=None,
+              prev_approved=False):
+    """Học một file; ``diagnostics`` nhận method/warnings/lỗi mà không phá API bool cũ.
+
+    ``prev_approved``: bản cũ của CHÍNH file này đã được duyệt và đang phục vụ
+    trả lời. Truyền vào để bản thay thế kế thừa trạng thái duyệt (xem chú thích
+    tại chỗ tính ``should_approve``)."""
     diagnostics = diagnostics if diagnostics is not None else {}
     try:
         extraction = extract_text_with_metadata(path)
@@ -408,14 +445,27 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
         print(f"     [BỎ QUA] [{error.code}] {error}")
         return False
     # Danh tính (tên tài liệu + loại + khách sở hữu) nhúng thẳng vào nội dung
-    # được embedding — xem chú thích ở ingest.context_header.
-    pieces = apply_context_headers(pieces, path.stem, labels["doc_type"],
+    # được embedding — xem chú thích ở ingest.context_header. Tiêu đề mang cả
+    # thư mục con tên người ("Ngân — Sơ yếu lý lịch") để ba hồ sơ trùng tên
+    # file phân biệt được ở nguồn trích dẫn LẪN trong vector.
+    title = compose_title(path.stem, labels.get("title_context"))
+    pieces = apply_context_headers(pieces, title, labels["doc_type"],
                                    client_display_name(labels.get("client_id")))
     checksum = drive_md5 or hashlib.md5(text.encode()).hexdigest()
-    should_approve = AUTO_APPROVE and extraction.status == "ok"
+    # Bản cũ ĐÃ DUYỆT thì bản thay thế kế thừa trạng thái duyệt — miễn là lần
+    # trích xuất này sạch. Trước đây sửa một file trên Drive là bản đã duyệt bị
+    # XÓA và bản mới rơi về hàng chờ (khi chưa bật tự duyệt): tài liệu đang
+    # phục vụ trả lời lặng lẽ biến mất, không ai được báo. Đúng ca 19/08/2026 —
+    # "Sơ yếu lý lịch.pdf" của Ngân đang trả lời được, file bị đụng trên Drive,
+    # bot chỉ còn tìm thấy sơ yếu của người khác với 37% liên quan.
+    # Bản mới có CẢNH BÁO trích xuất thì vẫn chờ duyệt như cũ (nội dung nghi
+    # ngờ không được tự thay nội dung đã duyệt), nhưng caller sẽ báo to việc
+    # "tài liệu đang dùng bị gỡ" thay vì im lặng.
+    should_approve = (AUTO_APPROVE or prev_approved) and extraction.status == "ok"
     diagnostics["approved"] = should_approve
+    diagnostics["was_live"] = bool(prev_approved)
     vecs = embed([piece.content for piece in pieces])
-    summary = summarize(text, path.stem)
+    summary = summarize(text, title)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             source_version = 1
@@ -430,7 +480,7 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
                  client_id, department_id, matter_id, approved, label_verified, source_kind, summary,
                  extraction_status,extraction_error,source_version)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'drive',%s,%s,%s,%s) RETURNING id""",
-                (path.stem, str(path), drive_id, checksum,
+                (title, str(path), drive_id, checksum,
                  labels["doc_type"], labels["access_level"],
                  labels["client_id"], labels["department_id"], labels.get("matter_id"),
                  should_approve, should_approve, summary,
@@ -573,10 +623,19 @@ def run(dry_run=False):
             cur_labels = (row[2], row[3], row[4], row[5], row[6])
             new_labels = (labels["doc_type"], labels["access_level"], labels["client_id"],
                           labels["department_id"], labels.get("matter_id"))
-            if cur_labels != new_labels:
+            # Tiêu đề kỳ vọng có thể đã đổi dù nội dung y nguyên — hồ sơ nhân
+            # sự học từ trước khi tiêu đề mang tên người ("Sơ yếu lý lịch" →
+            # "Ngân — Sơ yếu lý lịch"). Cập nhật để nguồn trích dẫn phân biệt
+            # được ba hồ sơ trùng tên file của ba người.
+            wanted_title = compose_title(Path(f["name"]).stem,
+                                         labels.get("title_context"))
+            new_title = wanted_title if row[9] != wanted_title else None
+            if cur_labels != new_labels or new_title:
                 if not dry_run:
-                    relabel(row[0], labels)
-                print(f"   [GẮN LẠI] {f['name']}  ← {loc}: cập nhật nhãn (khách/loại)")
+                    relabel(row[0], labels, title=new_title)
+                why = ("cập nhật nhãn (khách/loại)" if cur_labels != new_labels
+                       else f"đổi tiêu đề → '{new_title}'")
+                print(f"   [GẮN LẠI] {f['name']}  ← {loc}: {why}")
                 updated_items.append({"name": f["name"], "location": loc,
                                       "doc_type": labels["doc_type"],
                                       "access_level": labels["access_level"]})
@@ -609,15 +668,27 @@ def run(dry_run=False):
                                       "code": "unsupported_format"})
                 continue
             extraction_info = {}
+            was_live = bool(row and row[7] and row[8])
             if learn_one(p, labels, f["id"], remote_fingerprint,
-                         replace_id=row[0] if row else None, diagnostics=extraction_info):
+                         replace_id=row[0] if row else None, diagnostics=extraction_info,
+                         prev_approved=was_live):
                 (updated_items if row else new_items).append(item_info)
                 if extraction_info.get("warnings"):
+                    requires_review = not extraction_info.get("approved", False)
+                    if was_live and requires_review:
+                        # Bản đã duyệt vừa bị thay bằng bản chờ duyệt — bot MẤT
+                        # tài liệu này cho tới khi admin duyệt lại. Phải nói to,
+                        # đừng để "tự nhiên mất" thêm lần nào nữa.
+                        print(f"     [GỠ KHỎI KHO] {f['name']}: bản đã duyệt bị thay "
+                              "bằng bản chờ duyệt (trích xuất có cảnh báo). Bot sẽ "
+                              "không dùng tài liệu này cho tới khi duyệt lại — "
+                              "vào Quản trị → Duyệt nhãn tài liệu.")
                     warning_items.append({
                         "name": f["name"], "location": loc,
                         "method": extraction_info.get("method"),
                         "warnings": extraction_info["warnings"],
-                        "requires_review": not extraction_info.get("approved", False),
+                        "requires_review": requires_review,
+                        "was_live": was_live,
                     })
                 # Học được rồi thì gỡ khỏi danh sách lỗi cũ (nếu có).
                 _clear_failure(f.get("id"))

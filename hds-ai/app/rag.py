@@ -51,6 +51,27 @@ def _tokens(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]+", _fold(text)) if len(t) > 1}
 
 
+def _or_tsquery(question: str) -> str | None:
+    """Chuỗi to_tsquery dạng 'sơ | yếu | ngân' cho lượt tìm từ khoá NỚI LỎNG.
+
+    plainto_tsquery đòi khớp TẤT CẢ các từ — một chữ lệch chính tả là nhánh từ
+    khoá chết cả lượt. Ca thật 19/08/2026: "sơ yếu LÍ lịch CỬA Ngân" (i ngắn +
+    gõ nhầm) không khớp tài liệu nào vì kho ghi "lý lịch"; chỉ còn semantic,
+    mà embedding thì coi mọi sơ yếu lý lịch na ná nhau — từ "Ngân" mất sạch
+    sức nặng, bot lấy nhầm sơ yếu của người khác.
+
+    Nới thành OR thì ts_rank_cd tự thưởng tài liệu khớp NHIỀU từ: file chứa
+    "sơ yếu lý lịch" + họ tên có "Ngân" (4 từ) vẫn thắng file chỉ khớp từ phổ
+    thông. GIỮ NGUYÊN DẤU: search_vector dùng cấu hình 'simple' nên token trong
+    chỉ mục có dấu; fold ở đây là tự tay làm hỏng phép khớp.
+    """
+    tokens = re.findall(r"[0-9a-zà-ỹ]+", (question or "").lower())
+    tokens = [t for t in dict.fromkeys(tokens) if len(t) >= 2][:12]
+    if not tokens:
+        return None
+    return " | ".join(tokens)
+
+
 def resolve_search_question(question, history=None, state=None) -> str:
     """Viết lại câu tra cứu ngắn bằng chủ đề đã biết, không gọi thêm LLM.
 
@@ -150,12 +171,16 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
     # có chung thang điểm khi gộp.
     lexical_select = select.format(
         lexical="ts_rank_cd(c.search_vector,q.query)")
+    lexical_tail = (" CROSS JOIN q " + where
+                    + " AND q.query @@ c.search_vector"
+                    + " ORDER BY lexical_score DESC LIMIT %s")
     lexical_sql = ("WITH q AS (SELECT plainto_tsquery('simple',%s) AS query) "
-                   + lexical_select
-                   + " CROSS JOIN q " + where
-                   + " AND q.query @@ c.search_vector"
-                   + " ORDER BY lexical_score DESC LIMIT %s")
+                   + lexical_select + lexical_tail)
     lexical_params = [question, qjson, *filter_params, candidate_k]
+    # Lượt hai NỚI LỎNG (OR) — chỉ chạy khi lượt AND trắng tay, để câu gõ chuẩn
+    # giữ nguyên hành vi cũ còn câu lệch một chữ không mất cả nhánh từ khoá.
+    lexical_or_sql = ("WITH q AS (SELECT to_tsquery('simple',%s) AS query) "
+                      + lexical_select + lexical_tail)
 
     with db.session(role=level, client_id=client_id, dept_ids=dept_ids,
                     is_banqt=is_banqt, can_finance=can_finance) as conn:
@@ -164,7 +189,14 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
             rows = cur.fetchall()
             try:
                 cur.execute(lexical_sql, lexical_params)
-                rows += cur.fetchall()
+                lex_rows = cur.fetchall()
+                if not lex_rows:
+                    or_query = _or_tsquery(question)
+                    if or_query:
+                        cur.execute(lexical_or_sql,
+                                    [or_query, qjson, *filter_params, candidate_k])
+                        lex_rows = cur.fetchall()
+                rows += lex_rows
             except Exception:
                 # Kho cũ chưa có chỉ mục FTS vẫn phải phục vụ được bằng vector.
                 conn.rollback()

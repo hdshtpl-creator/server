@@ -48,6 +48,82 @@ class IntentTests(unittest.TestCase):
         self.assertFalse(company_context.is_staff_query(
             "thủ tục thành lập doanh nghiệp"))
 
+    def test_hr_document_question_is_staff_query(self):
+        """Lỗi thực tế 19/08: 'sơ yếu lí lịch cửa Ngân' (kèm typo) không được
+        nhận là câu nhân sự → tìm toàn kho, vớ sơ yếu của NGƯỜI KHÁC 37% và
+        phiếu lý lịch tư pháp của KHÁCH, rồi từ chối trả lời."""
+        self.assertTrue(company_context.is_staff_query("sơ yếu lí lịch cửa Ngân"))
+        self.assertTrue(company_context.is_staff_query("sơ yếu lý lịch của Ngân"))
+        self.assertTrue(company_context.is_staff_query("CV của Mai"))
+        self.assertTrue(company_context.is_staff_query("KPI quý của Ngân thế nào"))
+
+    def test_hr_document_question_is_not_structured_count(self):
+        """Câu hỏi NỘI DUNG giấy tờ không được nuốt thành bảng đếm quân số."""
+        self.assertIsNone(company_context.infer_intent("sơ yếu lí lịch cửa Ngân"))
+        self.assertIsNone(company_context.infer_intent("CV của Mai"))
+
+    def test_hr_doc_words_do_not_overreach(self):
+        """'cv' phải theo ranh giới từ (không match TCVN); lý lịch TƯ PHÁP là
+        giấy của khách hàng, không phải hồ sơ nhân sự."""
+        self.assertFalse(company_context.is_staff_query("tiêu chuẩn TCVN về xây dựng"))
+        self.assertFalse(company_context.is_staff_query("phiếu lý lịch tư pháp là gì"))
+
+
+class LexicalFallbackTests(unittest.TestCase):
+    """Lỗi thực tế 19/08: 'sơ yếu LÍ lịch CỬA Ngân' (i ngắn + gõ nhầm) làm
+    plainto_tsquery (AND mọi từ) trắng tay — nhánh từ khoá chết, chỉ còn
+    semantic, và từ 'Ngân' mất sạch sức nặng nên bot lấy sơ yếu người khác."""
+
+    def test_or_query_keeps_accents_and_order(self):
+        from app import rag
+        q = rag._or_tsquery("sơ yếu lí lịch cửa Ngân")
+        # GIỮ DẤU vì chỉ mục 'simple' lưu token có dấu; bỏ dấu là hết khớp.
+        self.assertEqual(q, "sơ | yếu | lí | lịch | cửa | ngân")
+
+    def test_or_query_drops_short_and_duplicate_tokens(self):
+        from app import rag
+        self.assertEqual(rag._or_tsquery("a hợp đồng hợp đồng b"), "hợp | đồng")
+        self.assertIsNone(rag._or_tsquery("a b ."))
+        self.assertIsNone(rag._or_tsquery(""))
+
+    def test_or_query_strips_tsquery_operators(self):
+        from app import rag
+        # Ký tự điều khiển tsquery (&, |, !, :, *) không được lọt vào chuỗi.
+        q = rag._or_tsquery("điều 35 & khoản! 2:*")
+        self.assertEqual(q, "điều | 35 | khoản")
+
+
+class HrTitleTests(unittest.TestCase):
+    """Ba nhân sự ba file cùng tên 'Sơ yếu lý lịch.pdf' → ba tài liệu trùng
+    tiêu đề, nguồn trích dẫn không biết của ai. Tiêu đề phải mang thư mục con
+    tên người."""
+
+    def test_compose_title_prefixes_person(self):
+        from app import auto_learn
+        self.assertEqual(auto_learn.compose_title("Sơ yếu lý lịch", "Ngân"),
+                         "Ngân — Sơ yếu lý lịch")
+
+    def test_compose_title_skips_when_already_named(self):
+        from app import auto_learn
+        # Người dùng đã tự đặt 'Ngân. KPI quý' thì không ghép trùng.
+        self.assertEqual(auto_learn.compose_title("Ngân. KPI quý", "Ngân"),
+                         "Ngân. KPI quý")
+        self.assertEqual(auto_learn.compose_title("CV", None), "CV")
+
+    def test_resolve_labels_carries_person_folder(self):
+        from app import auto_learn
+        labels, reason = auto_learn.resolve_labels(["8. HỒ SƠ NHÂN SỰ", "Ngân"])
+        self.assertIsNone(reason)
+        self.assertEqual(labels["doc_type"], "ho_so_ns")
+        self.assertEqual(labels.get("title_context"), "Ngân")
+
+    def test_resolve_labels_no_person_for_other_types(self):
+        from app import auto_learn
+        labels, reason = auto_learn.resolve_labels(["1. VĂN BẢN PHÁP LUẬT", "1.3 Thông tư"])
+        self.assertIsNone(reason)
+        self.assertEqual(labels["doc_type"], "law")
+        self.assertNotIn("title_context", labels)
+
     def test_followup_uses_structured_state(self):
         state = {"intent": "staff_directory", "last_question": "cty tôi có mấy người"}
         self.assertEqual(

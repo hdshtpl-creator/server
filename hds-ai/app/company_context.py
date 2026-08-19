@@ -440,16 +440,50 @@ def is_directory_query(question: str) -> bool:
     return _roster_intent(q)
 
 
+# Giấy tờ ĐẶC TRƯNG của hồ sơ nhân sự — sơ yếu lý lịch, CV, CCCD, bằng cấp,
+# đơn nghỉ phép, KPI… Câu nhắc tới chúng ("sơ yếu lý lịch của Ngân") là câu
+# nhân sự dù không chứa chữ "nhân sự" nào. 19/08/2026: câu đúng như vậy đi tìm
+# TOÀN KHO, vớ sơ yếu của NGƯỜI KHÁC (37%) và phiếu lý lịch tư pháp của KHÁCH,
+# rồi từ chối trả lời — trong khi file của Ngân nằm ngay trong kho.
+#
+# CHỈ dùng cho is_staff_query (bổ sung nguồn ho_so_ns khi tìm kiếm). KHÔNG đưa
+# vào STAFF_WORDS: đây không phải câu đếm quân số — đưa nhầm là câu "sơ yếu lý
+# lịch của Ngân" bị structured_answer trả về bảng đếm nhân sự thay vì nội dung.
+# Viết cả hai chính tả "lý/lí" vì người gõ dùng lẫn.
+HR_DOC_WORDS = {
+    "so yeu ly lich", "so yeu li lich", "ly lich tu thuat", "li lich tu thuat",
+    "can cuoc", "cccd", "cmnd", "chung minh nhan dan",
+    "bang dai hoc", "bang tot nghiep", "bang cap", "chung chi hanh nghe",
+    "don xin nghi phep", "don nghi phep",
+    "quyet dinh bo nhiem", "quyet dinh tuyen dung", "hop dong thu viec",
+}
+
+
+def _hr_doc_intent(q_folded: str) -> bool:
+    """Câu có nhắc tới một loại giấy tờ nhân sự cụ thể hay không.
+
+    "cv" và "kpi" quá ngắn cho phép `in` lỏng ("cv" nằm trong "TCVN") nên kiểm
+    theo ranh giới từ, giống cách _staff_intent xử lý "nv".
+    """
+    if re.search(r"(?:^|\s)(?:cv|kpi)(?:$|\s)", q_folded):
+        return True
+    return any(w in q_folded for w in HR_DOC_WORDS)
+
+
 def is_staff_query(question: str) -> bool:
     """Câu hỏi này đang hỏi về NGƯỜI LAO ĐỘNG của HDS hay không.
 
-    rag.prepare dùng để thu hẹp tìm kiếm về đúng loại 'hồ sơ nhân sự'. Cần thiết
+    rag.prepare dùng để BỔ SUNG một lượt tìm trong 'hồ sơ nhân sự'. Cần thiết
     vì Điều lệ công ty đầy chữ 'thành viên', 'người quản lý', 'danh sách những
     người có liên quan' — xét theo ngữ nghĩa thì nó khớp câu hỏi nhân sự rất
     cao, đủ để đẩy hợp đồng lao động ra khỏi top-k.
+
+    Gồm cả câu nhắc giấy tờ nhân sự cụ thể (HR_DOC_WORDS): nguồn bổ sung chỉ
+    CHÈN THÊM nên nhận rộng ở đây rẻ hơn nhiều so với bỏ sót — bỏ sót là bot
+    tìm sơ yếu lý lịch trong hồ sơ khách hàng.
     """
     q = _fold(question)
-    return _staff_intent(q) or _employment_contract_intent(q)
+    return _staff_intent(q) or _employment_contract_intent(q) or _hr_doc_intent(q)
 
 
 def _staff_block(cur, is_banqt):
