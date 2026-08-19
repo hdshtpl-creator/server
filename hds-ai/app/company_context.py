@@ -128,10 +128,18 @@ ALERT_KIND_VN = {
 
 # Câu hỏi chứa các từ này là đang hỏi về tiến độ/hạn chót nói chung, kể cả khi
 # không nhắc tên khách nào — lúc đó phải đưa cảnh báo toàn phạm vi người hỏi.
+#
+# KHÔNG đưa "thoi hieu" trần vào đây: "thời hiệu" trước hết là một khái niệm
+# LUẬT. Câu "thời hiệu khởi kiện tranh chấp đất là bao lâu" (câu tra luật kinh
+# điển, chính là câu demo trong deploy/README.md) từng bị nuốt vào nhánh cảnh
+# báo và trả về bảng deadline nội bộ thay vì tra Bộ luật Dân sự. Chỉ giữ các
+# cụm "thời hiệu" đã gắn rõ với việc RÀ VỤ VIỆC.
 ALERT_WORDS = {
     "qua han", "quan han", "sap den han", "den han", "han chot", "deadline",
-    "canh bao", "tre han", "cham tien do", "thoi hieu", "sap het han",
+    "canh bao", "tre han", "cham tien do", "sap het han",
     "vu nao gap", "viec gap", "treo lau", "ton dong", "sap toi han",
+    "sap het thoi hieu", "canh bao thoi hieu", "thoi hieu vu viec",
+    "thoi hieu cac vu", "ra soat thoi hieu", "kiem tra thoi hieu",
 }
 
 # Câu hỏi đếm/liệt kê khách nói chung ("có bao nhiêu công ty", "danh sách khách")
@@ -142,6 +150,19 @@ ROSTER_WORDS = {
     "may khach", "may cong ty", "may cty", "tong so khach", "so luong khach",
     "danh sach khach", "danh sach cong ty", "co nhung khach nao", "nhung khach nao",
     "liet ke khach", "cac khach hang", "khach hang nao",
+    # "HỒ SƠ KHÁCH" cũng là cách gọi danh mục khách trong hãng luật. Ngày
+    # 19/08/2026 câu "đang có bao nhiêu hồ sơ khách" trượt hết mọi nhánh vì
+    # ROSTER chỉ có cụm "bao nhieu khach" đứng SÁT nhau — chữ "hồ sơ" chen vào
+    # giữa là trượt; bot rơi xuống RAG, vớ vài đoạn 45% rồi bịa "0 hồ sơ khách"
+    # trong khi CSDL có khách thật. Substring match nên các cụm dưới tự cover
+    # cả biến thể "... hồ sơ khách hàng".
+    # Mọi cụm đều PHẢI chứa "khach": bản đầu có "bao nhieu bo ho so" trần và
+    # nuốt luôn câu "mấy bộ hồ sơ NHÂN SỰ" khỏi luồng nhân sự (test
+    # test_hr_dossier_count_stays_staff bắt được ngay). "Bộ hồ sơ" không nói
+    # rõ của ai thì thà để RAG tra tài liệu còn hơn đoán nhầm loại.
+    "bao nhieu ho so khach", "may ho so khach", "so luong ho so khach",
+    "tong so ho so khach", "danh sach ho so khach", "liet ke ho so khach",
+    "co nhung ho so khach nao", "bao nhieu bo ho so khach", "may bo ho so khach",
 }
 
 # Câu hỏi ĐẾM / LIỆT KÊ chính KHO TÀI LIỆU ("HDS có mấy tài liệu bản án",
@@ -154,6 +175,11 @@ INVENTORY_TYPE_WORDS = {
     "hop dong mau": "mau_hd", "mau hop dong": "mau_hd",
     "thu mau": "thu_mau", "quy trinh": "quy_trinh",
     "nhan hieu": "nhan_hieu", "thu tu van": "advisory",
+    # Đếm TÀI LIỆU hồ sơ khách ("kho có mấy tài liệu hồ sơ khách hàng") nêu
+    # được đích danh con số loại này. Câu "bao nhiêu hồ sơ khách" KHÔNG rơi
+    # vào đây: ROSTER_WORDS bắt trước trong infer_intent — đếm khách, không
+    # đếm file.
+    "ho so khach": "ho_so_kh",
 }
 
 # Câu hỏi về chính công ty mình: quân số, ai làm phòng nào. Dữ liệu nằm ở bảng
@@ -375,7 +401,18 @@ ROSTER_DETAIL_MAX = 5
 
 
 def _detail_intent(q_folded: str) -> bool:
-    """Câu hỏi có đòi CHI TIẾT (dịch vụ, hợp đồng, tình hình) từng khách không."""
+    """Câu hỏi có đòi CHI TIẾT (dịch vụ, hợp đồng, tình hình) từng khách không.
+
+    Xét trên câu ĐÃ BỎ các cụm đếm danh bạ: "bao nhiêu HỒ SƠ khách" là câu đếm
+    thuần — chữ "hồ sơ" ở đó là ĐỐI TƯỢNG đếm, không phải yêu cầu mở hồ sơ ra
+    đọc. Không bỏ đi thì "ho so" (một DETAIL_WORD) chặn đúng nhánh client_roster
+    mà cụm ấy vừa kích hoạt, và câu đếm lại rơi xuống RAG như chưa sửa gì.
+    Phần còn lại của câu vẫn xét như cũ: "danh sách khách VÀ DỊCH VỤ đang dùng"
+    sau khi bỏ "danh sach khach" vẫn còn "dich vu" nên vẫn bung chi tiết.
+    """
+    for w in ROSTER_WORDS:
+        if w in q_folded:
+            q_folded = q_folded.replace(w, " ")
     return any(w in q_folded for w in DETAIL_WORDS)
 
 

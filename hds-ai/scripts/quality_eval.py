@@ -28,6 +28,16 @@ from urllib.request import Request, urlopen
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 DEFAULT_CASES = SCRIPT_DIR / "quality_eval_cases.json"
+
+# Console Windows mặc định là cp1252, không in nổi chữ Việt trong báo cáo —
+# script chạy hết các case rồi mới vỡ ở dòng "TỔNG:", nhìn như eval hỏng trong
+# khi thật ra chỉ hỏng phần in. Ép UTF-8 để kết quả đọc được trên mọi máy.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            pass
 CITATION_RE = re.compile(r"\[\s*Nguồn\s+(\d+)\s*\]", re.IGNORECASE)
 
 
