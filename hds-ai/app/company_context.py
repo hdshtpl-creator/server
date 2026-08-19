@@ -182,6 +182,79 @@ INVENTORY_TYPE_WORDS = {
     "ho so khach": "ho_so_kh",
 }
 
+# ---------------------------------------------------------------
+# ĐỊNH TUYẾN THƯ MỤC: câu hỏi đang nhắm vào NGĂN NÀO của cây Drive?
+#
+# Cây thư mục (CAU_TRUC_DRIVE.md) chính là bản đồ tri thức của HDS: mỗi nhóm
+# thư mục là một loại tài liệu (doc_type). Câu "án lệ về vay tài sản" phải đi
+# tìm trong ngăn 2 (BẢN ÁN – ÁN LỆ), không phải để vector so toàn kho rồi vớ
+# điều lệ của một khách nào đó chỉ vì cùng nhắc chữ "tài sản".
+#
+# Nguyên tắc chọn cụm — rút từ các lỗi đã gặp (xem STAFF_WORDS, ALERT_WORDS):
+#   · chỉ nhận cụm ĐẶC TRƯNG cho đúng một ngăn; từ đa nghĩa ("hợp đồng",
+#     "quyết định") KHÔNG đứng một mình — mơ hồ thì trả [] và tìm toàn kho
+#     như cũ, đoán sai ngăn tệ hơn không đoán;
+#   · một câu có thể chạm nhiều ngăn ("quy trình đăng ký nhãn hiệu" → quy
+#     trình + nhãn hiệu) — trả đủ, retrieval lọc theo cả hai;
+#   · lớp này chỉ THU HẸP PHẠM VI TÌM, không trả lời — rag.prepare sẽ tự mở
+#     lại toàn kho nếu trong ngăn không có gì đủ liên quan, nên nhận nhầm
+#     một cụm không làm mất câu trả lời, chỉ tốn một lượt tìm.
+# ---------------------------------------------------------------
+DOC_SCOPE_WORDS = {
+    # Ngăn 1 — VĂN BẢN PHÁP LUẬT. "thoi hieu" nằm đây vì thời hiệu trước hết
+    # là khái niệm luật; câu rà HẠN VỤ VIỆC đã có cụm riêng bên ALERT_WORDS
+    # ("sap het thoi hieu"…) và được structured_answer bắt trước từ lâu.
+    "van ban phap luat": ("law",), "van ban luat": ("law",),
+    "bo luat": ("law",), "nghi dinh": ("law",), "thong tu": ("law",),
+    "nghi quyet": ("law",), "van ban hop nhat": ("law",),
+    "theo luat": ("law",), "luat quy dinh": ("law",),
+    "phap luat quy dinh": ("law",), "quy dinh cua phap luat": ("law",),
+    "theo quy dinh cua luat": ("law",), "dieu luat": ("law",),
+    "can cu phap ly": ("law",), "che tai": ("law",),
+    "muc phat": ("law",), "xu phat": ("law",), "thoi hieu": ("law",),
+    # Ngăn 2 — BẢN ÁN – ÁN LỆ: hai loại ở chung một ngăn, hỏi loại này thường
+    # muốn thấy cả loại kia nên trả cả cặp.
+    "ban an": ("ban_an", "an_le"), "an le": ("an_le", "ban_an"),
+    "phan quyet": ("ban_an", "an_le"), "tien le": ("an_le", "ban_an"),
+    "duong loi xet xu": ("an_le", "ban_an"),
+    # Ngăn 3 — HỢP ĐỒNG MẪU ("hợp đồng" trần thì KHÔNG: còn là HĐLĐ, hợp đồng
+    # của khách, câu luật về hợp đồng…)
+    "mau hop dong": ("mau_hd",), "hop dong mau": ("mau_hd",),
+    "dieu khoan mau": ("mau_hd",), "soan hop dong": ("mau_hd",),
+    # Ngăn 4 — QUAN ĐIỂM PHÁP LÝ
+    "quan diem phap ly": ("advisory",), "y kien phap ly": ("advisory",),
+    "huong dan nghiep vu": ("advisory",),
+    # Ngăn 5 — THƯ MẪU – BIỂU MẪU
+    "thu mau": ("thu_mau",), "bieu mau": ("thu_mau",), "mau don": ("thu_mau",),
+    "don mau": ("thu_mau",), "to khai": ("thu_mau",), "mau thu": ("thu_mau",),
+    "mau cong van": ("thu_mau",),
+    # Ngăn 6 — QUY TRÌNH NỘI BỘ
+    "quy trinh": ("quy_trinh",),
+    # Ngăn 7 — NHÃN HIỆU – SHTT
+    "nhan hieu": ("nhan_hieu",), "so huu tri tue": ("nhan_hieu",),
+    "shtt": ("nhan_hieu",), "thuong hieu": ("nhan_hieu",),
+}
+
+MAX_DOC_SCOPES = 4  # chạm quá nhiều ngăn nghĩa là câu hỏi rộng — thu hẹp hết ý nghĩa
+
+
+def detect_doc_scopes(question: str) -> list[str]:
+    """Các ngăn thư mục mà câu hỏi nhắm tới, theo thứ tự xuất hiện trong câu.
+
+    [] nghĩa là "không đoán được" — giữ hành vi tìm toàn kho như cũ. Hồ sơ
+    NHÂN SỰ và hồ sơ KHÁCH không đi qua đây: nhân sự đã có is_staff_query
+    (bổ sung nguồn ho_so_ns), khách đã có detect_clients (ghim theo khách).
+    """
+    q = _fold(question)
+    found: list[str] = []
+    hits = [(q.index(w), w) for w in DOC_SCOPE_WORDS if w in q]
+    for _, w in sorted(hits):
+        for dt in DOC_SCOPE_WORDS[w]:
+            if dt not in found:
+                found.append(dt)
+    return found[:MAX_DOC_SCOPES]
+
+
 # Câu hỏi về chính công ty mình: quân số, ai làm phòng nào. Dữ liệu nằm ở bảng
 # users/departments — không nằm trong tài liệu nào để mà tìm bằng vector, nên
 # phải rút bằng SQL giống cách làm với khách hàng.
@@ -806,6 +879,10 @@ FOLLOWUP_WORDS = {
     "con ai", "con gi", "con nua", "the nao", "ra sao", "nhu the nao",
     "bao gom", "liet ke", "day du", "tung nguoi", "tung ca nhan",
     "ho ten", "danh sach", "moi nguoi", "gom nhung",
+    # Đuôi "… nào nữa / gì nữa" — "còn KHÁCH nào nữa" bị danh từ chen giữa nên
+    # cụm "con nua" không bắt được. KHÔNG thêm "ai nua": so khớp chuỗi con sẽ
+    # trúng cả "hai nữa".
+    "nao nua", "gi nua",
     # Câu sửa lại ý ở lượt trước. Đây chính là dạng "tôi hỏi người còn hợp
     # đồng mà"; nếu không coi là follow-up thì router mất chủ đề HĐLĐ đã lưu.
     "toi hoi", "y toi", "toi dang hoi", "toi muon hoi", "van de toi hoi",
@@ -813,8 +890,15 @@ FOLLOWUP_WORDS = {
 
 
 def _is_followup(q_folded: str) -> bool:
-    """Câu ngắn mang tính hỏi thêm — cần vay chủ đề của lượt trước."""
-    if len(q_folded.split()) > 8:
+    """Câu ngắn mang tính hỏi thêm — cần vay chủ đề của lượt trước.
+
+    Ngưỡng 12 từ, không phải 8: câu nối tự nhiên của tiếng Việt hay dài hơn
+    tưởng — ca thật 19/08/2026 "cụ thể các công ty đang dùng dịch vụ gì" (10
+    từ, hỏi ngay sau câu đếm khách) bị ngưỡng 8 loại → mất chủ đề, rơi xuống
+    vector mù và bot đọc điều lệ của khách rồi đoán dịch vụ. Câu ĐỘC LẬP dài
+    không bị vạ lây: nó phải chứa một cụm FOLLOWUP_WORDS thì mới vào đây.
+    """
+    if len(q_folded.split()) > 12:
         return False
     return any(w in q_folded for w in FOLLOWUP_WORDS)
 
@@ -845,7 +929,17 @@ def infer_intent(question, history=None, state=None):
     """
     folded_current = _fold(question)
     if _is_followup(folded_current) and state and state.get("intent"):
-        return state.get("intent")
+        prev = state.get("intent")
+        # Hỏi tiếp SAU CÂU ĐẾM KHÁCH mà đòi CHI TIẾT ("cụ thể các công ty đang
+        # dùng dịch vụ gì") thì đừng lặp lại bảng đếm — trả None cho câu hỏi
+        # rơi xuống luồng dữ liệu công ty: build() vay chủ đề roster của lượt
+        # trước, thấy roster + detail sẽ BUNG hồ sơ từng khách (file tổng hợp,
+        # hợp đồng, vụ việc) cho model đọc. Chỉ áp cho client_roster:
+        # staff_directory đã trả danh sách chi tiết nên "chi tiết từng cá
+        # nhân" dùng lại nó là đúng ý.
+        if prev == "client_roster" and _detail_intent(folded_current):
+            return None
+        return prev
 
     topic = _fold(_topic_question(question, history))
     if _roster_intent(topic) and not _detail_intent(topic):

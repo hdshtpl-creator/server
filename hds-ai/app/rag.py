@@ -51,6 +51,20 @@ def _tokens(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]+", _fold(text)) if len(t) > 1}
 
 
+def _title_coverage(qtokens: set, title: str | None) -> float:
+    """Phần từ của câu hỏi xuất hiện trong TÊN tài liệu (0..1).
+
+    Tên tài liệu do người quản trị kho đặt (tên file + thư mục người/loại trên
+    Drive) nên khớp tên là tín hiệu mạnh và rẻ; tính theo tập từ đã bỏ dấu để
+    "lí/lý" hay hoa thường không thành rào."""
+    if not qtokens or not title:
+        return 0.0
+    ttokens = _tokens(title)
+    if not ttokens:
+        return 0.0
+    return len(qtokens & ttokens) / len(qtokens)
+
+
 def _or_tsquery(question: str) -> str | None:
     """Chuỗi to_tsquery dạng 'sơ | yếu | ngân' cho lượt tìm từ khoá NỚI LỎNG.
 
@@ -80,7 +94,9 @@ def resolve_search_question(question, history=None, state=None) -> str:
     Hàm này chạy trước retrieval và chỉ nối tối đa câu hỏi người dùng gần nhất.
     """
     folded = _fold(question)
-    followup = (len(folded.split()) <= 10 and any(w in folded for w in (
+    # Ngưỡng 12 từ, đồng bộ với company_context._is_followup — câu nối tiếng
+    # Việt hay dài hơn 8-10 từ ("cụ thể các công ty đang dùng dịch vụ gì").
+    followup = (len(folded.split()) <= 12 and any(w in folded for w in (
         "chi tiet", "cu the", "ro hon", "tung ca nhan", "tung nguoi",
         "con nua", "con ai", "the nao", "ra sao", "toi hoi", "y toi",
         "danh sach", "liet ke",
@@ -224,8 +240,13 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
         lexical = item["lexical_score"] / max_lex if max_lex else 0.0
         exact = 1.0 if len(qfold) >= 4 and qfold in _fold(item["content"]) else 0.0
         semantic = max(0.0, min(1.0, item["semantic_score"]))
-        item["score"] = min(1.0, 0.75 * semantic + 0.15 * lexical
-                            + 0.08 * coverage + 0.02 * exact)
+        # TÊN tài liệu (lấy từ tên file + thư mục trên Drive) là tín hiệu người
+        # quản trị kho đặt ra bằng tay — "Ngân — Sơ yếu lý lịch" nói thẳng nó là
+        # gì, của ai. Cho nó một phần điểm để câu hỏi nêu đúng tên ("sơ yếu lý
+        # lịch của Ngân") kéo đúng file lên, thay vì phó mặc cho vector.
+        title_cov = _title_coverage(qtokens, item.get("title"))
+        item["score"] = min(1.0, 0.70 * semantic + 0.15 * lexical
+                            + 0.08 * coverage + 0.05 * title_cov + 0.02 * exact)
 
     ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
     chosen, counts, used = [], defaultdict(int), set()
@@ -896,6 +917,15 @@ def prepare(question, channel, client_id=None, conversation_id=None,
 
     # Cổng khách: giới hạn loại tài liệu theo gói dịch vụ (Free/Plus/Pro).
     doc_types = tier_doc_types(role) if (channel == "portal" and role) else None
+    # ĐỊNH TUYẾN THƯ MỤC: câu hỏi nêu rõ ngăn nào của cây Drive ("án lệ về…",
+    # "mẫu đơn…", "nghị định…") thì TÌM TRONG NGĂN ĐÓ trước — tên thư mục là
+    # bản đồ tri thức, đừng để vector so toàn kho rồi vớ điều lệ của khách cho
+    # một câu hỏi luật. Không đè lên giới hạn gói của cổng khách (doc_types đã
+    # đặt); đoán không ra thì giữ nguyên hành vi cũ.
+    folder_scope = (company_context.detect_doc_scopes(search_question)
+                    if doc_types is None else [])
+    if folder_scope:
+        timings["thu_muc"] = ",".join(folder_scope)
     # Chỉ tạo embedding MỘT LẦN rồi tái dùng cho kho chính, file tạm và phương
     # pháp phân tích. Trước đây bật cả ba tính năng khiến cùng câu bị embed 3 lần.
     embed_stats: dict = {}
@@ -905,16 +935,25 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     timings.update(embed_stats)
 
     vector_started = time.time()
-    chunks = retrieve(
-        search_question, channel, client_id, dept_ids=dept_ids, is_banqt=is_banqt,
+    retrieve_kwargs = dict(
+        channel=channel, client_id=client_id, dept_ids=dept_ids, is_banqt=is_banqt,
         top_k=_num("retrieval_top_k", TOP_K, int), can_finance=can_finance,
-        doc_types=doc_types, document_ids=source_document_ids,
+        document_ids=source_document_ids,
         candidate_k=_num("retrieval_candidate_k", RETRIEVAL_CANDIDATES, int),
         max_per_document=_num("retrieval_max_chunks_per_doc", MAX_CHUNKS_PER_DOC, int),
         query_vector=query_vector,
     )
+    chunks = retrieve(search_question,
+                      doc_types=(folder_scope or doc_types), **retrieve_kwargs)
     min_score = _num("min_relevance", MIN_SCORE, float)
     kept = [c for c in chunks if c["score"] >= min_score]
+    if folder_scope and not kept:
+        # Ngăn đoán được nhưng bên trong không có gì đủ liên quan — mở lại
+        # toàn kho. Nhờ lưới này, đoán nhầm ngăn chỉ tốn một lượt tìm chứ
+        # không bao giờ làm mất câu trả lời.
+        timings["thu_muc_mo_lai_toan_kho"] = True
+        chunks = retrieve(search_question, doc_types=doc_types, **retrieve_kwargs)
+        kept = [c for c in chunks if c["score"] >= min_score]
     timings["bo_qua_doan_yeu"] = len(chunks) - len(kept)
 
     # Câu hỏi về nhân sự HDS: BẢO ĐẢM hồ sơ nhân sự có mặt trong nguồn.

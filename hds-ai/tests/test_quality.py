@@ -93,6 +93,91 @@ class LexicalFallbackTests(unittest.TestCase):
         self.assertEqual(q, "điều | 35 | khoản")
 
 
+class FolderScopeTests(unittest.TestCase):
+    """30 mẫu: câu hỏi phải được hiểu là đang nhắm vào NGĂN NÀO của cây thư mục
+    Drive (CAU_TRUC_DRIVE.md), để tìm kiếm chạy trong đúng ngăn — tên thư mục
+    kết hợp nội dung văn bản — thay vì so vector toàn kho.
+
+    set() nghĩa là "không đoán" — các câu đó đã có đường riêng (hồ sơ khách,
+    nhân sự, câu đếm structured) hoặc mơ hồ thật sự thì giữ tìm toàn kho."""
+
+    CASES = [
+        # ---- Ngăn 1: VĂN BẢN PHÁP LUẬT ----
+        ("thời hiệu khởi kiện tranh chấp đất là bao lâu", {"law"}),
+        ("nghị định về xử phạt vi phạm hành chính trong xây dựng", {"law"}),
+        ("thông tư 55 quy định về đầu tư có nội dung gì", {"law"}),
+        ("theo luật lao động thì người lao động được nghỉ mấy ngày phép", {"law"}),
+        ("mức phạt chậm nộp thuế là bao nhiêu", {"law"}),
+        ("văn bản hợp nhất luật doanh nghiệp mới nhất", {"law"}),
+        ("căn cứ pháp lý để đơn phương chấm dứt hợp đồng thuê nhà", {"law"}),
+        # ---- Ngăn 2: BẢN ÁN – ÁN LỆ (hỏi một loại lấy cả ngăn) ----
+        ("có bản án nào về tranh chấp lối đi chung không", {"ban_an", "an_le"}),
+        ("án lệ về hợp đồng vay tài sản", {"an_le", "ban_an"}),
+        ("tiền lệ xét xử tranh chấp thừa kế thế nào", {"an_le", "ban_an"}),
+        ("phán quyết của toà về đặt cọc mua đất", {"ban_an", "an_le"}),
+        # ---- Ngăn 3: HỢP ĐỒNG MẪU ----
+        ("cho tôi mẫu hợp đồng thuê nhà xưởng", {"mau_hd"}),
+        ("hợp đồng mẫu mua bán hàng hóa quốc tế", {"mau_hd"}),
+        ("điều khoản mẫu về bảo mật thông tin", {"mau_hd"}),
+        # ---- Ngăn 4: QUAN ĐIỂM PHÁP LÝ ----
+        ("quan điểm pháp lý về góp vốn bằng quyền sử dụng đất", {"advisory"}),
+        ("ý kiến pháp lý về việc sáp nhập hai công ty con", {"advisory"}),
+        # ---- Ngăn 5: THƯ MẪU – BIỂU MẪU ----
+        ("mẫu đơn xin ly hôn thuận tình", {"thu_mau"}),
+        ("biểu mẫu tờ khai đăng ký doanh nghiệp", {"thu_mau"}),
+        ("mẫu thư gửi khách hàng thông báo tăng phí", {"thu_mau"}),
+        # ---- Ngăn 6: QUY TRÌNH NỘI BỘ ----
+        ("quy trình tiếp nhận vụ việc mới của công ty", {"quy_trinh"}),
+        ("quy trình tố tụng gồm những bước nào", {"quy_trinh"}),
+        # ---- Ngăn 7: NHÃN HIỆU – SHTT ----
+        ("thủ tục đăng ký nhãn hiệu mất bao lâu", {"nhan_hieu"}),
+        ("tra cứu thương hiệu này đã được bảo hộ chưa", {"nhan_hieu"}),
+        ("hồ sơ sở hữu trí tuệ cần những giấy tờ gì", {"nhan_hieu"}),
+        # ---- Câu chạm NHIỀU ngăn ----
+        ("quy trình đăng ký nhãn hiệu cho khách mới", {"quy_trinh", "nhan_hieu"}),
+        ("có án lệ hay điều luật nào về lãi suất cho vay không",
+         {"an_le", "ban_an", "law"}),
+        # ---- KHÔNG đoán: đã có đường riêng hoặc mơ hồ thật ----
+        ("sơ yếu lý lịch của Ngân", set()),                     # nhân sự → is_staff_query
+        ("hợp đồng của SUNGROUP có điều khoản phạt chậm thanh toán không",
+         set()),                                                # hồ sơ khách → detect_clients
+        ("đang lưu mấy khách", set()),                          # câu đếm → structured
+        ("xin chào", set()),
+    ]
+
+    def test_thirty_folder_scope_samples(self):
+        self.assertEqual(len(self.CASES), 30, "bộ mẫu phải đủ 30 câu")
+        for question, expected in self.CASES:
+            with self.subTest(question=question):
+                got = set(company_context.detect_doc_scopes(question))
+                self.assertEqual(got, expected)
+
+    def test_scope_order_and_cap(self):
+        # Ngăn xuất hiện trước trong câu đứng trước; không quá MAX_DOC_SCOPES.
+        got = company_context.detect_doc_scopes(
+            "quy trình đăng ký nhãn hiệu cho khách mới")
+        self.assertEqual(got[0], "quy_trinh")
+        self.assertLessEqual(len(got), company_context.MAX_DOC_SCOPES)
+
+
+class TitleScoreTests(unittest.TestCase):
+    """Tên tài liệu (đặt tay trên Drive) phải góp điểm xếp hạng — 'từ tên thư
+    mục kết hợp văn bản trong đó', không phó mặc cho vector."""
+
+    def test_title_coverage_matches_person_file(self):
+        from app import rag
+        qtokens = rag._tokens("sơ yếu lí lịch của Ngân")
+        cov = rag._title_coverage(qtokens, "Ngân — Sơ yếu lý lịch")
+        # so/yeu/lich/ngan khớp; li (chính tả i ngắn) và cua thì không → 4/6.
+        self.assertAlmostEqual(cov, 4 / 6, places=3)
+
+    def test_title_coverage_empty_inputs(self):
+        from app import rag
+        self.assertEqual(rag._title_coverage(set(), "Bất kỳ"), 0.0)
+        self.assertEqual(rag._title_coverage({"luat"}, None), 0.0)
+        self.assertEqual(rag._title_coverage({"luat"}, "—"), 0.0)
+
+
 class HrTitleTests(unittest.TestCase):
     """Ba nhân sự ba file cùng tên 'Sơ yếu lý lịch.pdf' → ba tài liệu trùng
     tiêu đề, nguồn trích dẫn không biết của ai. Tiêu đề phải mang thư mục con

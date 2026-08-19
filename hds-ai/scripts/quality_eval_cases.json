@@ -150,6 +150,42 @@
           ]
         ],
         "rewrite_equals_question": true
+      },
+      {
+        "id": "followup_roster_detail_expands_regression_19_08",
+        "question": "cụ thể các công ty đang dùng dịch vụ gì",
+        "state": {
+          "intent": "client_roster",
+          "last_question": "đang lưu mấy khách"
+        },
+        "expected_intent": null
+      },
+      {
+        "id": "followup_roster_more_keeps_roster",
+        "question": "còn khách nào nữa",
+        "state": {
+          "intent": "client_roster",
+          "last_question": "đang lưu mấy khách"
+        },
+        "expected_intent": "client_roster"
+      },
+      {
+        "id": "followup_roster_detail_rewrite",
+        "question": "cụ thể các công ty đang dùng dịch vụ gì",
+        "history": [
+          [
+            "user",
+            "đang lưu mấy khách"
+          ],
+          [
+            "assistant",
+            "HDS có 3 khách hàng."
+          ]
+        ],
+        "rewrite_contains": [
+          "đang lưu mấy khách",
+          "cụ thể các công ty đang dùng dịch vụ gì"
+        ]
       }
     ],
     "citations": [
