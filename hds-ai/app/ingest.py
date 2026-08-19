@@ -452,36 +452,96 @@ def _extract_docx(path):
     return text, method, warnings, {"tables": len(document.tables)}
 
 
+def _needs_ocr(text: str, page_count: int) -> bool:
+    """PDF này có cần OCR không — quyết theo MẬT ĐỘ chữ, không chỉ tổng số.
+
+    Ngưỡng cũ `len(text) < 100` bỏ sót loại scan phổ biến nhất của giấy tờ
+    nhân sự: file scan nhưng có sẵn vài dòng text thật (header cơ quan, số
+    trang) — tổng vượt 100 ký tự nên không bao giờ được OCR, và tài liệu vào
+    kho chỉ với mấy dòng header. Một trang PDF chữ thật hiếm khi dưới 120 ký
+    tự, nên trung bình mỗi trang thấp hơn mức đó coi như trang ảnh."""
+    body = clean(text)
+    if len(body) < 100:
+        return True
+    return bool(page_count) and len(body) / page_count < 120
+
+
+def _pdf_text_via_pypdf(path):
+    """Tầng cứu khi pdfplumber bó tay: pypdf chịu được nhiều PDF hỏng nhẹ
+    (xref lệch, thiếu EOF — hay gặp ở app scan điện thoại). Trả (text, số
+    trang); lỗi thì ("", 0) để tầng sau quyết, không ném."""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(str(path), strict=False)
+        if reader.is_encrypted:
+            try:
+                reader.decrypt("")   # nhiều file "khoá" bằng mật khẩu rỗng
+            except Exception:
+                return "", 0
+        pages = []
+        for page_number, page in enumerate(reader.pages, 1):
+            try:
+                page_text = page.extract_text() or ""
+            except Exception:
+                page_text = ""       # trang hỏng đơn lẻ không giết cả file
+            if page_text.strip():
+                pages.append(f"[Trang {page_number}]\n{page_text}")
+        return "\n\n".join(pages), len(reader.pages)
+    except Exception:
+        return "", 0
+
+
 def _extract_pdf(path):
+    """Đọc PDF qua BA tầng, tầng sau cứu tầng trước:
+      1. pdfplumber — đọc text chuẩn, giữ số trang;
+      2. pypdf      — khi pdfplumber không mở nổi file hỏng nhẹ;
+      3. OCR        — khi file là scan hoặc chữ quá mỏng theo trang.
+    Ca thật 19/08/2026: giấy tờ scan của một nhân sự lỗi ở tầng 1 và bị BỎ QUA
+    luôn — người đó "biến mất" khỏi mọi câu trả lời nhân sự. Từng tầng lỗi
+    riêng lẻ không được phép làm mất tài liệu khi tầng sau còn đọc được."""
     pages = []
     pdf_error = None
+    page_count = 0
     try:
         import pdfplumber
         with pdfplumber.open(str(path)) as pdf:
+            page_count = len(pdf.pages)
             for page_number, page in enumerate(pdf.pages, 1):
-                page_text = page.extract_text() or ""
+                try:
+                    page_text = page.extract_text() or ""
+                except Exception:
+                    page_text = ""   # một trang hỏng không được giết cả file
                 if page_text.strip():
                     pages.append(f"[Trang {page_number}]\n{page_text}")
-            page_count = len(pdf.pages)
     except Exception as exc:
         pdf_error = exc
-        page_count = 0
 
     text = "\n\n".join(pages)
     warnings = []
     method = "pdfplumber"
-    if len(clean(text)) < 100:
+
+    if pdf_error and not clean(text):
+        fallback_text, fallback_pages = _pdf_text_via_pypdf(path)
+        if clean(fallback_text):
+            text, method, page_count = fallback_text, "pypdf", fallback_pages
+            warnings.append("pdfplumber không mở được file; đã đọc bằng pypdf.")
+
+    if _needs_ocr(text, page_count):
         try:
             ocr_text = _ocr_pdf_strict(path)
         except ExtractionError as exc:
             if not clean(text):
                 if pdf_error:
-                    raise ExtractionError("unreadable_pdf", "Không đọc được PDF và OCR thất bại.",
-                                          exc.hint) from pdf_error
+                    raise ExtractionError(
+                        "unreadable_pdf", "Không đọc được PDF và OCR thất bại.",
+                        f"{exc.hint or exc.message} (lỗi đọc gốc: "
+                        f"{type(pdf_error).__name__})") from pdf_error
                 raise
             warnings.append(f"Nội dung PDF rất ít và OCR không chạy được: {exc.hint or exc.message}")
         else:
-            if clean(ocr_text):
+            # Giữ bản NHIỀU chữ hơn: scan kèm vài dòng text thật thì bản OCR
+            # toàn trang mới là nội dung, mấy dòng header không phải.
+            if len(clean(ocr_text)) > len(clean(text)):
                 text = ocr_text
                 method = "ocr"
                 warnings.append("PDF dạng scan/ít text; đã dùng OCR tiếng Việt.")
@@ -593,21 +653,49 @@ def extract_doc(path: Path) -> str:
 
 
 def _ocr_pdf_strict(path: Path) -> str:
+    # Thiếu THƯ VIỆN là bệnh khác hẳn FILE HỎNG — gộp chung một hint "cài
+    # tesseract" từng làm người vận hành đi cài lại thứ đã có, trong khi file
+    # chỉ cần scan/lưu lại. Tách hai đường lỗi ngay từ import.
     try:
         import pytesseract
         from pdf2image import convert_from_path, pdfinfo_from_path
+    except Exception as e:
+        raise ExtractionError(
+            "ocr_missing", "Máy chủ thiếu thư viện OCR (pytesseract/pdf2image).",
+            "Chạy: pip install pytesseract pdf2image && "
+            "sudo apt install tesseract-ocr tesseract-ocr-vie poppler-utils") from e
+    try:
         page_count = int(pdfinfo_from_path(str(path)).get("Pages") or 0)
-        if page_count > MAX_OCR_PAGES:
-            raise ExtractionError(
-                "ocr_page_limit", f"PDF scan có {page_count} trang, vượt giới hạn OCR {MAX_OCR_PAGES} trang.",
-                "Tách PDF thành các phần nhỏ hơn hoặc tăng INGEST_MAX_OCR_PAGES có kiểm soát.")
+    except Exception:
+        # pdfinfo chê metadata của file hỏng nhẹ, nhưng pdftoppm (bên dưới)
+        # thường vẫn render được ảnh — đừng chết ở bước ĐẾM TRANG.
+        page_count = 0
+    if page_count > MAX_OCR_PAGES:
+        raise ExtractionError(
+            "ocr_page_limit", f"PDF scan có {page_count} trang, vượt giới hạn OCR {MAX_OCR_PAGES} trang.",
+            "Tách PDF thành các phần nhỏ hơn hoặc tăng INGEST_MAX_OCR_PAGES có kiểm soát.")
+    try:
         parts = []
-        # OCR theo lô nhỏ để không giữ ảnh của cả PDF trong RAM cùng lúc.
-        for first_page in range(1, page_count + 1, 10):
-            last_page = min(page_count, first_page + 9)
-            images = convert_from_path(str(path), dpi=300, first_page=first_page, last_page=last_page)
-            for offset, image in enumerate(images):
-                page_number = first_page + offset
+        if page_count:
+            # OCR theo lô nhỏ để không giữ ảnh của cả PDF trong RAM cùng lúc.
+            for first_page in range(1, page_count + 1, 10):
+                last_page = min(page_count, first_page + 9)
+                images = convert_from_path(str(path), dpi=300,
+                                           first_page=first_page, last_page=last_page)
+                for offset, image in enumerate(images):
+                    page_number = first_page + offset
+                    value = pytesseract.image_to_string(image, lang="vie")
+                    if value.strip():
+                        parts.append(f"[Trang {page_number}]\n{value}")
+        else:
+            # Không đếm được trang — render cả file một lượt rồi tự giới hạn.
+            images = convert_from_path(str(path), dpi=300)
+            if len(images) > MAX_OCR_PAGES:
+                raise ExtractionError(
+                    "ocr_page_limit",
+                    f"PDF scan có {len(images)} trang, vượt giới hạn OCR {MAX_OCR_PAGES} trang.",
+                    "Tách PDF thành các phần nhỏ hơn hoặc tăng INGEST_MAX_OCR_PAGES có kiểm soát.")
+            for page_number, image in enumerate(images, 1):
                 value = pytesseract.image_to_string(image, lang="vie")
                 if value.strip():
                     parts.append(f"[Trang {page_number}]\n{value}")
@@ -615,8 +703,15 @@ def _ocr_pdf_strict(path: Path) -> str:
     except ExtractionError:
         raise
     except Exception as e:
-        raise ExtractionError("ocr_failed", "OCR PDF thất bại.",
-                              "Cài tesseract-ocr-vie và poppler-utils, hoặc dùng PDF có lớp text.") from e
+        kind = type(e).__name__
+        if "NotInstalled" in kind or "TesseractNotFound" in kind:
+            raise ExtractionError(
+                "ocr_missing", "Máy chủ thiếu tesseract hoặc poppler.",
+                "sudo apt install tesseract-ocr tesseract-ocr-vie poppler-utils") from e
+        raise ExtractionError(
+            "ocr_failed", "OCR PDF thất bại — file nhiều khả năng hỏng cấu trúc.",
+            "Mở file bằng trình đọc PDF rồi lưu lại ('Print to PDF') thành bản "
+            "mới và thả lại lên Drive; nếu là bản scan, scan lại rõ nét hơn.") from e
 
 
 def ocr_pdf(path: Path) -> str:

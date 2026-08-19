@@ -11,11 +11,70 @@ from unittest.mock import patch
 
 from app import auto_learn
 from app.auto_learn import auto_approve_from_env, drive_fingerprint
-from app.ingest import (ExtractionError, ExtractionResult, _split_units,
+from app.ingest import (ExtractionError, ExtractionResult, _needs_ocr,
+                        _pdf_text_via_pypdf, _split_units,
                         chunk_generic, chunk_law_structured,
                         document_citation, extract_text,
                         extract_text_with_metadata, safe_path_component,
                         split_document_with_metadata)
+
+
+class PdfResilienceTests(unittest.TestCase):
+    """Ca thật 19/08/2026: giấy tờ scan (PDF) của một nhân sự lỗi trích xuất
+    và bị BỎ QUA — người đó biến mất khỏi mọi câu trả lời nhân sự. PDF hỏng
+    một tầng không được phép chết cả đường đọc."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    # ---- _needs_ocr: quyết theo MẬT ĐỘ chữ mỗi trang ----
+    def test_needs_ocr_when_text_tiny(self):
+        self.assertTrue(_needs_ocr("chỉ vài chữ", 1))
+
+    def test_needs_ocr_scan_with_header_text(self):
+        # Scan 3 trang nhưng chỉ có ~180 ký tự header thật — ngưỡng cũ (<100
+        # tổng) bỏ sót đúng loại này, tài liệu vào kho chỉ với mấy dòng header.
+        header = "CÔNG TY LUẬT HDS — HỒ SƠ NHÂN SỰ NỘI BỘ. " * 4
+        self.assertTrue(_needs_ocr(header, 3))
+
+    def test_no_ocr_for_real_text_pdf(self):
+        page = "Điều 1. Nội dung có chữ đầy đủ, mỗi trang vài trăm ký tự. " * 10
+        self.assertFalse(_needs_ocr(page * 2, 2))
+
+    def test_no_ocr_when_pages_unknown_but_text_rich(self):
+        page = "Nội dung dài và có nghĩa. " * 20
+        self.assertFalse(_needs_ocr(page, 0))
+
+    # ---- pypdf: tầng cứu khi pdfplumber bó tay ----
+    def test_pypdf_reads_page_count_of_valid_pdf(self):
+        from pypdf import PdfWriter
+        path = self.root / "blank.pdf"
+        writer = PdfWriter()
+        writer.add_blank_page(width=595, height=842)
+        with open(path, "wb") as fh:
+            writer.write(fh)
+        text, pages = _pdf_text_via_pypdf(path)
+        self.assertEqual(pages, 1)          # đường pypdf sống, đếm đúng trang
+        self.assertEqual(text, "")          # trang trắng thì không có chữ
+
+    def test_pypdf_returns_empty_on_garbage(self):
+        path = self.root / "rac.pdf"
+        path.write_bytes(b"day khong phai pdf" * 20)
+        self.assertEqual(_pdf_text_via_pypdf(path), ("", 0))
+
+    # ---- Toàn tuyến: file rác phải ra ExtractionError có mã, không crash lạ ----
+    def test_garbage_pdf_fails_with_coded_error(self):
+        path = self.root / "hong.pdf"
+        path.write_bytes(b"%PDF-1.4 nhung ruot thi hong het" + b"\x00" * 200)
+        with self.assertRaises(ExtractionError) as ctx:
+            extract_text_with_metadata(path)
+        self.assertEqual(ctx.exception.code, "unreadable_pdf")
+        # Hint phải nói được bước nào hỏng để dashboard chỉ đúng cách sửa.
+        self.assertTrue(ctx.exception.hint)
 
 
 class IngestExtractionTests(unittest.TestCase):
