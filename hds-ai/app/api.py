@@ -667,6 +667,91 @@ class LabelIn(BaseModel):
     client_id: int | None = None
 
 
+_CTX_HEADER_RE = re.compile(r"^\[Tài liệu: [^\]]*\]\n?")
+
+
+@app.get("/review/{doc_id}/content")
+def review_content_get(doc_id: int, user=Depends(current_user)):
+    """Nội dung TRÍCH XUẤT của tài liệu — để người duyệt đọc và sửa trước khi
+    duyệt. PDF scan là giấy tờ pháp lý: OCR sai một con số là sai căn cứ, nên
+    chính sách 20/08/2026 bắt buộc mắt người soát nội dung, không chỉ soát nhãn."""
+    require_reviewer(user)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT d.title,d.doc_type,d.extraction_status,d.extraction_error,
+                                  d.approved,d.label_verified,c.name
+                             FROM documents d LEFT JOIN clients c ON c.id=d.client_id
+                            WHERE d.id=%s""", (doc_id,))
+            doc = cur.fetchone()
+            if not doc:
+                raise HTTPException(404, "Không thấy tài liệu")
+            cur.execute("""SELECT content FROM chunks WHERE document_id=%s
+                            ORDER BY chunk_index""", (doc_id,))
+            parts = [r[0] or "" for r in cur.fetchall()]
+    # Bỏ dòng danh tính gắn lúc học — người sửa chỉ cần văn bản gốc; khi lưu
+    # lại dòng này được gắn mới theo tiêu đề/nhãn hiện hành.
+    content = "\n\n".join(_CTX_HEADER_RE.sub("", p, count=1) for p in parts)
+    return {"document_id": doc_id, "title": doc[0], "doc_type": doc[1],
+            "extraction_status": doc[2], "extraction_warning": doc[3],
+            "approved": doc[4], "label_verified": doc[5], "client_name": doc[6],
+            "chunk_count": len(parts), "content": content}
+
+
+class ContentIn(BaseModel):
+    content: str
+
+
+@app.put("/review/{doc_id}/content")
+def review_content_put(doc_id: int, body: ContentIn, user=Depends(current_user)):
+    """Lưu nội dung người duyệt đã sửa: chia đoạn lại, tạo vector lại — bot học
+    ĐÚNG BẢN ĐÃ SỬA, không phải bản OCR thô. Trạng thái duyệt giữ nguyên (đang
+    chờ thì vẫn chờ — sửa xong bấm Duyệt như thường); extraction_status thành
+    'edited' để phân biệt với bản máy tự trích."""
+    require_reviewer(user)
+    text = (body.content or "").strip()
+    if len(text) < 30:
+        raise HTTPException(422, "Nội dung sau sửa quá ngắn (dưới 30 ký tự)")
+    if len(text) > 2_000_000:
+        raise HTTPException(422, "Nội dung vượt 2 triệu ký tự — tách nhỏ tài liệu")
+    from app.ingest import (ExtractionResult, apply_context_headers,
+                            client_display_name, split_document_with_metadata)
+    from app.models import embed, summarize
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT title,doc_type,access_level,client_id,department_id
+                             FROM documents WHERE id=%s""", (doc_id,))
+            doc = cur.fetchone()
+    if not doc:
+        raise HTTPException(404, "Không thấy tài liệu")
+    title, doc_type, access_level, client_id, department_id = doc
+    extraction = ExtractionResult(text=text, format="manual", method="manual_edit",
+                                  warnings=[], metadata={})
+    pieces = split_document_with_metadata(extraction, doc_type)
+    if not pieces:
+        raise HTTPException(422, "Không chia được nội dung thành đoạn")
+    pieces = apply_context_headers(pieces, title, doc_type,
+                                   client_display_name(client_id))
+    vecs = embed([p.content for p in pieces])
+    summary = summarize(text, title)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM chunks WHERE document_id=%s", (doc_id,))
+            for idx, (piece, vec) in enumerate(zip(pieces, vecs)):
+                cur.execute("""INSERT INTO chunks
+                    (document_id,chunk_index,content,page_number,section_title,
+                     source_locator,access_level,client_id,department_id,doc_type,embedding)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (doc_id, idx, piece.content, piece.page_number,
+                     piece.section_title, piece.source_locator, access_level,
+                     client_id, department_id, doc_type, json.dumps(vec)))
+            cur.execute("""UPDATE documents SET summary=%s,extraction_status='edited',
+                                  extraction_error=NULL,updated_at=now()
+                            WHERE id=%s""", (summary, doc_id))
+        db.audit(conn, user["id"], "edit_document_content", "documents", doc_id,
+                 {"chunks": len(pieces), "characters": len(text)})
+    return {"ok": True, "document_id": doc_id, "chunks": len(pieces)}
+
+
 @app.post("/review/{doc_id}/approve")
 def review_approve(doc_id: int, body: LabelIn, user=Depends(current_user)):
     require_reviewer(user)

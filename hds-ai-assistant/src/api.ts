@@ -138,6 +138,26 @@ export const approveReview = ApiJs.approveReview as (
   data: { doc_type: string; access_level: string; client_id?: number | string | null }
 ) => Promise<{ ok?: boolean; document_id?: number }>;
 
+/** Nội dung trích xuất để người duyệt soát/sửa trước khi duyệt (PDF bắt buộc). */
+export const getReviewContent = ApiJs.getReviewContent as (id: number) => Promise<{
+  document_id: number;
+  title: string;
+  doc_type: string;
+  extraction_status: string | null;
+  extraction_warning: string | null;
+  approved: boolean;
+  label_verified: boolean;
+  client_name: string | null;
+  chunk_count: number;
+  content: string;
+}>;
+
+/** Lưu nội dung đã sửa — backend chia đoạn và tạo vector lại. */
+export const saveReviewContent = ApiJs.saveReviewContent as (
+  id: number,
+  content: string
+) => Promise<{ ok?: boolean; document_id?: number; chunks?: number }>;
+
 export const getPendingLearns = ApiJs.getPendingLearns as () => Promise<PendingLearnMessage[]>;
 
 export const reviewLearnMessage = ApiJs.reviewLearnMessage as (

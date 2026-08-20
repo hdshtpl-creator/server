@@ -205,6 +205,9 @@ export const ChatLayout: React.FC = () => {
               timings: evt.timings,
               grounding_status: evt.grounding_status ?? m.grounding_status,
               answer_mode: evt.answer_mode ?? m.answer_mode,
+              // Bản nguồn CUỐI đã lọc "chỉ nguồn liên quan" (được trích dẫn /
+              // điểm cao) — thay danh sách đầy đủ đã gửi ở meta.
+              sources: evt.sources ?? m.sources,
             }));
           }
         }

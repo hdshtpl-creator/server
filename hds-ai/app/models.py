@@ -181,9 +181,11 @@ def gen_options() -> dict:
                luôn phần DỮ LIỆU CÔNG TY nằm ở đầu prompt) mà vẫn phải trả tiền
                thời gian để đọc hết phần còn lại. Nên giữ prompt nhỏ hơn nó, chứ
                không phải cứ đặt num_ctx thật to.
-    num_predict: trần số token sinh ra → trần thời gian trả lời.
+    num_predict: trần số token sinh ra. Chính sách 20/08/2026: KHÔNG chặt cụt
+               câu trả lời — mặc định -1 (Ollama hiểu là không giới hạn); chất
+               lượng/độ gọn do lượt "bot đọc lại" đảm nhiệm thay vì cắt cứng.
     """
-    ctx, predict, threads = 8192, 700, 0
+    ctx, predict, threads = 32768, -1, 0
     try:
         from app import settings
         ctx = settings.get_int("llm_num_ctx", ctx)
@@ -191,7 +193,9 @@ def gen_options() -> dict:
         threads = settings.get_int("llm_num_thread", threads)
     except Exception:
         pass
-    opts = {"num_ctx": ctx, "num_predict": predict}
+    opts = {"num_ctx": ctx}
+    if predict and predict > 0:
+        opts["num_predict"] = predict   # admin vẫn đặt được trần tay khi cần
     # 0 = để Ollama tự quyết. Đặt tay chỉ có ý nghĩa với máy chạy CPU: mặc định
     # thư viện bên dưới thường chỉ dùng số nhân VẬT LÝ, nên máy có nhiều nhân
     # logic có thể nhanh hơn khi khai đúng số nhân.

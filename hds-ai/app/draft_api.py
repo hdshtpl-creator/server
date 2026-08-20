@@ -183,7 +183,11 @@ def _allowed_documents(user, ids: list[int]) -> list[dict]:
             dept_codes=user["dept_codes"],
         ):
             raise HTTPException(403, f"Không có quyền dùng tài liệu nguồn #{doc_id}")
-        if not row[7] or not row[8] or not row[9] or row[10] != "ready":
+        # Cổng con người là approved+label_verified — KHÔNG chặn theo
+        # extraction_status: mọi bản scan OCR đều mang 'warning', chặn ở đây là
+        # cấm dùng giấy tờ scan ĐÃ DUYỆT làm nguồn soạn thảo (HĐLĐ, CCCD scan
+        # chính là loại nguồn hay cần nhất). Cùng bài với rag.retrieve 20/08/2026.
+        if not row[7] or not row[8] or not row[9]:
             raise HTTPException(
                 409,
                 f"Tài liệu #{doc_id} chưa sẵn sàng/được duyệt nên chưa thể dùng làm căn cứ",

@@ -160,6 +160,258 @@ class FolderScopeTests(unittest.TestCase):
         self.assertLessEqual(len(got), company_context.MAX_DOC_SCOPES)
 
 
+class InventoryAnswerTests(unittest.TestCase):
+    """20/08/2026: 'án lệ có mấy bộ' nhận nguyên bảng 11 loại; 'liệt kê' thì
+    lặp lại y chang. Hỏi đích danh một loại phải thấy TÊN từng bộ."""
+
+    ROWS = [("filing", 57), ("mau_hd", 31), ("an_le", 3)]
+    TITLES = {"an_le": ["Án lệ số 43", "Án lệ số 78", "Án lệ số 90"]}
+
+    def test_specific_type_lists_names_not_full_table(self):
+        lines = company_context._inventory_lines(["an_le"], self.ROWS, self.TITLES)
+        text = "\n".join(lines)
+        self.assertIn("3 tài liệu án lệ", text)
+        for name in self.TITLES["an_le"]:
+            self.assertIn(name, text)
+        # Không đổ bảng toàn kho: các loại khác không xuất hiện thành dòng đếm.
+        self.assertNotIn("hồ sơ nộp: 57", text)
+        self.assertNotIn("mẫu hợp đồng: 31", text)
+
+    def test_specific_type_empty_says_missing(self):
+        lines = company_context._inventory_lines(["ban_an"], self.ROWS, {})
+        self.assertIn("chưa có tài liệu bản án", "\n".join(lines))
+
+    def test_general_question_keeps_full_table(self):
+        lines = company_context._inventory_lines([], self.ROWS, {})
+        text = "\n".join(lines)
+        self.assertIn("hồ sơ nộp: 57", text)
+        self.assertIn("án lệ: 3", text)
+
+    def test_full_list_by_default_and_capped_when_admin_sets(self):
+        """Chính sách 20/08/2026: mặc định (0) liệt kê ĐỦ, không cắt. Admin đặt
+        số dương thì cắt nhưng phải tự khai '… và N khác'."""
+        titles = {"law": [f"Luật số {i}" for i in range(1, 41)]}
+        lines = company_context._inventory_lines(["law"], [("law", 40)], titles)
+        text = "\n".join(lines)
+        self.assertIn("Luật số 40", text)          # 0 = in hết
+        self.assertNotIn("tài liệu khác", text)
+        from unittest.mock import patch
+        with patch.object(company_context, "INVENTORY_LIST_MAX", 15):
+            capped = "\n".join(company_context._inventory_lines(
+                ["law"], [("law", 40)], titles))
+        self.assertIn("Luật số 15", capped)
+        self.assertNotIn("Luật số 16", capped)
+        self.assertIn("và 25 tài liệu khác", capped)
+
+    def test_zero_budget_means_no_cut(self):
+        """0 = không giới hạn ở mọi van nội dung."""
+        long_text = "x" * 5000
+        self.assertEqual(company_context._cut(long_text, 0), long_text)
+        self.assertEqual(company_context._cut(long_text, 100)[:100], "x" * 100)
+        from app import rag
+        chunk = {"chunk_id": 1, "content": "y" * 9000, "title": "T", "score": 0.9}
+        out = rag.fit_context([chunk], chunk_chars=0, budget=0, question="")
+        self.assertEqual(len(out[0]["content"]), 9000)   # giữ trọn đoạn
+
+    def test_warehouse_map_lines(self):
+        """Bản đồ kho: ngăn 1–8 theo doc_type ngoài khách, ngăn 9 gom mọi giấy
+        tờ thuộc khách — nạp mọi câu nội bộ để bot biết cây thư mục."""
+        rows = [("law", False, 15), ("an_le", False, 3), ("ban_an", False, 4),
+                ("ho_so_ns", False, 29), ("contract", True, 1),
+                ("ho_so_kh", True, 3), ("other", False, 2)]
+        text = "\n".join(company_context._warehouse_lines(rows))
+        self.assertIn("1. VĂN BẢN PHÁP LUẬT: 15", text)
+        self.assertIn("2. BẢN ÁN – ÁN LỆ: 7", text)
+        self.assertIn("8. HỒ SƠ NHÂN SỰ: 29", text)
+        self.assertIn("9. HỒ SƠ KHÁCH HÀNG: 4", text)
+        self.assertIn("Khác/chưa xếp ngăn: 2", text)
+        self.assertIn("57 tài liệu", text)   # tổng
+
+    def test_followup_liet_ke_keeps_doc_inventory_intent(self):
+        state = {"intent": "doc_inventory", "doc_types": ["an_le"]}
+        self.assertEqual(company_context.infer_intent("liệt kê", state=state),
+                         "doc_inventory")
+
+
+class UnreadableFileTests(unittest.TestCase):
+    """Yêu cầu 20/08/2026: đọc được TÊN file mà ruột hỏng thì bot phải nói
+    'có file nhưng bên trong không đọc được' — tên người nằm ở THƯ MỤC."""
+
+    FAILURES = [
+        ("CV.pdf", "8. HỒ SƠ NHÂN SỰ/Ngân", "OCR PDF thất bại — file nhiều khả năng hỏng cấu trúc.",
+         "Mở file bằng trình đọc PDF rồi lưu lại thành bản mới."),
+        ("Hợp đồng dịch vụ.pdf", "9. HỒ SƠ KHÁCH HÀNG/[AGENTPRO]", "Không đọc được PDF.", ""),
+    ]
+
+    def test_question_about_person_matches_folder_name(self):
+        got = company_context._match_unreadable("sơ yếu lý lịch của Ngân", self.FAILURES)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0][0], "CV.pdf")
+
+    def test_unrelated_question_matches_nothing(self):
+        self.assertEqual(
+            company_context._match_unreadable("án lệ có mấy bộ", self.FAILURES), [])
+
+    def test_stopword_only_question_matches_nothing(self):
+        self.assertEqual(
+            company_context._match_unreadable("cho tôi file pdf", self.FAILURES), [])
+
+
+class PromptWarningTests(unittest.TestCase):
+    """Đoạn nguồn từ file scan CÓ CẢNH BÁO phải được dán nhãn trong prompt để
+    model nói 'nội dung chưa đọc được' thay vì suy đoán từ chữ OCR rác."""
+
+    def _chunk(self, status):
+        return {"chunk_id": 1, "content": "NỘI DUNG OCR CÓ THỂ RÁC", "title": "Ngân — CCCD",
+                "document_id": 5, "doc_type": "ho_so_ns", "score": 0.9,
+                "extraction_status": status}
+
+    def test_warning_chunk_carries_caveat(self):
+        from app import rag
+        prompt = rag.build_prompt("số CCCD của Ngân", [self._chunk("warning")],
+                                  chunk_chars=2000, budget=8000)
+        self.assertIn("CÓ CẢNH BÁO", prompt)
+        self.assertIn("chưa đọc được", prompt)
+
+    def test_ready_chunk_has_no_caveat(self):
+        from app import rag
+        prompt = rag.build_prompt("số CCCD của Ngân", [self._chunk("ready")],
+                                  chunk_chars=2000, budget=8000)
+        self.assertNotIn("CÓ CẢNH BÁO", prompt)
+
+
+class AnswerPolicyTests(unittest.TestCase):
+    """Chính sách 20/08/2026: không chặt cụt câu trả lời (num_predict=-1);
+    thay vào đó bot ĐỌC LẠI khi có dấu hiệu chưa ổn; và CHỈ hiện nguồn
+    liên quan (được trích dẫn / điểm cao)."""
+
+    def test_pdf_always_requires_human_review(self):
+        from app.auto_learn import decide_approval
+        # PDF: luôn chờ duyệt — kể cả tự-duyệt bật, bản cũ từng duyệt, trích sạch.
+        self.assertFalse(decide_approval(".pdf", True, True, True))
+        self.assertFalse(decide_approval(".PDF", True, False, True))
+        # Định dạng khác giữ nếp cũ.
+        self.assertTrue(decide_approval(".docx", True, False, True))   # auto
+        self.assertTrue(decide_approval(".xlsx", True, True, False))   # kế thừa
+        self.assertFalse(decide_approval(".docx", False, True, True))  # có cảnh báo
+
+    def test_needs_review_on_truncated_answer(self):
+        from app import rag
+        cut = "Theo Điều 35 Bộ luật Lao động, người lao động phải báo trước bốn mươi"
+        self.assertTrue(rag._answer_needs_review(cut))
+
+    def test_needs_review_on_repetition_and_length(self):
+        from app import rag
+        loop = ("Người lao động phải báo trước 45 ngày theo quy định hiện hành.\n" * 4)
+        self.assertTrue(rag._answer_needs_review(loop))
+        self.assertTrue(rag._answer_needs_review("Dài. " * 1000))
+
+    def test_clean_answer_skips_review(self):
+        from app import rag
+        good = ("Người lao động phải báo trước ít nhất 45 ngày [Nguồn 1].\n"
+                "- Căn cứ: điểm a khoản 1 Điều 35 Bộ luật Lao động số 45/2019/QH14.")
+        self.assertFalse(rag._answer_needs_review(good))
+        # Chạm trần token do admin đặt tay → phải rà.
+        self.assertTrue(rag._answer_needs_review(good, gen_tokens=1200, num_predict=1200))
+
+    def test_parse_review_ok_keeps_original(self):
+        from app import rag
+        self.assertIsNone(rag._parse_review("OK"))
+        self.assertIsNone(rag._parse_review("  ok.  "))
+        self.assertIsNone(rag._parse_review("Ổn"))
+        fixed = "Bản thay thế đã gọn, giữ nguyên [Nguồn 1] và kết thúc trọn vẹn."
+        self.assertEqual(rag._parse_review(fixed), fixed)
+
+    def test_relevant_sources_keeps_cited_and_high_score(self):
+        from app import rag
+        evidence = [
+            {"n": 1, "kind": "document", "title": "A", "score": 0.37},
+            {"n": 2, "kind": "document", "title": "B", "score": 0.36},
+            {"n": 3, "kind": "document", "title": "C", "score": 0.62},
+        ]
+        text = "Kết luận dựa trên hồ sơ [Nguồn 2]."
+        kept = rag.relevant_sources(text, evidence)
+        self.assertEqual([e["n"] for e in kept], [2, 3])   # cite + điểm cao; rác 37% bị bỏ
+
+    def test_relevant_sources_never_hides_everything(self):
+        from app import rag
+        evidence = [{"n": 1, "kind": "document", "title": "A", "score": 0.3}]
+        self.assertEqual(rag.relevant_sources("không trích dẫn gì", evidence), evidence)
+
+    def test_relevant_sources_keeps_system_evidence(self):
+        from app import rag
+        evidence = [{"kind": "system", "title": "Sổ nhân sự", "quote": "COUNT=3"}]
+        self.assertEqual(rag.relevant_sources("bất kỳ", evidence), evidence)
+
+
+class ChatDraftTests(unittest.TestCase):
+    """Yêu cầu 20/08/2026: 'tạo hợp đồng lao động cho Ngân như của Nhi' từ chat
+    phải ra BẢN NHÁP thật (tải được .docx), không phải một đoạn văn tả lại."""
+
+    def test_detect_full_pattern_variants(self):
+        from app import chat_draft
+        for q in [
+            "tạo hợp đồng lao động cho Ngân như của Nhi",
+            "soạn hợp đồng lao động cho chị Ngân theo mẫu của Nhi",
+            "tao hop dong lao dong cho ngan nhu cua nhi",   # gõ không dấu
+        ]:
+            got = chat_draft.detect_request(q)
+            self.assertIsNotNone(got, q)
+            self.assertEqual((got["kind_label"], got["for_name"], got["like_name"]),
+                             ("hợp đồng lao động", "ngan", "nhi"), q)
+
+    def test_detect_rejects_lookup_and_incomplete(self):
+        from app import chat_draft
+        self.assertIsNone(chat_draft.detect_request(
+            "hợp đồng của SUNGROUP có điều khoản phạt không"))
+        self.assertIsNone(chat_draft.detect_request(
+            "tạo hợp đồng lao động cho Ngân"))          # thiếu vế "như của ai"
+        self.assertIsNone(chat_draft.detect_request(
+            "tạo hợp đồng cho Ngân như của Ngân"))       # A trùng B
+
+    DOCS = [
+        (553, "HĐLĐ-Nhi", "ho_so_ns"),
+        (555, "Nhi — Sơ yếu lý lịch", "ho_so_ns"),
+        (537, "Ngân — CCCD", "ho_so_ns"),
+        (541, "Ngân — CV", "ho_so_ns"),
+        (531, "Ngân. KPI quý", "ho_so_ns"),
+        (12, "Mẫu hợp đồng dịch vụ", "mau_hd"),
+    ]
+
+    def test_pick_sources_finds_template_and_person_files(self):
+        from app import chat_draft
+        template, is_fallback, person = chat_draft.pick_sources(
+            self.DOCS, "hop dong lao dong", "ngan", "nhi")
+        self.assertEqual(template, (553, "HĐLĐ-Nhi"))
+        self.assertFalse(is_fallback)
+        # Hồ sơ định danh (CCCD, CV) xếp trước file KPI.
+        self.assertEqual([d[0] for d in person][:2], [537, 541])
+
+    def test_pick_sources_falls_back_when_kind_missing(self):
+        from app import chat_draft
+        docs = [d for d in self.DOCS if d[0] != 553]   # bỏ HĐLĐ của Nhi
+        template, is_fallback, _ = chat_draft.pick_sources(
+            docs, "hop dong lao dong", "ngan", "nhi")
+        self.assertEqual(template, (555, "Nhi — Sơ yếu lý lịch"))
+        self.assertTrue(is_fallback)
+
+    def test_pick_sources_none_when_person_unknown(self):
+        from app import chat_draft
+        template, _, person = chat_draft.pick_sources(
+            self.DOCS, "hop dong lao dong", "hoa", "tuan")
+        self.assertIsNone(template)
+        self.assertEqual(person, [])
+
+    def test_missing_answer_says_what_and_where(self):
+        from app import chat_draft
+        req = {"kind": "hdld", "kind_label": "hợp đồng lao động",
+               "for_name": "ngan", "like_name": "tuan"}
+        text = chat_draft._missing_answer(req)["answer"]
+        self.assertIn("chưa có hợp đồng lao động", text)
+        self.assertIn("8. HỒ SƠ NHÂN SỰ/Tuan/", text)
+        self.assertIn("Soạn tài liệu", text)
+
+
 class TitleScoreTests(unittest.TestCase):
     """Tên tài liệu (đặt tay trên Drive) phải góp điểm xếp hạng — 'từ tên thư
     mục kết hợp văn bản trong đó', không phó mặc cho vector."""

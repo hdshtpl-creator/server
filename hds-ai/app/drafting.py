@@ -24,9 +24,10 @@ PLACEHOLDER_RE = re.compile(
     r"\[(?:CẦN BỔ SUNG|CAN BO SUNG)(?::[^\]]*)?\]", re.IGNORECASE
 )
 CITATION_RE = re.compile(r"\[N(\d+)\]")
+# 20/08/2026: nới cho model 32K đọc bằng chứng đầy đủ hơn khi soạn thảo.
 MAX_SOURCE_DOCUMENTS = 20
-MAX_EVIDENCE_ITEMS = 12
-MAX_EXCERPT_CHARS = 1200
+MAX_EVIDENCE_ITEMS = 24
+MAX_EXCERPT_CHARS = 4000
 
 
 def normalize_source_ids(values: list[int] | None, maximum: int = MAX_SOURCE_DOCUMENTS) -> list[int]:
@@ -107,7 +108,7 @@ def retrieve_evidence(conn, document_ids: list[int], query: str,
                          JOIN documents d ON d.id=ch.document_id
                         WHERE ch.document_id=%s AND ch.embedding IS NOT NULL
                         ORDER BY distance
-                        LIMIT 3""",
+                        LIMIT 6""",
                     (vector_literal, doc_id),
                 )
                 candidates.extend(_evidence_row(row[:9], row[9]) for row in cur.fetchall())

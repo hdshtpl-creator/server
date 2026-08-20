@@ -25,13 +25,17 @@ from datetime import date
 
 from app import db
 
-MAX_CLIENTS = 3           # câu hỏi nhắc nhiều khách thì chỉ lấy mấy khách đầu
-MAX_MATTERS = 12          # số vụ việc liệt kê tối đa cho mỗi khách
-MAX_NOTE_CHARS = 700      # cắt ghi chú dài để prompt không phình
-MAX_SUMMARY_CHARS = 3000  # ngân sách ký tự cho file tổng hợp thông tin khách
-MAX_FINANCE_CHARS = 1500  # ngân sách ký tự cho tài liệu công nợ
-MAX_WORK_CHARS = 2500     # ngân sách ký tự cho nội dung hợp đồng/công việc của khách
-MAX_HR_CHARS = 9000       # ngân sách nội dung hồ sơ nhân sự (danh mục tính riêng)
+# Chính sách 20/08/2026 (chủ dự án): BOT KHÔNG BỊ GIỚI HẠN — 0 nghĩa là KHÔNG
+# CẮT / KHÔNG CHẶN SỐ LƯỢNG. Dữ liệu công ty nạp TRỌN VẸN vào prompt; trần vật
+# lý duy nhất là cửa sổ model (llm_num_ctx=32768). Máy đuối thì đặt lại số
+# dương ở đây — mọi chỗ dùng đều hiểu 0 = vô hạn, không cần sửa logic.
+MAX_CLIENTS = 0           # 0 = nạp đủ hồ sơ MỌI khách được nhắc trong câu hỏi
+MAX_MATTERS = 0           # 0 = liệt kê toàn bộ vụ việc của khách
+MAX_NOTE_CHARS = 0        # 0 = ghi chú 360° giữ nguyên văn
+MAX_SUMMARY_CHARS = 0     # 0 = file tổng hợp khách nạp trọn
+MAX_FINANCE_CHARS = 0     # 0 = tài liệu công nợ nạp trọn (vẫn cần quyền tài chính)
+MAX_WORK_CHARS = 0        # 0 = hợp đồng/công việc của khách nạp trọn
+MAX_HR_CHARS = 0          # 0 = hồ sơ nhân sự nạp trọn
 
 # Mã vụ việc theo quy ước [M-2026-001]
 RE_MATTER_CODE = re.compile(r"\b([A-Z]{1,3}-\d{4}-\d{1,4})\b", re.I)
@@ -91,7 +95,7 @@ def _name_mentioned(name: str, q_folded: str, q_tokens: set[str]) -> bool:
 
 def _cut(text, limit=MAX_NOTE_CHARS):
     text = (text or "").strip()
-    if len(text) <= limit:
+    if not limit or limit <= 0 or len(text) <= limit:   # 0 = không cắt (20/08/2026)
         return text
     return text[:limit].rstrip() + "…"
 
@@ -367,7 +371,10 @@ def detect_clients(cur, question, dept_ids, is_banqt):
             continue
         if _name_mentioned(name, q, q_tokens):
             hits.append((cid, name, code))
-    return hits[:MAX_CLIENTS]
+    # KHÔNG cắt ở đây — trả đủ để build() vừa cắt vừa GHI CHÚ vào prompt rằng
+    # còn khách bị bỏ lại. Cắt im lặng là model trả lời câu so sánh 4 khách
+    # bằng dữ liệu của 3 khách mà không ai hay biết.
+    return hits
 
 
 def detect_clients_by_matter(cur, question, dept_ids, is_banqt):
@@ -470,7 +477,7 @@ DETAIL_WORDS = {
 
 # Số khách tối đa được BUNG chi tiết cho câu "liệt kê khách kèm dịch vụ". Nhiều
 # hơn thì prompt quá dài — lúc đó chỉ liệt kê tên và mời hỏi từng khách.
-ROSTER_DETAIL_MAX = 5
+ROSTER_DETAIL_MAX = 0   # 0 = bung chi tiết MỌI khách khi hỏi "liệt kê kèm dịch vụ"
 
 
 def _detail_intent(q_folded: str) -> bool:
@@ -607,7 +614,7 @@ def _staff_block(cur, is_banqt):
                          LEFT JOIN departments d ON d.id = ud.department_id
                         WHERE u.active AND u.role NOT IN ('client_free','client_plus','client_pro')
                         GROUP BY u.id, u.full_name, u.role
-                        ORDER BY u.full_name LIMIT 100""")
+                        ORDER BY u.full_name""")
         rows = cur.fetchall()
         if rows:
             out.append("- Danh sách tài khoản (chỉ Ban quản trị được xem):")
@@ -654,13 +661,15 @@ def _hr_block(cur, budget=MAX_HR_CHARS):
             line += f" — {_cut(summary, 180)}"
         out.append(line)
 
-    # Phần còn lại chia ĐỀU cho từng hồ sơ, không để hồ sơ nào chiếm hết.
-    share = max(300, budget // max(1, len(docs)))
+    # budget > 0: chia ĐỀU cho từng hồ sơ, không để hồ sơ nào chiếm hết.
+    # budget = 0 (chính sách 20/08/2026): nạp TRỌN mọi đoạn của mọi hồ sơ.
+    share = max(300, budget // max(1, len(docs))) if budget and budget > 0 else 0
+    limit_sql = " LIMIT 3" if budget and budget > 0 else ""
     out.append("  NỘI DUNG TRÍCH TỪ TỪNG HỒ SƠ:")
     for doc_id, title, _ in docs:
         cur.execute("""SELECT content FROM chunks
                         WHERE document_id = %s
-                        ORDER BY chunk_index LIMIT 3""", (doc_id,))
+                        ORDER BY chunk_index""" + limit_sql, (doc_id,))
         rows = cur.fetchall()
         if not rows:
             continue
@@ -670,19 +679,22 @@ def _hr_block(cur, budget=MAX_HR_CHARS):
     return out
 
 
-def _roster_block(cur, dept_ids, is_banqt, limit=60):
+def _roster_block(cur, dept_ids, is_banqt, limit=0):  # 0 = in het (20/08/2026)
     """Danh sách khách người hỏi được thấy — cho câu 'có bao nhiêu công ty'.
 
     Lọc theo phòng ban vì bảng clients không có RLS (Ban QT thấy tất cả)."""
+    tail = " LIMIT %s" if limit and limit > 0 else ""
     if is_banqt:
         cur.execute("""SELECT c.name, c.code, d.name FROM clients c
                        LEFT JOIN departments d ON d.id=c.department_id
-                       ORDER BY c.name LIMIT %s""", (limit,))
+                       ORDER BY c.name""" + tail,
+                    (limit,) if tail else ())
     else:
+        params = [dept_ids or [-1]] + ([limit] if tail else [])
         cur.execute("""SELECT c.name, c.code, d.name FROM clients c
                        LEFT JOIN departments d ON d.id=c.department_id
                        WHERE c.department_id = ANY(%s) OR c.department_id IS NULL
-                       ORDER BY c.name LIMIT %s""", (dept_ids or [-1], limit))
+                       ORDER BY c.name""" + tail, params)
     rows = cur.fetchall()
     # Ban QT thấy toàn công ty; người khác chỉ thấy khách phòng mình. Ghi rõ
     # phạm vi để bot không trả lời con số của một phòng như thể là của cả HDS.
@@ -761,16 +773,18 @@ def _pinned_text(cur, cid, doc_types, budget):
                         ORDER BY d.updated_at DESC, d.id, c.chunk_index""",
                     (cid, list(doc_types)))
     out, used, last_title = [], 0, None
+    capped = bool(budget and budget > 0)   # 0 = nạp TRỌN, không cắt (20/08/2026)
     for title, content in cur.fetchall():
-        if used >= budget:
+        if capped and used >= budget:
             break
         if title != last_title:
             out.append(f"  ── {title} ──")
             last_title = title
         piece = (content or "").strip()
-        room = budget - used
-        if len(piece) > room:
-            piece = piece[:room].rstrip() + "…"
+        if capped:
+            room = budget - used
+            if len(piece) > room:
+                piece = piece[:room].rstrip() + "…"
         out.append("  " + piece.replace("\n", "\n  "))
         used += len(piece)
     return out
@@ -809,13 +823,25 @@ def _client_lines(cur, cid, name, code, internal, can_finance=False, share=1,
                 if val and val.strip():
                     lines.append(f"  · {label}: {_cut(val)}")
 
-    cur.execute("""SELECT code, title, matter_type, status, deadline FROM matters
+    # Đếm TỔNG trước khi cắt danh sách: block chỉ liệt kê MAX_MATTERS vụ gần
+    # hạn nhất, nhưng câu "khách X có bao nhiêu vụ" phải đọc được TỔNG THẬT —
+    # không ghi tổng thì model đếm 12 dòng và trả lời 12 cho khách có 30 vụ.
+    cur.execute("SELECT count(*) FROM matters WHERE client_id = %s", (cid,))
+    total_matters = cur.fetchone()[0]
+    # MAX_MATTERS = 0 → liệt kê TOÀN BỘ vụ việc (chính sách 20/08/2026).
+    matters_sql = """SELECT code, title, matter_type, status, deadline FROM matters
                    WHERE client_id = %s
-                   ORDER BY (deadline IS NULL), deadline, opened_at DESC
-                   LIMIT %s""", (cid, MAX_MATTERS))
+                   ORDER BY (deadline IS NULL), deadline, opened_at DESC"""
+    if MAX_MATTERS and MAX_MATTERS > 0:
+        cur.execute(matters_sql + " LIMIT %s", (cid, MAX_MATTERS))
+    else:
+        cur.execute(matters_sql, (cid,))
     matters = cur.fetchall()
     if matters:
-        lines.append(f"- Vụ việc ({len(matters)} vụ gần/gấp nhất):")
+        head = f"- Vụ việc: TỔNG {total_matters} vụ"
+        if total_matters > len(matters):
+            head += f"; liệt kê {len(matters)} vụ gần/gấp nhất bên dưới"
+        lines.append(head + ":")
         for m_code, title, m_type, status, deadline in matters:
             bits = [f"[{m_code}]" if m_code else "[chưa có mã]", title]
             if m_type:
@@ -961,6 +987,171 @@ def infer_intent(question, history=None, state=None):
     return None
 
 
+# Số tên tối đa liệt kê cho MỖI loại khi đếm kho. Nhiều hơn thì nêu con số và
+# mời thu hẹp — đổ trăm dòng tên không ai đọc.
+INVENTORY_LIST_MAX = 0   # 0 = liệt kê đủ tên, không cắt danh sách
+
+
+def _inventory_lines(wanted, counts_rows, titles_by_type):
+    """Dựng câu trả lời đếm kho. Hỏi ĐÍCH DANH một loại → đếm + LIỆT KÊ TÊN
+    từng bộ của loại đó, không đổ bảng toàn kho (20/08/2026: "án lệ có mấy bộ"
+    nhận nguyên bảng 11 loại — đúng số nhưng không ai cần). Hỏi chung về kho
+    mới đưa bảng theo loại như cũ."""
+    counts = dict(counts_rows)
+    total = sum(counts.values())
+    lines = []
+    if wanted:
+        for dt in wanted:
+            n = counts.get(dt, 0)
+            label = DOC_TYPE_VN.get(dt, dt)
+            if not n:
+                lines.append(f"Kho **chưa có tài liệu {label} nào** được duyệt "
+                             f"(tính đến {date.today()}). Muốn bot trả lời được "
+                             f"về {label}, thả file vào đúng thư mục trên Drive "
+                             "rồi chờ đồng bộ/duyệt.")
+                continue
+            lines.append(f"Kho hiện có **{n} tài liệu {label}** đã duyệt "
+                         f"(tính đến {date.today()}):")
+            names = titles_by_type.get(dt) or []
+            cap = INVENTORY_LIST_MAX if INVENTORY_LIST_MAX > 0 else len(names)
+            for title in names[:cap]:
+                lines.append(f"- {title}")
+            if n > cap:
+                lines.append(f"- … và {n - cap} tài liệu khác — "
+                             "hỏi kèm chủ đề để mình lọc giúp.")
+        if total:
+            lines.append(f"(Toàn kho đang có {total} tài liệu đã duyệt trong "
+                         "phạm vi bạn được xem.)")
+        return lines
+    if total:
+        lines.append(f"Toàn kho có {total} tài liệu đã duyệt trong phạm vi "
+                     "bạn được xem:")
+        lines += [f"- {DOC_TYPE_VN.get(dt, dt)}: {n}" for dt, n in counts_rows]
+    else:
+        lines.append("Kho chưa có tài liệu nào được duyệt trong phạm vi bạn được xem.")
+    return lines
+
+
+# Từ quá chung trong TÊN FILE — giao với câu hỏi ở mấy từ này không nói lên gì.
+_UNREADABLE_STOP = {
+    "file", "tep", "ban", "van", "cong", "cua", "cho", "toi", "hds",
+    "pdf", "docx", "xlsx", "doc", "csv", "scan", "so", "danh", "sach",
+}
+
+
+def _match_unreadable(question, failures, limit=3):
+    """Những file ĐANG LỖI trích xuất mà câu hỏi có vẻ nhắc tới.
+
+    `failures`: [(file_name, location, error_message, hint), …]. So bằng token
+    ≥3 ký tự (bỏ dấu) giữa câu hỏi và tên file + đường dẫn thư mục — đường dẫn
+    quan trọng vì tên người nằm ở THƯ MỤC ("8. HỒ SƠ NHÂN SỰ/Ngân") chứ không
+    nằm trong tên file ("CV.pdf")."""
+    qtokens = {t for t in re.findall(r"[a-z0-9]+", _fold(question))
+               if len(t) >= 3 and t not in _UNREADABLE_STOP}
+    if not qtokens:
+        return []
+    out = []
+    for file_name, location, error_message, hint in failures:
+        hay = _fold(f"{file_name or ''} {location or ''}")
+        ftokens = {t for t in re.findall(r"[a-z0-9]+", hay)
+                   if len(t) >= 3 and t not in _UNREADABLE_STOP}
+        if qtokens & ftokens:
+            out.append((file_name, location, error_message, hint))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _unreadable_block(cur, question):
+    """Khối 'file có trên Drive nhưng CHƯA ĐỌC ĐƯỢC' khớp với câu hỏi.
+
+    Yêu cầu trực tiếp 20/08/2026: đọc được TÊN file mà ruột hỏng thì bot phải
+    nói 'có file nhưng bên trong không đọc được' — không im lặng như thể file
+    không tồn tại, càng không suy đoán nội dung."""
+    try:
+        cur.execute("""SELECT file_name, location, error_message, hint
+                         FROM ingest_failures
+                        WHERE resolved_at IS NULL
+                        ORDER BY last_seen_at DESC LIMIT 20""")
+        matched = _match_unreadable(question, cur.fetchall())
+    except Exception:
+        return []
+    if not matched:
+        return []
+    out = ["### File CÓ TRÊN DRIVE nhưng bot CHƯA ĐỌC ĐƯỢC NỘI DUNG — khi câu "
+           "hỏi cần tới file nào dưới đây, trả lời rõ: file tồn tại nhưng nội "
+           "dung chưa đọc được (kèm lý do + cách sửa), tuyệt đối không suy đoán:"]
+    for file_name, location, error_message, hint in matched:
+        line = f"  · {file_name}" + (f" (tại {location})" if location else "")
+        if error_message:
+            line += f": {error_message}"
+        if hint:
+            line += f" → {hint}"
+        out.append(line)
+    return out
+
+
+# Cây ngăn chuẩn của kho Drive (CAU_TRUC_DRIVE.md). Ngăn 9 nhận diện theo
+# client_id (mọi giấy tờ thuộc một khách), các ngăn 1–8 theo doc_type của tài
+# liệu KHÔNG thuộc khách — đúng cách auto_learn gán nhãn từ thư mục.
+WAREHOUSE_SHELVES = [
+    ("1. VĂN BẢN PHÁP LUẬT", ("law",)),
+    ("2. BẢN ÁN – ÁN LỆ", ("ban_an", "an_le")),
+    ("3. HỢP ĐỒNG MẪU", ("mau_hd",)),
+    ("4. QUAN ĐIỂM PHÁP LÝ", ("advisory",)),
+    ("5. THƯ MẪU – BIỂU MẪU", ("thu_mau",)),
+    ("6. QUY TRÌNH NỘI BỘ", ("quy_trinh",)),
+    ("7. NHÃN HIỆU – SHTT", ("nhan_hieu",)),
+    ("8. HỒ SƠ NHÂN SỰ", ("ho_so_ns",)),
+]
+
+
+def _warehouse_lines(rows):
+    """Khối BẢN ĐỒ KHO cho prompt — rows = [(doc_type, thuộc_khách, count), …].
+
+    Chính sách 20/08/2026: nạp cấu trúc thư mục vào MỌI câu hỏi nội bộ để bot
+    luôn biết kho có ngăn nào, mỗi ngăn bao nhiêu tài liệu — trả lời meta chính
+    xác và trích dẫn đúng ngăn thay vì đoán."""
+    per_type = {}
+    client_total = 0
+    for doc_type, is_client, count in rows:
+        if is_client:
+            client_total += count
+        else:
+            per_type[doc_type or "other"] = per_type.get(doc_type or "other", 0) + count
+    total = client_total + sum(per_type.values())
+    out = [f"### BẢN ĐỒ KHO TÀI LIỆU (cây thư mục Drive chuẩn — {total} tài liệu "
+           "đã duyệt trong phạm vi người hỏi):"]
+    shelved = set()
+    for shelf, types in WAREHOUSE_SHELVES:
+        n = sum(per_type.get(t, 0) for t in types)
+        shelved.update(types)
+        note = ""
+        if shelf.startswith("8."):
+            note = " (thư mục con theo TÊN nhân sự; tiêu đề dạng 'Tên — Giấy tờ')"
+        out.append(f"  · {shelf}: {n} tài liệu{note}")
+    out.append(f"  · 9. HỒ SƠ KHÁCH HÀNG: {client_total} tài liệu (thư mục con "
+               "theo [MÃ KHÁCH], bên trong chia Thông tin khách hàng / Dự án – "
+               "Vụ việc / Hợp đồng / Thư tư vấn / Hồ sơ nộp cơ quan / Công nợ)")
+    leftover = sum(n for t, n in per_type.items() if t not in shelved)
+    if leftover:
+        out.append(f"  · Khác/chưa xếp ngăn: {leftover} tài liệu")
+    return out
+
+
+def _warehouse_block(cur):
+    """Đếm kho theo ngăn — RLS của phiên tự giới hạn đúng phần được xem."""
+    try:
+        cur.execute("""SELECT coalesce(doc_type,'other'), client_id IS NOT NULL,
+                              count(*)
+                         FROM documents
+                        WHERE approved AND label_verified AND coalesce(active,true)
+                        GROUP BY 1, 2""")
+        return _warehouse_lines(cur.fetchall())
+    except Exception:
+        return []
+
+
 def _system_evidence(title, locator, quote):
     """Nguồn dữ liệu vận hành cho UI; không giả làm một tài liệu trích dẫn."""
     return {
@@ -1053,7 +1244,7 @@ def structured_answer(question, channel, client_id=None, dept_ids=None,
                     total = cur.fetchone()[0]
                     cur.execute("""SELECT c.name,c.code,d.name FROM clients c
                                    LEFT JOIN departments d ON d.id=c.department_id
-                                   ORDER BY c.name LIMIT 60""")
+                                   ORDER BY c.name""")
                 else:
                     cur.execute("""SELECT count(*) FROM clients
                                    WHERE department_id=ANY(%s) OR department_id IS NULL""",
@@ -1062,14 +1253,13 @@ def structured_answer(question, channel, client_id=None, dept_ids=None,
                     cur.execute("""SELECT c.name,c.code,d.name FROM clients c
                                    LEFT JOIN departments d ON d.id=c.department_id
                                    WHERE c.department_id=ANY(%s) OR c.department_id IS NULL
-                                   ORDER BY c.name LIMIT 60""", (dept_ids or [-1],))
+                                   ORDER BY c.name""", (dept_ids or [-1],))
                 rows = cur.fetchall()
         scope = "toàn công ty" if is_banqt else "trong phạm vi phòng bạn phụ trách"
         lines = [f"HDS có **{total} khách hàng {scope}** (tính đến {date.today()})."]
         lines += [f"- {name}" + (f" — mã {code}" if code else "")
                   + (f", phòng {dept}" if dept else "") for name, code, dept in rows]
-        if total > len(rows):
-            lines.append(f"- … và {total - len(rows)} khách khác; danh sách trên giới hạn 60 dòng.")
+        # 20/08/2026: in đủ danh sách, không cắt 60 dòng nữa.
         return {
             "answer": "\n".join(lines), "answer_mode": "structured",
             "grounding_status": "verified",
@@ -1095,6 +1285,12 @@ def structured_answer(question, channel, client_id=None, dept_ids=None,
         # RLS trên documents áp theo phiên: mỗi người chỉ đếm được đúng phần
         # kho mình được xem (công nợ, hồ sơ phòng khác tự bị loại).
         wanted = _requested_doc_types(_fold(_topic_question(question, history)))
+        if not wanted and state:
+            # Câu hỏi tiếp "liệt kê" không nêu loại — dùng lại loại của lượt
+            # trước. Trước đây rơi về bảng toàn kho nên "án lệ có mấy bộ" rồi
+            # "liệt kê" nhận lại Y NGUYÊN bảng đếm cũ (20/08/2026).
+            wanted = [dt for dt in (state.get("doc_types") or [])
+                      if isinstance(dt, str)]
         with db.session(role="internal", dept_ids=dept_ids, is_banqt=is_banqt,
                         can_finance=can_finance) as conn:
             with conn.cursor() as cur:
@@ -1104,26 +1300,21 @@ def structured_answer(question, channel, client_id=None, dept_ids=None,
                                   AND coalesce(active,true)
                                 GROUP BY 1 ORDER BY count(*) DESC, 1""")
                 rows = cur.fetchall()
-        counts = dict(rows)
-        total = sum(counts.values())
-        lines = []
-        for dt in wanted:
-            n = counts.get(dt, 0)
-            label = DOC_TYPE_VN.get(dt, dt)
-            if n:
-                lines.append(f"Kho hiện có **{n} tài liệu {label}** đã duyệt "
-                             f"(tính đến {date.today()}).")
-            else:
-                lines.append(f"Kho **chưa có tài liệu {label} nào** được duyệt "
-                             f"(tính đến {date.today()}). Muốn bot trả lời được "
-                             f"về {label}, thả file vào đúng thư mục trên Drive "
-                             "rồi chờ đồng bộ/duyệt.")
-        if total:
-            lines.append(f"Toàn kho có {total} tài liệu đã duyệt trong phạm vi "
-                         "bạn được xem:")
-            lines += [f"- {DOC_TYPE_VN.get(dt, dt)}: {n}" for dt, n in rows]
-        else:
-            lines.append("Kho chưa có tài liệu nào được duyệt trong phạm vi bạn được xem.")
+                titles = {}
+                if wanted:
+                    # Hỏi đích danh một loại thì phải THẤY TÊN từng bộ — con số
+                    # trần bắt người ta hỏi thêm một lượt vô ích.
+                    cur.execute("""SELECT coalesce(doc_type,'other'), title
+                                     FROM documents
+                                    WHERE approved AND label_verified
+                                      AND coalesce(active,true)
+                                      AND coalesce(doc_type,'other')=ANY(%s)
+                                    ORDER BY title""", (wanted,))
+                    for dt, title in cur.fetchall():
+                        titles.setdefault(dt, []).append(title)
+        lines = _inventory_lines(wanted, rows, titles)
+        next_state["doc_types"] = wanted
+        total = sum(n for _, n in rows)
         return {
             "answer": "\n".join(lines), "answer_mode": "structured",
             "grounding_status": "verified",
@@ -1250,21 +1441,32 @@ def build(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                 # được thông tin bên trong thay vì chỉ đọc danh sách tên.
                 expand_all = False
                 if not found and _roster_intent(q_folded) and _detail_intent(q_folded):
-                    # Chỉ cần biết có tối đa 5 khách hay nhiều hơn; không kéo
-                    # toàn bộ danh mục về RAM cho câu "liệt kê kèm dịch vụ".
-                    visible = _visible_clients(cur, dept_ids, is_banqt,
-                                               limit=ROSTER_DETAIL_MAX + 1)
-                    if visible and len(visible) <= ROSTER_DETAIL_MAX:
+                    # ROSTER_DETAIL_MAX = 0 (20/08/2026): bung chi tiết MỌI
+                    # khách trong phạm vi — không giới hạn.
+                    probe = (ROSTER_DETAIL_MAX + 1) if ROSTER_DETAIL_MAX > 0 else None
+                    visible = _visible_clients(cur, dept_ids, is_banqt, limit=probe)
+                    if visible and (ROSTER_DETAIL_MAX <= 0
+                                    or len(visible) <= ROSTER_DETAIL_MAX):
                         found = visible
                         expand_all = True
 
                 cap = ROSTER_DETAIL_MAX if expand_all else MAX_CLIENTS
-                picked = found[:cap]
+                picked = found[:cap] if cap and cap > 0 else found
                 want_detail = _detail_intent(q_folded)
                 blocks = [_client_lines(cur, cid, name, code, internal=True,
                                        can_finance=can_finance, share=len(picked),
                                        detail=want_detail)
                           for cid, name, code in picked]
+                if len(found) > len(picked):
+                    # Cắt thì phải TỰ KHAI: model cần biết còn khách nào bị bỏ
+                    # lại để nói rõ với người hỏi, thay vì so sánh 4 khách bằng
+                    # dữ liệu của 3 khách như thể đã đủ.
+                    left_out = ", ".join(name for _, name, _ in found[len(picked):])
+                    blocks.append([
+                        f"### LƯU Ý: câu hỏi nhắc tới {len(found)} khách nhưng chỉ "
+                        f"nạp được hồ sơ {len(picked)} khách đầu (giới hạn ngữ cảnh). "
+                        f"CHƯA nạp: {left_out}. Nói rõ điều này và mời hỏi riêng "
+                        "từng khách còn lại."])
                 # Danh sách tên thu gọn: chỉ thêm khi câu roster mà KHÔNG bung
                 # chi tiết (câu đếm thuần, hoặc quá nhiều khách để bung).
                 if _roster_intent(q_folded) and not expand_all:
@@ -1273,6 +1475,18 @@ def build(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                     blocks.append(_staff_block(cur, is_banqt))
                 if _alert_intent(q_folded):
                     blocks.append(_alerts_block(cur, dept_ids, is_banqt))
+                # Câu hỏi nhắc tới file đang LỖI trích xuất trên Drive: nói rõ
+                # "có file nhưng chưa đọc được" — dùng CÂU GỐC vì tên riêng
+                # trong câu chính là chìa khớp với thư mục/tên file.
+                unreadable = _unreadable_block(cur, question)
+                if unreadable:
+                    blocks.append(unreadable)
+                # BẢN ĐỒ KHO nạp MỌI câu nội bộ (20/08/2026): bot luôn biết cây
+                # thư mục và kho có gì — kể cả khi câu hỏi không đụng dữ liệu
+                # khách/nhân sự nào.
+                warehouse = _warehouse_block(cur)
+                if warehouse:
+                    blocks.append(warehouse)
                 if not blocks:
                     return ""
 

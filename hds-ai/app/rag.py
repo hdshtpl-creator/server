@@ -15,7 +15,7 @@ import unicodedata
 from collections import defaultdict
 from datetime import date
 
-from app import company_context, db, settings
+from app import chat_draft, company_context, db, settings
 from app.models import embed, llm
 
 # --------------------------------------------------------------------
@@ -30,13 +30,18 @@ from app.models import embed, llm
 # chỉ mục vẫn tăng theo dữ liệu. Vì vậy kho triệu đoạn phải kiểm chứng bằng
 # EXPLAIN/load-test; không được coi câu "prompt không đổi" là cam kết tốc độ.
 # --------------------------------------------------------------------
-TOP_K = 8                 # số đoạn tài liệu đưa vào prompt
-CHUNK_CHARS = 2400        # cắt mỗi đoạn còn bấy nhiêu ký tự
-CONTEXT_CHARS = 14000     # tổng ngân sách cho toàn bộ tài liệu tham khảo
-HISTORY_CHARS = 300       # mỗi lượt hỏi-đáp cũ chỉ giữ bấy nhiêu ký tự
-MIN_SCORE = 0.25          # dưới ngưỡng này coi như không liên quan, bỏ đi
-RETRIEVAL_CANDIDATES = 60 # lấy rộng rồi xếp hạng lại trước khi cắt top_k
-MAX_CHUNKS_PER_DOC = 3    # tránh một tài liệu chiếm hết mọi vị trí nguồn
+# Chính sách 20/08/2026 (yêu cầu trực tiếp của chủ dự án): BOT KHÔNG BỊ GIỚI
+# HẠN — đọc hết mọi đoạn LIÊN QUAN, không cắt nội dung. Trần duy nhất còn lại
+# là cửa sổ vật lý của model (llm_num_ctx, đã nâng 32768 cho qwen3:14b).
+# Giá trị 0 ở các ngân sách ký tự nghĩa là KHÔNG CẮT. Máy đuối thì hạ các số
+# này trên web (Quản trị → Cài đặt AI), không sửa code.
+TOP_K = 24                # số đoạn tài liệu đưa vào prompt
+CHUNK_CHARS = 0           # 0 = giữ trọn từng đoạn, không cắt
+CONTEXT_CHARS = 0         # 0 = không trần tổng tài liệu tham khảo
+HISTORY_CHARS = 4000      # mỗi lượt hỏi-đáp cũ giữ tới bấy nhiêu ký tự
+MIN_SCORE = 0.25          # vẫn lọc LIÊN QUAN: dưới ngưỡng này là rác, bỏ đi
+RETRIEVAL_CANDIDATES = 300  # lấy rất rộng rồi xếp hạng lại trước khi lấy top_k
+MAX_CHUNKS_PER_DOC = 8    # một tài liệu vẫn không được chiếm hết mọi vị trí
 
 CHANNEL_LEVEL = {"public": "public", "internal": "internal", "portal": "client"}
 
@@ -147,7 +152,7 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
             return []
     candidate_k = candidate_k or settings.get_int(
         "retrieval_candidate_k", max(RETRIEVAL_CANDIDATES, top_k * 8))
-    candidate_k = max(top_k, min(int(candidate_k), 200))
+    candidate_k = max(top_k, min(int(candidate_k), 1000))
     max_per_document = max_per_document or settings.get_int(
         "retrieval_max_chunks_per_doc", MAX_CHUNKS_PER_DOC)
     max_per_document = max(1, min(int(max_per_document), top_k))
@@ -164,12 +169,18 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                        1-(c.embedding <=> %s::vector) AS semantic_score,
                        {lexical} AS lexical_score,
                        c.page_number,c.section_title,c.source_locator,
-                       d.source_version,c.chunk_index,d.doc_type,d.client_id,cl.name
+                       d.source_version,c.chunk_index,d.doc_type,d.client_id,cl.name,
+                       d.extraction_status
                   FROM chunks c JOIN documents d ON d.id=c.document_id
                   LEFT JOIN clients cl ON cl.id=d.client_id"""
+    # KHÔNG lọc theo extraction_status: mọi bản scan OCR đều mang status
+    # 'warning', mà admin ĐÃ DUYỆT nghĩa là đã xác nhận dùng được — lọc ở đây
+    # là ẩn vĩnh viễn giấy tờ scan đã duyệt khỏi mọi câu trả lời (đúng ca
+    # 20/08/2026: hồ sơ scan của một nhân sự "có tên mà không có nội dung",
+    # model phải đoán và đoán sai). Cổng con người là approved+label_verified;
+    # status chỉ còn là NHÃN CẢNH BÁO đi kèm từng đoạn để model thận trọng.
     where = """ WHERE c.embedding IS NOT NULL AND d.approved AND d.label_verified
-                       AND coalesce(d.active,true)
-                       AND coalesce(d.extraction_status,'ready')='ready'"""
+                       AND coalesce(d.active,true)"""
     filter_params = []
     if doc_types is not None:
         where += " AND c.doc_type=ANY(%s)"
@@ -226,7 +237,7 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
             "page_number": r[7], "section_title": r[8],
             "source_locator": r[9], "source_version": r[10],
             "chunk_index": r[11], "doc_type": r[12], "client_id": r[13],
-            "client_name": r[14],
+            "client_name": r[14], "extraction_status": r[15],
         })
         item["semantic_score"] = max(item["semantic_score"], float(r[5] or 0))
         item["lexical_score"] = max(item["lexical_score"], float(r[6] or 0))
@@ -311,14 +322,13 @@ def _with_neighbours(chosen, level, client_id, dept_ids, is_banqt, can_finance,
             cur.execute("""SELECT c.id,c.content,c.document_id,d.title,d.drive_file_id,
                                   c.page_number,c.section_title,c.source_locator,
                                   d.source_version,c.chunk_index,
-                                  d.doc_type,d.client_id,cl.name
+                                  d.doc_type,d.client_id,cl.name,d.extraction_status
                              FROM chunks c JOIN documents d ON d.id=c.document_id
                              LEFT JOIN clients cl ON cl.id=d.client_id
                             WHERE (c.document_id, c.chunk_index) IN (
                                     SELECT * FROM unnest(%s::int[], %s::int[]))
                               AND d.approved AND d.label_verified
-                              AND coalesce(d.active,true)
-                              AND coalesce(d.extraction_status,'ready')='ready'""",
+                              AND coalesce(d.active,true)""",
                         (doc_ids, idxs))
             rows = cur.fetchall()
 
@@ -330,7 +340,7 @@ def _with_neighbours(chosen, level, client_id, dept_ids, is_banqt, can_finance,
             "page_number": r[5], "section_title": r[6],
             "source_locator": r[7], "source_version": r[8],
             "chunk_index": r[9], "doc_type": r[10], "client_id": r[11],
-            "client_name": r[12],
+            "client_name": r[12], "extraction_status": r[13],
             # Thấp hơn đoạn gốc: hàng xóm là ngữ cảnh bổ trợ, không phải căn cứ chính.
             "score": max(0.0, score_of.get((r[2], r[9]), 0.3) - 0.05),
             "is_neighbour": True,
@@ -469,16 +479,23 @@ def fit_context(chunks, chunk_chars=None, budget=None, question=""):
     khớp nhất nên bị cắt sau cùng — cắt từ đuôi danh sách là mất phần ít liên
     quan nhất.
     """
-    chunk_chars = chunk_chars or settings.get_int("chunk_char_limit", CHUNK_CHARS)
-    budget = budget or settings.get_int("context_char_budget", CONTEXT_CHARS)
+    if chunk_chars is None:
+        chunk_chars = settings.get_int("chunk_char_limit", CHUNK_CHARS)
+    if budget is None:
+        budget = settings.get_int("context_char_budget", CONTEXT_CHARS)
+    # 0 (hoặc âm) = KHÔNG GIỚI HẠN — chính sách 20/08/2026: bot đọc trọn mọi
+    # đoạn liên quan; trần vật lý duy nhất là num_ctx của model.
     out, used = [], 0
     for c in chunks:
-        if used >= budget:
+        if budget and budget > 0 and used >= budget:
             break
-        content = _best_window(c.get("content") or "", question, chunk_chars)
-        room = budget - used
-        if len(content) > room:
-            content = content[:room].rstrip() + "…"
+        content = c.get("content") or ""
+        if chunk_chars and chunk_chars > 0:
+            content = _best_window(content, question, chunk_chars)
+        if budget and budget > 0:
+            room = budget - used
+            if len(content) > room:
+                content = content[:room].rstrip() + "…"
         out.append({**c, "content": content})
         used += len(content)
     return out
@@ -531,7 +548,18 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                 locator = (locator + ", " if locator else "") + c["section_title"]
             label = f" — {locator}" if locator else ""
             owner = _source_owner_tag(c)
-            parts.append(f"[Nguồn {i}] {owner}{c.get('title','')}{label}\n{c['content']}\n")
+            # File scan/OCR mang cảnh báo trích xuất: nói thẳng cho model biết
+            # để nó trả lời "file có trong kho nhưng nội dung chưa đọc được /
+            # có thể sai ký tự" thay vì suy đoán từ chữ OCR rác — yêu cầu trực
+            # tiếp của người dùng 20/08/2026.
+            caveat = ""
+            if (c.get("extraction_status") or "ready") == "warning":
+                caveat = ("\n(LƯU Ý: file này là bản scan/trích xuất CÓ CẢNH BÁO — "
+                          "nội dung bên dưới có thể thiếu trang hoặc sai ký tự. Nếu "
+                          "không thấy thông tin cần trả lời, hãy nói rõ: kho CÓ file "
+                          "này nhưng nội dung chưa đọc được đầy đủ, cần scan/lưu lại "
+                          "bản rõ hơn — tuyệt đối không suy đoán.)")
+            parts.append(f"[Nguồn {i}] {owner}{c.get('title','')}{label}{caveat}\n{c['content']}\n")
         # Chỉ dẫn phân biệt chủ thể — chỉ chèn khi thật sự có hồ sơ khách trong
         # bộ nguồn, để câu hỏi thuần pháp lý không phải cõng thêm chữ thừa.
         if any(c.get("client_id") or c.get("client_name") for c in all_ctx):
@@ -841,7 +869,8 @@ def _log_slow(question, t):
 
 def prepare(question, channel, client_id=None, conversation_id=None,
             use_temp=False, use_method=False, dept_ids=None, is_banqt=False,
-            can_finance=False, role=None, model=None, source_document_ids=None):
+            can_finance=False, role=None, model=None, source_document_ids=None,
+            user_id=None):
     """Dựng đủ nguyên liệu cho một lượt trả lời, DỪNG NGAY TRƯỚC khi gọi model.
 
     Tách riêng vì có hai cách sinh câu trả lời — trả một cục (answer) và trả
@@ -895,6 +924,28 @@ def prepare(question, channel, client_id=None, conversation_id=None,
             question, channel, client_id=client_id, dept_ids=dept_ids,
             is_banqt=is_banqt, can_finance=can_finance,
             history=history, state=state)
+    # LỆNH SOẠN THEO MẪU từ chat ("tạo hợp đồng lao động cho Ngân như của
+    # Nhi"): tạo một bản nháp THẬT trong tab Soạn tài liệu (tải được .docx)
+    # rồi trả lời bằng kết quả — không đi RAG để tả lại việc đó bằng lời.
+    # Nhịp tim SSE ở api.py bọc cả prepare nên lượt sinh dài không gây 524.
+    if direct is None and channel == "internal" and user_id:
+        draft_req = chat_draft.detect_request(question)
+        if draft_req:
+            try:
+                direct = chat_draft.handle(
+                    question, draft_req, user_id=user_id, dept_ids=dept_ids,
+                    is_banqt=is_banqt, can_finance=can_finance)
+            except Exception as exc:  # noqa: BLE001 — chat không được sập vì soạn thảo
+                direct = {
+                    "answer": ("Mình chưa tạo được bản nháp từ chat "
+                               f"({type(exc).__name__}). Bạn mở tab **Soạn tài "
+                               "liệu**, chọn mẫu và nguồn rồi bấm Sinh bản nháp "
+                               "giúp mình nhé."),
+                    "answer_mode": "structured",
+                    "grounding_status": "not_applicable",
+                    "evidence": [], "state": {},
+                }
+            timings["soan_thao_tu_chat"] = bool(direct)
     tick("du_lieu_cau_truc_ms")
 
     state_update = dict(state or {})
@@ -1075,6 +1126,107 @@ def format_sources(chunks):
     return out
 
 
+# Ngưỡng "dài quá" kích hoạt lượt bot đọc lại (answer_review=auto). Không phải
+# trần cắt — câu trả lời KHÔNG bị cắt; chỉ là dấu hiệu đáng để rà thêm một lượt.
+REVIEW_LONG_CHARS = 3500
+# Đuôi câu coi là kết thúc trọn vẹn. KHÔNG gồm ':' hay ',' — kết bằng hai dấu
+# đó nghĩa là đang mở một ý/danh sách rồi đứt.
+_SENTENCE_END = ".!?…)]}»\"'”’"
+
+
+def _answer_needs_review(text, gen_tokens=None, num_predict=None) -> bool:
+    """Câu trả lời có DẤU HIỆU chưa ổn không — cụt, lặp, hoặc quá dài.
+
+    Chính sách 20/08/2026: bỏ trần độ dài, đổi lại phải có bot đọc lại khi câu
+    trả lời có vẻ chưa ổn. Heuristic rẻ, chạy trên mọi câu; đọc-lại (đắt) chỉ
+    chạy khi một dấu hiệu bật."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    if len(body) > REVIEW_LONG_CHARS:
+        return True
+    # Admin còn đặt trần tay mà model sinh chạm trần → gần như chắc chắn cụt.
+    if num_predict and num_predict > 0 and gen_tokens and gen_tokens >= num_predict:
+        return True
+    last_line = body.rsplit("\n", 1)[-1].strip()
+    if (last_line and len(last_line) > 20
+            and not re.match(r"^([#>|*-]|\d+[.)])", last_line)
+            and last_line[-1] not in _SENTENCE_END):
+        return True
+    lines = [ln.strip() for ln in body.splitlines() if len(ln.strip()) >= 30]
+    if lines:
+        counts = defaultdict(int)
+        for ln in lines:
+            counts[ln] += 1
+        if max(counts.values()) >= 3:   # cùng một dòng dài lặp ≥3 lần = kẹt lặp
+            return True
+    return False
+
+
+def _parse_review(raw) -> str | None:
+    """Kết quả lượt đọc lại: None = giữ nguyên (model trả OK), str = bản thay."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if len(text) <= 12 and text.upper().rstrip(".!").startswith(("OK", "ỔN")):
+        return None
+    return text if len(text) >= 30 else None
+
+
+def review_answer(question, draft, *, model=None):
+    """Bot ĐỌC LẠI: lượt LLM thứ hai đọc (câu hỏi + câu trả lời), ổn thì giữ,
+    chưa ổn thì viết bản thay thế — thay cho việc cắt cứng bằng trần token."""
+    system = ("Bạn là biên tập viên rà soát câu trả lời của trợ lý pháp lý HDS. "
+              "Nghiêm khắc nhưng không viết lại khi không cần.")
+    prompt = (f"CÂU HỎI CỦA NGƯỜI DÙNG:\n{question}\n\n"
+              f"CÂU TRẢ LỜI CẦN RÀ:\n{draft}\n\n"
+              "Nếu câu trả lời ĐÃ ổn — đúng trọng tâm câu hỏi, đủ ý, kết thúc "
+              "trọn vẹn, không lặp — trả về DUY NHẤT hai chữ: OK\n"
+              "Nếu CHƯA ổn (lan man, lặp lại, bỏ dở giữa chừng, lạc trọng tâm): "
+              "viết BẢN THAY THẾ hoàn chỉnh. Bắt buộc: giữ đúng mọi dữ kiện, số "
+              "liệu và ký hiệu [Nguồn n] ở đúng nhận định của nó; không thêm dữ "
+              "kiện mới; bỏ phần lặp/lan man; kết thúc trọn vẹn. Chỉ in bản thay "
+              "thế, không giải thích.")
+    raw, latency = llm(prompt, system=system, temperature=0.0, model=model)
+    return _parse_review(raw), latency
+
+
+def _maybe_review(question, text, *, model, timings, llm_stats):
+    """Chạy lượt đọc lại theo cài đặt answer_review (auto/always/off)."""
+    mode = (settings.get("answer_review", "auto") or "auto").strip().lower()
+    if mode in ("off", "0", "false", "no"):
+        return text
+    cap = settings.get_int("llm_num_predict", -1)
+    if mode != "always" and not _answer_needs_review(
+            text, (llm_stats or {}).get("gen_tokens"), cap):
+        return text
+    try:
+        fixed, review_ms = review_answer(question, text, model=model)
+    except Exception:
+        # Lượt rà là tăng cường chất lượng — hỏng thì giữ bản gốc, đừng làm
+        # mất câu trả lời người dùng đang chờ.
+        return text
+    timings["doc_lai_ms"] = review_ms
+    timings["doc_lai"] = "da_chinh" if fixed else "on"
+    return fixed or text
+
+
+def relevant_sources(text, evidence):
+    """CHỈ hiện nguồn liên quan: nguồn được trích dẫn trong câu trả lời, hoặc
+    điểm liên quan đủ cao. Nguồn 36–45%% treo dưới câu trả lời chỉ làm người
+    đọc nghi ngờ nhầm chỗ (yêu cầu 20/08/2026). Nguồn hệ thống (kind=system)
+    giữ nguyên; lọc mà trống thì giữ nguyên danh sách gốc — thà thừa còn hơn
+    giấu mất căn cứ."""
+    if not evidence:
+        return evidence
+    if any(e.get("kind") == "system" for e in evidence):
+        return evidence
+    cited = {int(n) for n in re.findall(r"\[Nguồn\s*(\d+)\]", text or "")}
+    kept = [e for e in evidence
+            if e.get("n") in cited or float(e.get("score") or 0) >= 0.5]
+    return kept or evidence
+
+
 def save_turn(question, text, chunks, conversation_id, channel, client_id=None,
               user_id=None, model_used=None, latency=0, method=None,
               evidence=None, answer_mode=None, grounding_status=None, state=None):
@@ -1119,7 +1271,7 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
     p = prepare(question, channel, client_id=client_id, conversation_id=conversation_id,
                 use_temp=use_temp, use_method=use_method, dept_ids=dept_ids,
                 is_banqt=is_banqt, can_finance=can_finance, role=role, model=model,
-                source_document_ids=source_document_ids)
+                source_document_ids=source_document_ids, user_id=user_id)
     timings, chunks, method = p["timings"], p["chunks"], p["method"]
 
     if p.get("direct_answer") is not None:
@@ -1130,6 +1282,10 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
         llm_stats: dict = {}
         text, latency = llm(p["prompt"], system=p["system"], prefer=prefer,
                             temperature=p["temperature"], model=p["model"], stats=llm_stats)
+        # Bot ĐỌC LẠI trước khi kiểm chứng nguồn: bản thay (nếu có) mới là bản
+        # cần autocite/chặn — kiểm bản nháp cũ rồi thay là kiểm nhầm đối tượng.
+        text = _maybe_review(question, text, model=p["model"],
+                             timings=timings, llm_stats=llm_stats)
         text, grounding_status = validate_grounding(
             text, chunks, p["answer_mode"], p["strict_grounding"])
         timings["ai_ms"] = latency
@@ -1137,7 +1293,7 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
                         if k in ("prompt_tokens", "gen_tokens", "load_ms",
                                  "prefill_ms", "gen_ms", "num_ctx", "model")})
 
-    evidence = p.get("evidence") or format_sources(chunks)
+    evidence = relevant_sources(text, p.get("evidence") or format_sources(chunks))
 
     msg_id = save_turn(question, text, chunks, conversation_id, channel,
                        client_id=client_id, user_id=user_id,
@@ -1172,7 +1328,7 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
     p = prepare(question, channel, client_id=client_id, conversation_id=conversation_id,
                 use_temp=use_temp, use_method=use_method, dept_ids=dept_ids,
                 is_banqt=is_banqt, can_finance=can_finance, role=role, model=model,
-                source_document_ids=source_document_ids)
+                source_document_ids=source_document_ids, user_id=user_id)
     timings, chunks, method = p["timings"], p["chunks"], p["method"]
 
     # Nguồn trích dẫn đã biết trước khi model viết chữ nào — gửi ngay để giao
@@ -1210,11 +1366,16 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
         yield {"type": "delta", "text": piece}
 
     raw_text = "".join(parts).strip()
+    # Bot ĐỌC LẠI chạy trước bộ kiểm chứng: bản thay (nếu có) mới là bản cần
+    # autocite/chặn. Người dùng đã thấy bản stream — sự kiện `replace` bên
+    # dưới thay trọn nội dung trên màn hình bằng bản cuối.
+    reviewed = _maybe_review(question, raw_text, model=p["model"],
+                             timings=timings, llm_stats=llm_stats)
     text, grounding_status = validate_grounding(
-        raw_text, chunks, p["answer_mode"], p["strict_grounding"])
+        reviewed, chunks, p["answer_mode"], p["strict_grounding"])
     if text != raw_text:
-        # Giao diện thay toàn bộ nội dung đã stream khi bộ kiểm chứng phải bỏ
-        # citation giả hoặc chặn một câu không có citation.
+        # Giao diện thay toàn bộ nội dung đã stream khi bot đọc lại chỉnh câu
+        # trả lời, hoặc khi bộ kiểm chứng bỏ citation giả/chặn câu không nguồn.
         yield {"type": "replace", "text": text,
                "grounding_status": grounding_status}
     latency = int((time.time() - t0) * 1000)
@@ -1223,6 +1384,9 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
                     if k in ("prompt_tokens", "gen_tokens", "load_ms",
                              "prefill_ms", "gen_ms", "num_ctx", "model")})
 
+    # CHỈ giữ nguồn liên quan (được trích dẫn / điểm cao) — cả trong CSDL lẫn
+    # sự kiện done để giao diện hiển thị đúng danh sách đã lọc.
+    evidence = relevant_sources(text, evidence)
     msg_id = save_turn(question, text, chunks, conversation_id, channel,
                        client_id=client_id, user_id=user_id,
                        model_used=p["model"] or "local", latency=latency, method=method,
@@ -1233,7 +1397,7 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
 
     yield {"type": "done", "message_id": msg_id, "latency_ms": latency,
            "timings": timings, "answer_mode": p["answer_mode"],
-           "grounding_status": grounding_status,
+           "grounding_status": grounding_status, "sources": evidence,
            "end_to_end_ms": timings["tong_ms"]}
 
 

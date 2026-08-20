@@ -409,6 +409,20 @@ export async function getPendingReviews() {
 }
 
 // POST /review/{id}/approve — client_id là khoá ngoại kiểu int
+/** Nội dung TRÍCH XUẤT của tài liệu chờ duyệt — để người duyệt đọc và sửa
+ * (PDF scan bắt buộc soát nội dung, không chỉ soát nhãn). */
+export async function getReviewContent(id) {
+  return request(`/review/${id}/content`);
+}
+
+/** Lưu nội dung người duyệt đã sửa: backend chia đoạn + tạo vector lại. */
+export async function saveReviewContent(id, content) {
+  return request(`/review/${id}/content`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  });
+}
+
 export async function approveReview(id, { doc_type, access_level, client_id }) {
   const clientId = toIntOrNull(client_id);
   if (access_level === 'client' && clientId === null) {

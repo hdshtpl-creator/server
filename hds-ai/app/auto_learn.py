@@ -402,6 +402,21 @@ def download(service, f, parts):
     return out
 
 
+def decide_approval(suffix: str, extraction_ok: bool, prev_approved: bool,
+                    auto_approve: bool) -> bool:
+    """Bản mới có được TỰ duyệt không.
+
+    Chính sách 20/08/2026: **PDF luôn chờ người duyệt** — kể cả bật tự duyệt,
+    kể cả bản cũ từng được duyệt. PDF của hãng toàn giấy scan (HĐLĐ, CCCD,
+    bản án); OCR đọc sai một con số là sai cả căn cứ pháp lý, nên bắt buộc
+    mắt người soát (và sửa nội dung nếu cần) trước khi bot được dùng. Các định
+    dạng khác giữ nguyên nếp cũ: sạch + (tự duyệt bật hoặc kế thừa duyệt).
+    """
+    if (suffix or "").lower() == ".pdf":
+        return False
+    return (auto_approve or prev_approved) and extraction_ok
+
+
 def compose_title(stem: str, title_context=None) -> str:
     """Tiêu đề hiển thị: 'Ngân — Sơ yếu lý lịch' khi biết thư mục con tên người.
 
@@ -453,17 +468,15 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
                                    client_display_name(labels.get("client_id")))
     checksum = drive_md5 or hashlib.md5(text.encode()).hexdigest()
     # Bản cũ ĐÃ DUYỆT thì bản thay thế kế thừa trạng thái duyệt — miễn là lần
-    # trích xuất này sạch. Trước đây sửa một file trên Drive là bản đã duyệt bị
-    # XÓA và bản mới rơi về hàng chờ (khi chưa bật tự duyệt): tài liệu đang
-    # phục vụ trả lời lặng lẽ biến mất, không ai được báo. Đúng ca 19/08/2026 —
-    # "Sơ yếu lý lịch.pdf" của Ngân đang trả lời được, file bị đụng trên Drive,
-    # bot chỉ còn tìm thấy sơ yếu của người khác với 37% liên quan.
-    # Bản mới có CẢNH BÁO trích xuất thì vẫn chờ duyệt như cũ (nội dung nghi
-    # ngờ không được tự thay nội dung đã duyệt), nhưng caller sẽ báo to việc
-    # "tài liệu đang dùng bị gỡ" thay vì im lặng.
-    should_approve = (AUTO_APPROVE or prev_approved) and extraction.status == "ok"
+    # trích xuất này sạch (ca 19/08: file sửa trên Drive làm tài liệu đang
+    # phục vụ lặng lẽ biến mất). RIÊNG PDF: luôn chờ người duyệt — xem
+    # decide_approval. Caller sẽ báo to "tài liệu đang dùng bị gỡ" khi một bản
+    # đã duyệt rơi lại hàng chờ, thay vì im lặng.
+    should_approve = decide_approval(path.suffix, extraction.status == "ok",
+                                     prev_approved, AUTO_APPROVE)
     diagnostics["approved"] = should_approve
     diagnostics["was_live"] = bool(prev_approved)
+    diagnostics["forced_review"] = (path.suffix.lower() == ".pdf")
     vecs = embed([piece.content for piece in pieces])
     summary = summarize(text, title)
     with db.session(role="internal", admin=True) as conn:

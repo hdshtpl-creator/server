@@ -84,40 +84,41 @@ DEFAULTS = {
     ),
     # Tham số sinh câu trả lời
     "llm_temperature": "0.2",
-    # ---- Nhóm khoá quyết định TỐC ĐỘ trả lời ----------------------------
-    # Thời gian trả lời ≈ (độ dài prompt ÷ tốc độ đọc) + (độ dài đáp ÷ tốc độ viết).
-    # Bốn khoá dưới đây điều khiển vế thứ nhất; nới rộng là chậm đi tương ứng.
-    # Kho tài liệu lớn lên KHÔNG làm prompt dài thêm — tìm kiếm vector luôn trả
-    # đúng top_k đoạn — nên các con số này không cần đổi khi dữ liệu tăng.
-    "retrieval_top_k": "8",          # số đoạn tài liệu đưa vào prompt
-    "retrieval_candidate_k": "60",   # hybrid search lấy rộng trước khi rerank
-    "retrieval_max_chunks_per_doc": "3", # đa dạng nguồn, tránh một file chiếm hết
-    # Mỗi đoạn được thu về mức này bằng cách giữ KHÚC LIÊN QUAN NHẤT (rag.
-    # _best_window), không phải cắt từ đầu. Để quá thấp là bot đọc được đúng tài
-    # liệu mà vẫn không thấy chỗ chứa đáp án.
-    "chunk_char_limit": "2400",      # thu mỗi đoạn còn bấy nhiêu ký tự
-    "context_char_budget": "14000",  # trần ký tự cho toàn bộ tài liệu tham khảo
-    "min_relevance": "0.25",         # dưới ngưỡng này coi như không liên quan
+    # ---- Chính sách 20/08/2026: BOT KHÔNG BỊ GIỚI HẠN --------------------
+    # Yêu cầu trực tiếp của chủ dự án: bot đọc HẾT mọi đoạn liên quan, không
+    # cắt nội dung; chấp nhận chậm, chậm/lỗi xử lý sau. Giá trị 0 ở hai ngân
+    # sách ký tự nghĩa là KHÔNG CẮT. Trần vật lý duy nhất là llm_num_ctx.
+    # Máy đuối thì hạ các số này ngay trên web, có hiệu lực tức thì.
+    "retrieval_top_k": "24",         # số đoạn tài liệu đưa vào prompt
+    "retrieval_candidate_k": "300",  # hybrid search lấy rất rộng trước khi rerank
+    "retrieval_max_chunks_per_doc": "8", # đa dạng nguồn, tránh một file chiếm hết
+    "chunk_char_limit": "0",         # 0 = giữ TRỌN từng đoạn, không cắt
+    "context_char_budget": "0",      # 0 = KHÔNG trần tổng tài liệu tham khảo
+    "min_relevance": "0.25",         # vẫn lọc LIÊN QUAN — dưới ngưỡng là rác
     "strict_grounding": "true",       # không citation hợp lệ thì chặn câu tài liệu
-    # Cửa sổ ngữ cảnh của model. Prompt dài hơn mức này bị Ollama cắt mất phần
-    # ĐẦU — đúng chỗ đặt DỮ LIỆU CÔNG TY — mà vẫn tốn thời gian đọc phần còn
-    # lại. Nên để rộng hơn prompt thực tế một quãng an toàn, rồi giữ prompt gọn
-    # bằng các trần bên trên; đó mới là chỗ quyết định tốc độ.
-    #   prompt điển hình ≈ 14000 ký tự tài liệu + hồ sơ công ty + 3 lượt hội thoại
-    #                     ≈ 9000 token → 16384 là vừa đủ thoáng.
-    "llm_num_ctx": "16384",
-    "llm_num_predict": "1200",       # trần số token sinh ra = trần thời gian
+    # Cửa sổ ngữ cảnh của model — TRẦN VẬT LÝ duy nhất còn lại. Prompt dài hơn
+    # mức này bị Ollama cắt mất phần ĐẦU (đúng chỗ đặt DỮ LIỆU CÔNG TY), nên
+    # đã nâng kịch cỡ context gốc của qwen3:14b. Máy thiếu RAM cho KV-cache
+    # thì hạ 24576/16384 tại đây.
+    "llm_num_ctx": "32768",
+    # -1 = KHÔNG chặn độ dài câu trả lời (chính sách 20/08/2026 — không chặt
+    # cụt); độ gọn giao cho lượt "bot đọc lại" (answer_review). Đặt số dương
+    # khi cần ép trần thời gian trên máy quá yếu.
+    "llm_num_predict": "-1",
+    # Bot ĐỌC LẠI câu trả lời: auto = chỉ khi có dấu hiệu chưa ổn (quá dài,
+    # bỏ lửng, lặp); always = mọi câu (chậm gấp đôi trên CPU); off = tắt.
+    "answer_review": "auto",
     # Số luồng CPU cho model. 0 = để Ollama tự quyết (đúng cho máy có GPU).
     # Máy chạy CPU đôi khi nhanh hơn khi khai đúng số nhân — thử rồi đo lại.
     "llm_num_thread": "0",
     # Số lượt hỏi-đáp cũ đưa lại vào ngữ cảnh để bot hiểu "vụ đó", "khách kia".
     # Đặt 0 là tắt bộ nhớ hội thoại (mỗi câu hỏi độc lập).
     "chat_history_turns": "3",
-    # Model sinh câu trả lời (Ollama). Rỗng = dùng LLM_MODEL trong .env của máy
-    # chủ. Admin đổi trên web để chuyển sang model khác đã cài, không cần sửa
-    # .env rồi khởi động lại. KHÔNG áp cho model tạo vector (bge-m3): mọi đoạn
+    # Model sinh câu trả lời (Ollama). Chính sách 20/08/2026: chạy FULL
+    # qwen3:14b cho mọi câu — không tự hạ xuống model nhỏ. Admin đổi trên web
+    # nếu máy không kham nổi. KHÔNG áp cho model tạo vector (bge-m3): mọi đoạn
     # đã lưu đều theo model đó, đổi là hỏng tra cứu.
-    "llm_model": "",
+    "llm_model": "qwen3:14b",
     # Bản đồ thư mục Drive → nhãn tài liệu (app/auto_learn.py dùng).
     # Khoá được so khớp sau khi chuẩn hoá: bỏ số thứ tự đầu, bỏ dấu, viết thường.
     # Nhờ vậy "1. VĂN BẢN PHÁP LUẬT" và "van ban phap luat" là một.

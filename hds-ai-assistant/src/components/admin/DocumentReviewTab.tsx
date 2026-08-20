@@ -3,7 +3,9 @@ import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { PendingReviewDoc, Client } from '../../types';
 import { DOC_TYPES, ACCESS_LEVELS } from '../../constants';
-import { FileText, CheckCircle2, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import {
+  FileText, CheckCircle2, AlertCircle, RefreshCw, Loader2, PencilLine, Save,
+} from 'lucide-react';
 
 interface DocForm {
   doc_type: string;
@@ -11,6 +13,18 @@ interface DocForm {
   client_id: string;
   error: string | null;
   isSubmitting: boolean;
+}
+
+/** Khung xem & sửa NỘI DUNG trích xuất của một tài liệu chờ duyệt.
+ * PDF scan là giấy tờ pháp lý — OCR sai một con số là sai căn cứ, nên người
+ * duyệt phải soát (và sửa được) nội dung trước khi bấm Duyệt. */
+interface ContentEditor {
+  open: boolean;
+  loading: boolean;
+  saving: boolean;
+  content: string;
+  chunkCount: number | null;
+  status: string | null;
 }
 
 const inputClass =
@@ -62,6 +76,59 @@ export const DocumentReviewTab: React.FC = () => {
 
   const patchForm = (docId: string, patch: Partial<DocForm>) => {
     setDocForms((prev) => ({ ...prev, [docId]: { ...prev[docId], ...patch } }));
+  };
+
+  const [editors, setEditors] = useState<Record<string, ContentEditor>>({});
+  const patchEditor = (docId: string, patch: Partial<ContentEditor>) => {
+    setEditors((prev) => ({
+      ...prev,
+      [docId]: {
+        open: false, loading: false, saving: false,
+        content: '', chunkCount: null, status: null,
+        ...prev[docId], ...patch,
+      },
+    }));
+  };
+
+  const toggleEditor = async (docId: number) => {
+    const key = String(docId);
+    const cur = editors[key];
+    if (cur?.open) {
+      patchEditor(key, { open: false });
+      return;
+    }
+    patchEditor(key, { open: true, loading: true });
+    try {
+      const data = await api.getReviewContent(docId);
+      patchEditor(key, {
+        loading: false,
+        content: data.content || '',
+        chunkCount: data.chunk_count ?? null,
+        status: data.extraction_status || null,
+      });
+    } catch (err: any) {
+      patchEditor(key, { open: false, loading: false });
+      showToast(err?.message || 'Không tải được nội dung trích xuất.', 'error');
+    }
+  };
+
+  const saveEditor = async (docId: number) => {
+    const key = String(docId);
+    const cur = editors[key];
+    if (!cur || cur.saving) return;
+    if ((cur.content || '').trim().length < 30) {
+      showToast('Nội dung sau sửa quá ngắn (dưới 30 ký tự).', 'error');
+      return;
+    }
+    patchEditor(key, { saving: true });
+    try {
+      const res = await api.saveReviewContent(docId, cur.content);
+      patchEditor(key, { saving: false, chunkCount: res.chunks ?? null, status: 'edited' });
+      showToast(`Đã lưu nội dung sửa và tạo lại ${res.chunks} đoạn vector. Bấm "Duyệt" để nạp vào AI.`, 'success');
+    } catch (err: any) {
+      patchEditor(key, { saving: false });
+      showToast(err?.message || 'Không lưu được nội dung.', 'error');
+    }
   };
 
   const handleApprove = async (docId: number) => {
@@ -187,9 +254,24 @@ export const DocumentReviewTab: React.FC = () => {
                     </div>
                   </div>
 
-                  <span className="text-xs bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 px-2.5 py-1 rounded-full font-semibold shrink-0 self-start">
-                    Chờ duyệt
-                  </span>
+                  <div className="flex flex-col items-end gap-1.5 shrink-0 self-start">
+                    <span className="text-xs bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 px-2.5 py-1 rounded-full font-semibold">
+                      Chờ duyệt
+                    </span>
+                    {(doc as any).extraction_status === 'warning' && (
+                      <span
+                        title={(doc as any).extraction_warning || 'Trích xuất có cảnh báo — soát nội dung trước khi duyệt'}
+                        className="text-[10px] bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-800 px-2 py-0.5 rounded-full font-bold"
+                      >
+                        ⚠ Học không ổn — soát nội dung
+                      </span>
+                    )}
+                    {(doc as any).extraction_status === 'edited' && (
+                      <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 px-2 py-0.5 rounded-full font-bold">
+                        ✓ Đã sửa tay
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Trích đoạn nội dung */}
@@ -198,6 +280,73 @@ export const DocumentReviewTab: React.FC = () => {
                     {doc.preview}
                   </blockquote>
                 )}
+
+                {/* Xem & sửa NỘI DUNG trích xuất — PDF scan bắt buộc mắt người
+                    soát trước khi duyệt; OCR sai một con số là sai căn cứ. */}
+                {(() => {
+                  const ed = editors[key];
+                  return (
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => toggleEditor(doc.id)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        <PencilLine className="w-3.5 h-3.5" />
+                        <span>
+                          {ed?.open ? 'Đóng khung sửa nội dung' : 'Xem & sửa nội dung trích xuất'}
+                        </span>
+                      </button>
+                      {ed?.open && (
+                        <div className="space-y-2 border border-slate-200 dark:border-slate-700 rounded-xl p-3 bg-slate-50/60 dark:bg-slate-800/40">
+                          {ed.loading ? (
+                            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 py-4 justify-center">
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <span>Đang tải nội dung trích xuất…</span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                                <span>
+                                  {ed.chunkCount != null && <>Hiện có <strong>{ed.chunkCount}</strong> đoạn vector · </>}
+                                  Sửa trực tiếp phần OCR đọc sai rồi bấm Lưu — bot sẽ học ĐÚNG bản đã sửa.
+                                </span>
+                                {ed.status === 'edited' && (
+                                  <span className="text-hds-green dark:text-emerald-400 font-semibold">đã sửa tay</span>
+                                )}
+                              </div>
+                              <textarea
+                                value={ed.content}
+                                onChange={(e) => patchEditor(key, { content: e.target.value })}
+                                rows={14}
+                                spellCheck={false}
+                                className="w-full text-xs font-mono leading-relaxed p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-hds-blue focus:outline-none resize-y"
+                              />
+                              <div className="flex justify-end">
+                                <button
+                                  onClick={() => saveEditor(doc.id)}
+                                  disabled={ed.saving}
+                                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold text-[11px] text-white bg-hds-blue hover:bg-hds-blue-light disabled:bg-slate-300 dark:disabled:bg-slate-700 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  {ed.saving ? (
+                                    <>
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                      <span>Đang chia đoạn & tạo vector…</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Save className="w-3.5 h-3.5" />
+                                      <span>Lưu nội dung đã sửa</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {form.error && (
                   <div
