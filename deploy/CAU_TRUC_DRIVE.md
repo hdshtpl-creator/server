@@ -169,6 +169,7 @@ File nằm ngoài các thư mục trên → bỏ qua kèm cảnh báo. Cứ ch�
 | `.docx` | Đọc cả bảng biểu |
 | `.txt` `.md` | |
 | `.xlsx` `.csv` | Giữ tên sheet/cột/dòng để tra cứu; sheet ẩn không được học tự động |
+| `.jpg` `.jpeg` `.png` `.webp` `.tif` `.tiff` `.bmp` | Ảnh chụp giấy tờ (CCCD, sơ yếu…) — **OCR tiếng Việt**, luôn vào hàng chờ duyệt vì OCR có thể sai ký tự |
 | Google Docs / Sheets | Tự xuất sang `.docx` / `.xlsx` rồi trích nội dung |
 
 `.doc` cũ được chuyển bằng LibreOffice trên server; nếu chuyển lỗi, dashboard ghi mã lỗi

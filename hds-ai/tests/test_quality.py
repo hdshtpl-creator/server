@@ -258,6 +258,22 @@ class InventoryAnswerTests(unittest.TestCase):
         self.assertEqual(company_context.infer_intent("liệt kê", state=state),
                          "doc_inventory")
 
+    def test_followup_tom_tat_opens_document_instead_of_recount(self):
+        """Ca thật 21/08: 'tóm tắt 90' hỏi ngay sau khi bot liệt kê 3 án lệ —
+        phải rơi xuống luồng tra cứu (mở tài liệu) với câu tra được vay đủ
+        ngữ cảnh 'án lệ', không lặp bảng đếm, không tra bằng số 90 trần trụi."""
+        from app import rag
+        state = {"intent": "doc_inventory", "doc_types": ["an_le"]}
+        hist = [("user", "có mấy án lệ và tên"), ("assistant", "Kho có 3 án lệ.")]
+        self.assertTrue(company_context._is_followup(company_context._fold("tóm tắt 90")))
+        self.assertIsNone(company_context.infer_intent("tóm tắt 90",
+                                                       history=hist, state=state))
+        rewritten = rag.resolve_search_question("tóm tắt 90", hist, state)
+        self.assertIn("án lệ", rewritten)
+        self.assertIn("tóm tắt 90", rewritten)
+        self.assertEqual(set(company_context.detect_doc_scopes(rewritten)),
+                         {"an_le", "ban_an"})
+
 
 class UnreadableFileTests(unittest.TestCase):
     """Yêu cầu 20/08/2026: đọc được TÊN file mà ruột hỏng thì bot phải nói
@@ -391,9 +407,64 @@ class ChatDraftTests(unittest.TestCase):
         self.assertIsNone(chat_draft.detect_request(
             "hợp đồng của SUNGROUP có điều khoản phạt không"))
         self.assertIsNone(chat_draft.detect_request(
-            "tạo hợp đồng lao động cho Ngân"))          # thiếu vế "như của ai"
-        self.assertIsNone(chat_draft.detect_request(
             "tạo hợp đồng cho Ngân như của Ngân"))       # A trùng B
+
+    def test_detect_simple_pattern_uses_standard_template(self):
+        # Yêu cầu 21/08/2026: "tạo hợp đồng lao động cho Ngân" (không vế mẫu)
+        # phải ra bản nháp từ MẪU CHUẨN trong kho, không trả lời "không thấy".
+        from app import chat_draft
+        for q in ["tạo hợp đồng lao động cho Ngân",
+                  "soạn giúp tôi hợp đồng lao động cho chị Ngân",
+                  "tao hop dong lao dong cho ngan"]:
+            got = chat_draft.detect_request(q)
+            self.assertIsNotNone(got, q)
+            self.assertEqual((got["kind_label"], got["for_name"], got["like_name"]),
+                             ("hợp đồng lao động", "ngan", None), q)
+
+    def test_detect_simple_for_self(self):
+        from app import chat_draft
+        got = chat_draft.detect_request("tạo hợp đồng lao động cho tôi")
+        self.assertIsNotNone(got)
+        self.assertTrue(got.get("for_self"))
+
+    def test_detect_simple_rejects_legal_lookup(self):
+        # Câu tra cứu pháp lý cùng khuôn "tạo … cho <danh từ chung>" PHẢI trượt
+        # để rơi về tra cứu Bộ luật Lao động, không thành lệnh soạn thảo.
+        from app import chat_draft
+        for q in ["tạo hợp đồng lao động cho người lao động cần điều kiện gì",
+                  "soạn hợp đồng cho người nước ngoài được không",
+                  "làm hợp đồng lao động cho nhân viên mới",
+                  "tạo hợp đồng dịch vụ cho công ty được không",
+                  "viết đơn cho tất cả mọi trường hợp thế nào"]:
+            self.assertIsNone(chat_draft.detect_request(q), q)
+
+    def test_pick_template_prefers_mau_hd_shelf(self):
+        from app import chat_draft
+        docs = [
+            (553, "HĐLĐ-Nhi", "ho_so_ns"),               # hợp đồng THẬT của người khác
+            (12, "Mẫu hợp đồng lao động 2025", "mau_hd"),
+            (13, "Mẫu hợp đồng dịch vụ", "mau_hd"),
+        ]
+        self.assertEqual(chat_draft.pick_template(docs, "hop dong lao dong"),
+                         (12, "Mẫu hợp đồng lao động 2025"))
+        # Không có ngăn mẫu → KHÔNG lấy hợp đồng thật của người khác làm mẫu.
+        docs_no_shelf = [(553, "HĐLĐ-Nhi", "ho_so_ns")]
+        self.assertIsNone(chat_draft.pick_template(docs_no_shelf, "hop dong lao dong"))
+
+    def test_pick_person_docs_retries_with_last_token(self):
+        from app import chat_draft
+        docs = [(537, "Ngân — CCCD", "ho_so_ns"), (541, "Ngân — CV", "ho_so_ns")]
+        got = chat_draft.pick_person_docs(docs, "nguyen thi ngan")
+        self.assertEqual([d[0] for d in got], [537, 541])
+
+    def test_missing_template_answer_points_to_shelf(self):
+        from app import chat_draft
+        req = {"kind": "hop dong lao dong", "kind_label": "hợp đồng lao động",
+               "for_name": "ngan", "like_name": None}
+        text = chat_draft._missing_template_answer(req)["answer"]
+        self.assertIn("chưa có mẫu hợp đồng lao động", text)
+        self.assertIn("4. HỢP ĐỒNG MẪU", text)
+        self.assertIn("Soạn tài liệu", text)
 
     DOCS = [
         (553, "HĐLĐ-Nhi", "ho_so_ns"),
@@ -436,6 +507,40 @@ class ChatDraftTests(unittest.TestCase):
         self.assertIn("chưa có hợp đồng lao động", text)
         self.assertIn("8. HỒ SƠ NHÂN SỰ/Tuan/", text)
         self.assertIn("Soạn tài liệu", text)
+
+
+class PublicChannelMessageTests(unittest.TestCase):
+    """Kênh public phục vụ NGƯỜI DÂN: mọi câu nhắn hệ thống phải khả thi với
+    họ — không mời chào tính năng nội bộ (chọn nguồn, tải tệp, hồ sơ khách)."""
+
+    def test_smalltalk_public_khong_moi_tinh_nang_noi_bo(self):
+        from app import rag
+        text = rag._smalltalk_answer("chào", "public")
+        self.assertIsNotNone(text)
+        self.assertNotIn("hồ sơ", text)
+        self.assertNotIn("soạn tài liệu", text)
+        self.assertIn("pháp luật", text)
+        # Kênh nội bộ giữ nguyên lời chào cũ.
+        self.assertIn("hồ sơ", rag._smalltalk_answer("chào", "internal"))
+
+    def test_insufficient_public_kha_thi_voi_nguoi_dan(self):
+        from app import rag
+        text = rag._insufficient_answer(False, "public")
+        self.assertNotIn("tải", text)
+        self.assertNotIn("tên khách", text)
+        self.assertIn("luật sư", text)
+
+    def test_blocked_public_khong_bao_tai_tep(self):
+        from app import rag
+        chunks = [{"content": "Điều 35 Bộ luật Lao động quy định quyền đơn "
+                              "phương chấm dứt hợp đồng của người lao động."}]
+        answer = ("Doanh nghiệp bắt buộc phải thưởng tháng lương thứ mười ba "
+                  "cho toàn bộ nhân viên vào dịp cuối năm theo thông lệ chung.")
+        text, status = rag.validate_grounding(answer, chunks, "grounded", True,
+                                              "public")
+        self.assertEqual(status, "uncited_blocked")
+        self.assertNotIn("tải tệp", text)
+        self.assertIn("luật sư", text)
 
 
 class TitleScoreTests(unittest.TestCase):

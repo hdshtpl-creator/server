@@ -7,20 +7,28 @@ cơ chế đăng nhập thứ hai có thể lệch quyền.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
+from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app import db, drafting, rag
+from app import autofill, db, drafting, rag
 
 
 INTERNAL_ROLES = {"admin", "ban_qt", "truong_bph", "chuyen_vien", "tro_ly"}
 MAX_INSTRUCTIONS_CHARS = 20_000
 MAX_INPUT_JSON_CHARS = 100_000
 MAX_MANUAL_DRAFT_CHARS = 500_000
+MAX_AUTOFILL_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
+# Các định dạng hồ sơ cá nhân nhận bóc thông tin: giấy tờ số hoá (PDF/DOCX)
+# và ảnh chụp điện thoại (CCCD, sơ yếu…) — ảnh đi qua OCR ở app/ingest.py.
+AUTOFILL_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt", ".md",
+                       ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"}
 
 
 class DraftTemplateIn(BaseModel):
@@ -451,6 +459,55 @@ def build_router(current_user, require_reviewer) -> APIRouter:
             db.audit(conn, user["id"], "create_draft_template", "document_templates",
                      template_id, {"code": code})
         return {"ok": True, "template_id": template_id}
+
+    @router.post("/drafts/autofill")
+    async def drafts_autofill(file: UploadFile = File(...), user=Depends(current_user)):
+        """Bóc thông tin cá nhân từ MỘT hồ sơ tải lên để điền sẵn bản nháp.
+
+        Nhận CCCD/sơ yếu lý lịch/CV dạng PDF, ảnh chụp hoặc DOCX; trích văn bản
+        (OCR nếu là ảnh/scan) rồi đọc ra các trường định danh bằng
+        app/autofill.py. File DÙNG XONG BỎ — không vào kho tri thức, không lưu
+        lại trên đĩa; muốn lưu thì dùng đường tải tài liệu bình thường.
+        """
+        _require_internal(user)
+        ext = Path(file.filename or "").suffix.lower()
+        if ext not in AUTOFILL_EXTENSIONS:
+            raise HTTPException(
+                400, "Chỉ nhận " + ", ".join(sorted(AUTOFILL_EXTENSIONS)))
+        limit = MAX_AUTOFILL_MB * 1024 * 1024
+        tmp_path = None
+        try:
+            size = 0
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > limit:
+                        raise HTTPException(413, f"Tệp vượt quá {MAX_AUTOFILL_MB} MB")
+                    tmp.write(chunk)
+            from app.ingest import ExtractionError, extract_text_with_metadata
+            try:
+                extraction = extract_text_with_metadata(tmp_path)
+            except ExtractionError as exc:
+                raise HTTPException(422, f"Không đọc được nội dung tệp: {exc}")
+            fields = autofill.extract_person_fields(extraction.text)
+            with db.session(role="internal", admin=True) as conn:
+                # Ghi vết TÊN TRƯỜNG đã bóc, không ghi giá trị — nhật ký kiểm
+                # toán không phải chỗ chứa số CCCD của người khác.
+                db.audit(conn, user["id"], "draft_autofill", "document_drafts", None,
+                         {"file": file.filename, "bytes": size,
+                          "method": extraction.method,
+                          "fields": sorted(fields.keys())})
+            return {
+                "ok": True, "fields": fields,
+                "field_labels": {k: autofill.FIELD_LABELS.get(k, k) for k in fields},
+                "warnings": extraction.warnings, "method": extraction.method,
+                "text_chars": len(extraction.text),
+            }
+        finally:
+            await file.close()
+            if tmp_path:
+                tmp_path.unlink(missing_ok=True)
 
     @router.get("/drafts")
     def drafts_list(user=Depends(current_user), status: str = "", limit: int = 100):

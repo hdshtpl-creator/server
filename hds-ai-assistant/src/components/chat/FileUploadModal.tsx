@@ -13,7 +13,7 @@ interface FileUploadModalProps {
 }
 
 const TEMP_EXTENSIONS = ['txt', 'md', 'csv'];
-const SAVE_EXTENSIONS = ['pdf', 'docx', 'txt', 'md'];
+const SAVE_EXTENSIONS = ['pdf', 'docx', 'txt', 'md', 'jpg', 'jpeg', 'png', 'webp', 'tif', 'tiff'];
 const TEMP_MAX = 2 * 1024 * 1024;
 const SAVE_MAX = 50 * 1024 * 1024;
 
@@ -251,7 +251,8 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
                     Lưu vào kho
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
-                    Tải PDF/Word lên máy chủ, tự trích văn bản và OCR tiếng Việt, rồi nạp vào tri thức.
+                    Tải PDF/Word/ảnh chụp giấy tờ lên máy chủ, tự trích văn bản và OCR tiếng Việt,
+                    rồi nạp vào tri thức. Ảnh và bản scan luôn vào hàng chờ duyệt.
                   </p>
                 </div>
               </label>

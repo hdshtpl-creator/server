@@ -45,8 +45,9 @@ HDS-AI/
   của khách này sang khách khác. An toàn là ưu tiên số một.
 - File nằm ở thư mục gốc hoặc thư mục lạ (không đúng quy ước) → cũng bỏ qua kèm cảnh báo.
 
-Định dạng nhận: `.pdf .docx .doc .txt .md .xlsx .csv` và Google Docs/Sheets
-(tự xuất ra `.docx/.xlsx`). PDF scan được OCR tiếng Việt tự động. Với bảng tính,
+Định dạng nhận: `.pdf .docx .doc .txt .md .xlsx .csv` + ảnh chụp giấy tờ
+(`.jpg .png .webp .tiff .bmp` — OCR tiếng Việt, luôn chờ duyệt) và Google
+Docs/Sheets (tự xuất ra `.docx/.xlsx`). PDF scan được OCR tiếng Việt tự động. Với bảng tính,
 bot giữ tên sheet/cột/dòng để tìm chính xác hơn và bỏ qua sheet ẩn có cảnh báo.
 
 ### 1b. Cho bot quyền đọc thư mục Drive (làm một lần)

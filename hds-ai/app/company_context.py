@@ -473,6 +473,9 @@ DETAIL_WORDS = {
     "dich vu", "cung cap", "dang lam", "dang cung cap", "phi", "muc phi",
     "hop dong", "cong viec", "chi tiet", "thong tin", "ho so", "tinh hinh",
     "hop tac", "da dung", "su dung", "cong no", "da lam", "lam gi",
+    # Đòi NỘI DUNG bên trong tài liệu — sau câu đếm mà hỏi thế này thì phải
+    # MỞ tài liệu ra đọc, không lặp lại bảng đếm.
+    "tom tat", "phan tich", "giai thich", "noi dung", "noi gi",
 }
 
 # Số khách tối đa được BUNG chi tiết cho câu "liệt kê khách kèm dịch vụ". Nhiều
@@ -920,6 +923,20 @@ FOLLOWUP_WORDS = {
     "toi hoi", "y toi", "toi dang hoi", "toi muon hoi", "van de toi hoi",
 }
 
+# Động từ YÊU CẦU NỘI DUNG — "tóm tắt 90" hỏi ngay sau khi bot liệt kê 3 án lệ
+# (21/08/2026): không nhận là câu nối thì câu tra cứu chỉ còn "tóm tắt 90" trần
+# trụi, số 90 khớp lung tung khắp kho và bot từ chối dù "Án lệ số 90" nằm ngay
+# trong danh sách vừa trả. KHÔNG nằm chung FOLLOWUP_WORDS: "Phân tích Điều 12
+# Luật Doanh nghiệp" cũng mở đầu bằng đúng động từ này nhưng là câu ĐỘC LẬP —
+# nối lịch sử vào là nhiễm chủ đề cũ (test new_question_not_polluted canh đúng
+# lỗi đó). Câu nối thật thì CỤT: rất ngắn và không tự mang đối tượng.
+CONTENT_VERBS = {"tom tat", "phan tich", "giai thich", "noi dung", "noi gi"}
+
+# Câu chứa mốc pháp lý/tài liệu là TỰ MANG ĐỐI TƯỢNG — không vay lượt trước.
+RE_SELF_SUFFICIENT = re.compile(
+    r"\b(dieu|khoan|luat|nghi dinh|thong tu|nghi quyet|an le|ban an|"
+    r"hop dong|quy trinh|nhan hieu|so yeu|cv)\b")
+
 
 def _is_followup(q_folded: str) -> bool:
     """Câu ngắn mang tính hỏi thêm — cần vay chủ đề của lượt trước.
@@ -930,9 +947,16 @@ def _is_followup(q_folded: str) -> bool:
     vector mù và bot đọc điều lệ của khách rồi đoán dịch vụ. Câu ĐỘC LẬP dài
     không bị vạ lây: nó phải chứa một cụm FOLLOWUP_WORDS thì mới vào đây.
     """
-    if len(q_folded.split()) > 12:
+    words = q_folded.split()
+    if len(words) > 12:
         return False
-    return any(w in q_folded for w in FOLLOWUP_WORDS)
+    if any(w in q_folded for w in FOLLOWUP_WORDS):
+        return True
+    # Động từ nội dung chỉ tính là câu nối khi CỤT: rất ngắn và không tự mang
+    # đối tượng ("tóm tắt 90" nối; "phân tích Điều 12 Luật DN" tự đủ).
+    return (len(words) <= 5
+            and not RE_SELF_SUFFICIENT.search(q_folded)
+            and any(v in q_folded for v in CONTENT_VERBS))
 
 
 def _topic_question(question, history, turns=3):
@@ -962,14 +986,14 @@ def infer_intent(question, history=None, state=None):
     folded_current = _fold(question)
     if _is_followup(folded_current) and state and state.get("intent"):
         prev = state.get("intent")
-        # Hỏi tiếp SAU CÂU ĐẾM KHÁCH mà đòi CHI TIẾT ("cụ thể các công ty đang
-        # dùng dịch vụ gì") thì đừng lặp lại bảng đếm — trả None cho câu hỏi
-        # rơi xuống luồng dữ liệu công ty: build() vay chủ đề roster của lượt
-        # trước, thấy roster + detail sẽ BUNG hồ sơ từng khách (file tổng hợp,
-        # hợp đồng, vụ việc) cho model đọc. Chỉ áp cho client_roster:
-        # staff_directory đã trả danh sách chi tiết nên "chi tiết từng cá
-        # nhân" dùng lại nó là đúng ý.
-        if prev == "client_roster" and _detail_intent(folded_current):
+        # Hỏi tiếp SAU CÂU ĐẾM mà đòi CHI TIẾT/NỘI DUNG thì đừng lặp lại bảng
+        # đếm — trả None cho câu hỏi rơi xuống luồng tra cứu: rewrite vay chủ
+        # đề lượt trước ("tóm tắt 90" thành "…án lệ… tóm tắt 90"), scope trỏ
+        # đúng ngăn, model mở tài liệu ra đọc. Áp cho hai intent ĐẾM:
+        #   · client_roster — "cụ thể các công ty đang dùng dịch vụ gì"
+        #   · doc_inventory — "tóm tắt 90" sau khi liệt kê 3 án lệ (21/08)
+        # staff_directory giữ state: structured của nó đã chi tiết sẵn.
+        if prev in ("client_roster", "doc_inventory") and _detail_intent(folded_current):
             return None
         return prev
 

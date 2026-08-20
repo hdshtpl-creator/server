@@ -249,6 +249,28 @@ bằng cách gõ `XOA`, rồi học lại toàn bộ từ Drive. **Tệp gốc t
 đụng tới**; lịch sử hội thoại, ghi chú, bản nháp, khách hàng, vụ việc cũng giữ
 nguyên. Kho vài trăm tài liệu có thể mất nhiều giờ — nên chạy ngoài giờ làm.
 
+## Soạn tài liệu từ mẫu (tab Soạn tài liệu + lệnh chat)
+
+Ba đường tạo một bản nháp giấy tờ (HĐLĐ, quyết định, thư…), đều ra **DOCX tải
+được ngay** — chỗ thiếu dữ liệu tự đánh dấu `[CẦN BỔ SUNG: …]`:
+
+1. **Từ chat** (nhân viên nội bộ):
+   - `tạo hợp đồng lao động cho Ngân` → bám **mẫu chuẩn** trong ngăn
+     `4. HỢP ĐỒNG MẪU` / `6. THƯ MẪU - BIỂU MẪU`, điền dữ liệu đã xác minh
+     của Ngân (sổ nhân sự + hồ sơ trong `8. HỒ SƠ NHÂN SỰ/Ngân/`).
+   - `tạo hợp đồng lao động cho Ngân như của Nhi` → bám đúng bản của Nhi
+     làm mẫu, thay thông tin cá nhân.
+   - Thiếu mẫu/hồ sơ thì bot nói rõ thiếu gì và thả file vào thư mục nào.
+2. **Tab Soạn tài liệu → Tạo bản nháp**: chọn mẫu, chọn nguồn, bấm Sinh nội
+   dung. Nút **"Tự điền từ hồ sơ"** nhận CCCD / sơ yếu lý lịch / CV
+   (PDF, **ảnh chụp**, DOCX) — hệ thống OCR rồi bóc họ tên, ngày sinh, số
+   CCCD, địa chỉ… điền sẵn vào biểu mẫu (file bóc xong bỏ, không vào kho).
+3. **Điền chỗ trống**: mở bản nháp → nút "Điền chỗ trống (N)" liệt kê từng
+   `[CẦN BỔ SUNG]` để gõ giá trị, lưu thành phiên bản mới rồi **Tải DOCX**.
+
+Bản nháp chưa phê duyệt vẫn tải được (để in ra điền tiếp); trạng thái nháp ghi
+trong file và header `X-Draft-Status`. Phê duyệt mới khoá phiên bản.
+
 ## Bot trả lời chậm / lỗi 524
 
 ```bash

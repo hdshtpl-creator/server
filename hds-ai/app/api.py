@@ -21,12 +21,14 @@ Xác thực: đăng nhập JWT.
 import json
 import os
 import re
+import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, Header, HTTPException, Depends, File, Form, UploadFile
+from fastapi import FastAPI, Header, HTTPException, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, FileResponse, Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -270,12 +272,65 @@ def _chat_source_ids(body: ChatIn) -> list[int] | None:
     return ids
 
 
+# ---- Van bảo vệ kênh CÔNG KHAI (người dân, không đăng nhập) -----------------
+# Mỗi câu hỏi tốn hàng chục giây LLM trên máy CPU; không có van thì MỘT người
+# spam là nghẽn cả hệ thống cho mọi người khác. Đếm theo IP bằng cửa sổ trượt
+# trong bộ nhớ — đủ cho một tiến trình uvicorn; chạy nhiều worker thì mỗi
+# worker một quota (nới hơn cấu hình, vẫn chặn được spam thô).
+PUBLIC_RATE_MAX = int(os.getenv("PUBLIC_RATE_MAX", "30"))          # câu hỏi / cửa sổ / IP
+PUBLIC_RATE_WINDOW_SEC = int(os.getenv("PUBLIC_RATE_WINDOW_SEC", "3600"))
+MAX_PUBLIC_QUESTION_CHARS = int(os.getenv("MAX_PUBLIC_QUESTION_CHARS", "2000"))
+MAX_QUESTION_CHARS = int(os.getenv("MAX_QUESTION_CHARS", "20000"))
+_public_hits: dict = {}
+_public_hits_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        # nginx đặt IP thật ở đầu danh sách; các proxy sau chỉ nối thêm.
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _public_rate_check(request: Request):
+    if PUBLIC_RATE_MAX <= 0:      # đặt 0 để tắt van (môi trường dev/test)
+        return
+    now = time.monotonic()
+    ip = _client_ip(request)
+    with _public_hits_lock:
+        hits = [t for t in _public_hits.get(ip, []) if now - t < PUBLIC_RATE_WINDOW_SEC]
+        if len(hits) >= PUBLIC_RATE_MAX:
+            raise HTTPException(
+                429, "Bạn đã hỏi quá nhiều trong thời gian ngắn. Vui lòng quay "
+                     "lại sau, hoặc liên hệ trực tiếp luật sư của HDS.")
+        hits.append(now)
+        _public_hits[ip] = hits
+        # Dọn IP nguội để dict không phình vô hạn theo thời gian chạy.
+        if len(_public_hits) > 10_000:
+            for stale in [k for k, v in _public_hits.items()
+                          if not v or now - v[-1] >= PUBLIC_RATE_WINDOW_SEC]:
+                _public_hits.pop(stale, None)
+
+
+def _clean_question(body: ChatIn, public: bool = False) -> str:
+    question = (body.question or "").strip()
+    if not question:
+        raise HTTPException(422, "Câu hỏi không được để trống")
+    cap = MAX_PUBLIC_QUESTION_CHARS if public else MAX_QUESTION_CHARS
+    if len(question) > cap:
+        raise HTTPException(413, f"Câu hỏi dài quá giới hạn {cap:,} ký tự")
+    return question
+
+
 @app.post("/chat/public")
-def chat_public(body: ChatIn):
+def chat_public(body: ChatIn, request: Request):
+    question = _clean_question(body, public=True)
+    _public_rate_check(request)
     source_ids = _chat_source_ids(body)
     conv = (check_conversation(None, body.conversation_id, "public")
             if body.conversation_id else rag.start_conversation(None, "public"))
-    res = rag.answer(body.question, "public", conversation_id=conv,
+    res = rag.answer(question, "public", conversation_id=conv,
                      source_document_ids=source_ids)
     res["conversation_id"] = conv
     return res
@@ -284,9 +339,10 @@ def chat_public(body: ChatIn):
 @app.post("/chat/internal")
 def chat_internal(body: ChatIn, user=Depends(current_user)):
     require(user, INTERNAL_ROLES)
+    question = _clean_question(body)
     source_ids = _chat_source_ids(body)
     conv = _resolve_conv(user, body, "internal")
-    res = rag.answer(body.question, "internal", user_id=user["id"], conversation_id=conv,
+    res = rag.answer(question, "internal", user_id=user["id"], conversation_id=conv,
                      use_temp=body.use_temp, use_method=body.use_method,
                      dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
                      can_finance=user["can_finance"], model=body.model,
@@ -298,6 +354,7 @@ def chat_internal(body: ChatIn, user=Depends(current_user)):
 @app.post("/chat/portal")
 def chat_portal(body: ChatIn, user=Depends(current_user)):
     require(user, CLIENT_ROLES)
+    question = _clean_question(body)
     source_ids = _chat_source_ids(body)
     # Hạn mức câu hỏi/tháng theo gói
     quota = user.get("monthly_quota") or 0
@@ -307,7 +364,7 @@ def chat_portal(body: ChatIn, user=Depends(current_user)):
                                  f"Nâng cấp gói để hỏi thêm.")
     cid = user["client_id"]
     conv = _resolve_conv(user, body, "portal", cid)
-    res = rag.answer(body.question, "portal", user_id=user["id"], client_id=cid,
+    res = rag.answer(question, "portal", user_id=user["id"], client_id=cid,
                      conversation_id=conv, use_temp=body.use_temp,
                      role=user["role"], source_document_ids=source_ids)
     # Tăng bộ đếm đã dùng
@@ -338,6 +395,7 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
     và /chat/portal qua rag.prepare — không có bản sao thứ hai để lệch nhau.
     """
     require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    question = _clean_question(body)
     source_ids = _chat_source_ids(body)
     is_client = user["role"] in CLIENT_ROLES
 
@@ -381,7 +439,7 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
         def produce():
             try:
                 for ev in rag.answer_stream(
-                        body.question, channel, user_id=user["id"], client_id=cid,
+                        question, channel, user_id=user["id"], client_id=cid,
                         conversation_id=conv, use_temp=body.use_temp,
                         use_method=body.use_method and not is_client,
                         dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
@@ -1332,7 +1390,10 @@ def models_benchmark(user=Depends(current_user), model: str | None = None):
 
 DATA_RAW = Path(os.getenv("DATA_RAW", "./data/raw"))
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
-ALLOWED_UPLOAD_EXT = {".pdf", ".docx", ".xlsx", ".csv", ".txt", ".md"}
+ALLOWED_UPLOAD_EXT = {".pdf", ".docx", ".xlsx", ".csv", ".txt", ".md",
+                      # Ảnh chụp giấy tờ (CCCD, sơ yếu, CV…) — đọc bằng OCR,
+                      # luôn vào hàng chờ duyệt vì OCR có thể sai ký tự.
+                      ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"}
 
 
 def _safe_filename(name: str) -> str:

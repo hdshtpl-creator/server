@@ -99,13 +99,21 @@ def resolve_search_question(question, history=None, state=None) -> str:
     Hàm này chạy trước retrieval và chỉ nối tối đa câu hỏi người dùng gần nhất.
     """
     folded = _fold(question)
+    words = folded.split()
     # Ngưỡng 12 từ, đồng bộ với company_context._is_followup — câu nối tiếng
     # Việt hay dài hơn 8-10 từ ("cụ thể các công ty đang dùng dịch vụ gì").
-    followup = (len(folded.split()) <= 12 and any(w in folded for w in (
+    followup = (len(words) <= 12 and any(w in folded for w in (
         "chi tiet", "cu the", "ro hon", "tung ca nhan", "tung nguoi",
         "con nua", "con ai", "the nao", "ra sao", "toi hoi", "y toi",
         "danh sach", "liet ke",
     )))
+    # Động từ đòi nội dung ("tóm tắt 90") chỉ nối khi câu CỤT — rất ngắn và
+    # không tự mang đối tượng; "Phân tích Điều 12 Luật DN" là câu độc lập,
+    # nối lịch sử vào là nhiễm chủ đề cũ. Dùng chung tiêu chí với
+    # company_context._is_followup để hai tầng không lệch nhau.
+    if not followup and len(words) <= 5:
+        followup = (not company_context.RE_SELF_SUFFICIENT.search(folded)
+                    and any(v in folded for v in company_context.CONTENT_VERBS))
     if not followup:
         return question
     previous = [content for role, content in (history or []) if role == "user"]
@@ -113,9 +121,14 @@ def resolve_search_question(question, history=None, state=None) -> str:
     return f"{context}. {question}".strip(". ") if context else question
 
 
-def _smalltalk_answer(question: str):
+def _smalltalk_answer(question: str, channel: str = "internal"):
     folded = _fold(question).strip(" .!?\t\r\n")
     if folded in {"chao", "xin chao", "hello", "hi", "alo"}:
+        if channel == "public":
+            # Khách vãng lai trên website: không mời chào các tính năng nội bộ
+            # (hồ sơ, dữ liệu công ty, soạn tài liệu) mà họ không có.
+            return ("Chào bạn, mình là Trợ lý AI của Công ty Luật HDS. "
+                    "Bạn cần tìm hiểu quy định pháp luật về vấn đề gì?")
         return "Chào bạn, mình là Trợ lý AI HDS. Bạn muốn tra cứu hồ sơ, dữ liệu công ty hay soạn tài liệu gì?"
     if folded in {"cam on", "cảm ơn", "thanks", "thank you"}:
         return "Mình rất vui được hỗ trợ."
@@ -760,7 +773,8 @@ def autocite(text, chunks, min_coverage=AUTOCITE_MIN_COVERAGE):
     return "".join(blocks), attached
 
 
-def validate_grounding(text, chunks, answer_mode="grounded", strict=True):
+def validate_grounding(text, chunks, answer_mode="grounded", strict=True,
+                       channel="internal"):
     """Kiểm tra citation có trỏ tới nguồn thật; fail-closed khi hoàn toàn mất nguồn.
 
     Đây không khẳng định model đã suy luận đúng mọi chữ, nhưng chặn hai lỗi nguy
@@ -826,6 +840,16 @@ def validate_grounding(text, chunks, answer_mode="grounded", strict=True):
     # Tới đây nghĩa là autocite cũng không đối chiếu được đoạn nào với nguồn:
     # nội dung sinh ra KHÔNG nằm trong tài liệu đã tìm được. Với công cụ pháp lý
     # thì đó là câu phải giữ lại, không phải câu để hiển thị.
+    if channel == "public":
+        # Người dân không chọn nguồn, không tải tệp — chỉ dẫn phải khả thi
+        # với chính họ.
+        return (
+            "Mình tìm được một số văn bản liên quan (xem phần **Nguồn trích dẫn** "
+            "bên dưới) nhưng chưa đoạn nào nói thẳng vào câu bạn hỏi, nên mình "
+            "không đưa ra câu trả lời để tránh suy đoán.\n\n"
+            "Bạn thử hỏi cụ thể hơn (nêu rõ tình huống, lĩnh vực, thời điểm xảy "
+            "ra), hoặc liên hệ luật sư của HDS để được tư vấn trực tiếp."
+        ), "uncited_blocked"
     return (
         "Mình tìm được tài liệu liên quan (xem phần **Nguồn trích dẫn** bên dưới) "
         "nhưng chưa đoạn nào nói thẳng vào câu bạn hỏi, nên mình không đưa ra câu "
@@ -837,7 +861,14 @@ def validate_grounding(text, chunks, answer_mode="grounded", strict=True):
     ), "uncited_blocked"
 
 
-def _insufficient_answer(source_selected=False):
+def _insufficient_answer(source_selected=False, channel="internal"):
+    if channel == "public":
+        # Người dân trên website không chọn nguồn, không tải tệp — chỉ dẫn của
+        # bản nội bộ với họ là vô nghĩa và gây bối rối.
+        return ("Mình chưa tìm thấy quy định đủ liên quan trong kho văn bản pháp "
+                "luật để trả lời chính xác, nên mình sẽ không đoán. Bạn thử nêu "
+                "rõ hơn vấn đề (lĩnh vực, tình huống cụ thể), hoặc liên hệ luật "
+                "sư của HDS để được tư vấn trực tiếp.")
     scope = "trong bộ nguồn bạn đã chọn" if source_selected else "trong kho dữ liệu được phép truy cập"
     return (f"Mình chưa tìm thấy căn cứ đủ liên quan {scope} để trả lời chính xác. "
             "Mình sẽ không đoán. Bạn có thể chọn thêm tài liệu, nêu tên khách/vụ việc, "
@@ -914,7 +945,7 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     timings["search_question"] = search_question[:300]
     tick("lich_su_ms")
 
-    smalltalk = _smalltalk_answer(question)
+    smalltalk = _smalltalk_answer(question, channel)
     direct = None
     if smalltalk:
         direct = {"answer": smalltalk, "answer_mode": "chat",
@@ -1049,7 +1080,7 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     tick("du_lieu_cong_ty_ms")
 
     if not chunks and not temp_chunks and not company:
-        direct_text = _insufficient_answer(source_document_ids is not None)
+        direct_text = _insufficient_answer(source_document_ids is not None, channel)
         timings["so_doan"] = 0
         timings["chuan_bi_ms"] = int((time.time() - prepare_started) * 1000)
         return {
@@ -1287,7 +1318,7 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
         text = _maybe_review(question, text, model=p["model"],
                              timings=timings, llm_stats=llm_stats)
         text, grounding_status = validate_grounding(
-            text, chunks, p["answer_mode"], p["strict_grounding"])
+            text, chunks, p["answer_mode"], p["strict_grounding"], channel)
         timings["ai_ms"] = latency
         timings.update({k: v for k, v in llm_stats.items()
                         if k in ("prompt_tokens", "gen_tokens", "load_ms",
@@ -1372,7 +1403,7 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
     reviewed = _maybe_review(question, raw_text, model=p["model"],
                              timings=timings, llm_stats=llm_stats)
     text, grounding_status = validate_grounding(
-        reviewed, chunks, p["answer_mode"], p["strict_grounding"])
+        reviewed, chunks, p["answer_mode"], p["strict_grounding"], channel)
     if text != raw_text:
         # Giao diện thay toàn bộ nội dung đã stream khi bot đọc lại chỉnh câu
         # trả lời, hoặc khi bộ kiểm chứng bỏ citation giả/chặn câu không nguồn.

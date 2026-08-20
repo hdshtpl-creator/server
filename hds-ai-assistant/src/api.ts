@@ -310,6 +310,17 @@ export const exportDraft = ApiJs.exportDraft as (
   filename?: string
 ) => Promise<void>;
 
+/** Bóc thông tin cá nhân từ MỘT hồ sơ (CCCD/sơ yếu/CV — PDF, ảnh, DOCX) để
+ *  điền sẵn input_data của bản nháp. File dùng xong bỏ, không vào kho. */
+export const autofillDraft = ApiJs.autofillDraft as (file: File) => Promise<{
+  ok: boolean;
+  fields: Record<string, string>;
+  field_labels: Record<string, string>;
+  warnings: string[];
+  method: string;
+  text_chars: number;
+}>;
+
 // ---------- Tệp ----------
 export const uploadDocument = ApiJs.uploadDocument as (params: {
   file: File;

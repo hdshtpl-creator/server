@@ -25,7 +25,9 @@ CHUNK_WORDS = 320
 # Số CÂU chồng lấn giữa hai đoạn liền nhau (không phải số từ): câu đầu đoạn sau
 # nhắc lại ý cuối đoạn trước để đọc rời từng đoạn vẫn không đứt mạch.
 CHUNK_OVERLAP_UNITS = 1
-SUPPORTED_EXTENSIONS = frozenset({".txt", ".md", ".docx", ".doc", ".pdf", ".xlsx", ".csv"})
+SUPPORTED_EXTENSIONS = frozenset({".txt", ".md", ".docx", ".doc", ".pdf", ".xlsx", ".csv",
+                                  ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"})
+IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"})
 
 
 def _positive_int_env(name, default, minimum=1):
@@ -567,7 +569,7 @@ def extract_text_with_metadata(path: Path) -> ExtractionResult:
     ext = path.suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise ExtractionError("unsupported_format", f"Chưa hỗ trợ định dạng '{ext or '(không có đuôi)'}'.",
-                              "Dùng PDF, DOCX, DOC, TXT, MD, XLSX hoặc CSV.")
+                              "Dùng PDF, DOCX, DOC, TXT, MD, XLSX, CSV hoặc ảnh (JPG/PNG/WEBP/TIFF).")
     try:
         if ext in (".txt", ".md"):
             text, method, warnings, metadata = _extract_txt(path)
@@ -580,6 +582,8 @@ def extract_text_with_metadata(path: Path) -> ExtractionResult:
         elif ext == ".doc":
             text = _extract_doc_strict(path)
             method, warnings, metadata = "libreoffice", [], {}
+        elif ext in IMAGE_EXTENSIONS:
+            text, method, warnings, metadata = _extract_image(path)
         else:
             text, method, warnings, metadata = _extract_pdf(path)
     except ExtractionError:
@@ -650,6 +654,50 @@ def extract_doc(path: Path) -> str:
     except ExtractionError as exc:
         print(f"  [!] [{exc.code}] {path.name}: {exc}")
         return ""
+
+
+def _extract_image(path: Path):
+    """Đọc file ẢNH đứng riêng (CCCD/giấy tờ chụp điện thoại) bằng OCR tiếng Việt.
+
+    Người dùng chụp CCCD, sơ yếu lý lịch hay CV bằng điện thoại rồi tải thẳng
+    ảnh lên — bắt họ tự chuyển sang PDF là thêm một bước ai cũng lười. Ảnh đi
+    cùng đường OCR với PDF scan; chữ OCR luôn có thể sai ký tự nên kết quả
+    LUÔN mang cảnh báo để bắt buộc duyệt tay trước khi dùng làm căn cứ.
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+    except Exception as e:
+        raise ExtractionError(
+            "ocr_missing", "Máy chủ thiếu thư viện OCR ảnh (pytesseract/Pillow).",
+            "Chạy: pip install pytesseract Pillow && "
+            "sudo apt install tesseract-ocr tesseract-ocr-vie") from e
+    try:
+        with Image.open(str(path)) as image:
+            image.load()
+            # Ảnh chụp điện thoại hay mang EXIF xoay ngang — không xoay lại thì
+            # tesseract đọc chữ nằm ngang thành rác.
+            try:
+                from PIL import ImageOps
+                image = ImageOps.exif_transpose(image)
+            except Exception:
+                pass
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            text = pytesseract.image_to_string(image, lang="vie")
+    except ExtractionError:
+        raise
+    except Exception as e:
+        kind = type(e).__name__
+        if "NotInstalled" in kind or "TesseractNotFound" in kind:
+            raise ExtractionError(
+                "ocr_missing", "Máy chủ thiếu tesseract.",
+                "sudo apt install tesseract-ocr tesseract-ocr-vie") from e
+        raise ExtractionError(
+            "image_unreadable", "Không đọc được file ảnh.",
+            "Ảnh có thể hỏng hoặc định dạng lạ; chụp/xuất lại rồi tải lên.") from e
+    warnings = ["Ảnh đọc bằng OCR — nội dung có thể sai ký tự, cần người kiểm tra trước khi duyệt."]
+    return text, "ocr-image", warnings, {"pages": 1}
 
 
 def _ocr_pdf_strict(path: Path) -> str:

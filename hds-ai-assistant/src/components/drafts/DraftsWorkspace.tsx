@@ -18,15 +18,41 @@ import {
   Download,
   FilePenLine,
   FilePlus2,
+  ListChecks,
   Loader2,
   Plus,
   RefreshCw,
+  ScanLine,
   Search,
   ShieldCheck,
   Sparkles,
   WandSparkles,
   X,
 } from 'lucide-react';
+
+/** Khớp đúng dạng placeholder backend sinh ra (app/drafting.py PLACEHOLDER_RE). */
+const PLACEHOLDER_PATTERN = /\[(?:CẦN BỔ SUNG|CAN BO SUNG)(?::\s*([^\]]*))?\]/gi;
+
+const listPlaceholders = (content: string): { text: string; hint: string }[] => {
+  const out: { text: string; hint: string }[] = [];
+  const re = new RegExp(PLACEHOLDER_PATTERN.source, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    out.push({ text: m[0], hint: (m[1] || '').trim() });
+  }
+  return out;
+};
+
+/** Thay lần lượt từng placeholder bằng giá trị người dùng điền; ô bỏ trống giữ nguyên. */
+const fillPlaceholders = (content: string, values: string[]): string => {
+  let index = -1;
+  const re = new RegExp(PLACEHOLDER_PATTERN.source, 'gi');
+  return content.replace(re, (match) => {
+    index += 1;
+    const value = (values[index] || '').trim();
+    return value || match;
+  });
+};
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   draft: { label: 'Bản nháp', cls: 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700' },
@@ -90,6 +116,10 @@ export const DraftsWorkspace: React.FC = () => {
   const [approvalNote, setApprovalNote] = useState('');
   const [allowPlaceholders, setAllowPlaceholders] = useState(false);
   const [confirmNeedsReview, setConfirmNeedsReview] = useState(false);
+  const [autofillBusy, setAutofillBusy] = useState(false);
+  const [fieldLabels, setFieldLabels] = useState<Record<string, string>>({});
+  const [showFill, setShowFill] = useState(false);
+  const [fillValues, setFillValues] = useState<string[]>([]);
   const [form, setForm] = useState<DraftCreateInput>({
     title: '',
     document_type: 'advisory',
@@ -267,9 +297,76 @@ export const DraftsWorkspace: React.FC = () => {
     setBusy('export');
     try {
       await api.exportDraft(selected.id, `${selected.title}.docx`);
-      showToast('Đã xuất tệp DOCX.', 'success');
+      showToast(
+        selected.status === 'approved'
+          ? 'Đã xuất tệp DOCX.'
+          : 'Đã xuất DOCX bản nháp — bản này chưa được phê duyệt.',
+        'success'
+      );
     } catch (err: any) {
       setError(err?.message || 'Không xuất được tệp.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Tải MỘT hồ sơ (CCCD/sơ yếu/CV — PDF, ảnh, DOCX) để bóc thông tin điền sẵn. */
+  const handleAutofillFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || autofillBusy) return;
+    setAutofillBusy(true);
+    try {
+      const res = await api.autofillDraft(file);
+      const fields = res?.fields || {};
+      const keys = Object.keys(fields);
+      if (!keys.length) {
+        showToast('Không bóc được trường thông tin nào từ hồ sơ này.', 'error');
+        return;
+      }
+      setForm((prev) => {
+        const merged: Record<string, unknown> = { ...(prev.input_data || {}) };
+        for (const [key, value] of Object.entries(fields)) {
+          // Người dùng đã gõ tay thì giữ nguyên, chỉ điền ô còn trống.
+          if (merged[key] == null || merged[key] === '') merged[key] = value;
+        }
+        return { ...prev, input_data: merged };
+      });
+      setFieldLabels((prev) => ({ ...prev, ...(res.field_labels || {}) }));
+      const warn = (res.warnings || []).length
+        ? ' Hồ sơ đọc bằng OCR — kiểm tra lại từng giá trị trước khi dùng.'
+        : '';
+      showToast(`Đã bóc ${keys.length} trường từ "${file.name}".${warn}`, 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Không bóc được thông tin từ hồ sơ.', 'error');
+    } finally {
+      setAutofillBusy(false);
+    }
+  };
+
+  const submitFill = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selected || busy) return;
+    const current = getContent(selected);
+    const filledCount = fillValues.filter((value) => value.trim()).length;
+    if (!filledCount) {
+      setShowFill(false);
+      return;
+    }
+    setBusy('fill');
+    setError(null);
+    try {
+      const result = await api.reviseDraft(selected.id, {
+        content_markdown: fillPlaceholders(current, fillValues),
+        change_note: `Điền ${filledCount} chỗ trống`,
+      });
+      setSelected(result);
+      setShowFill(false);
+      setFillValues([]);
+      await loadDrafts(selected.id);
+      showToast(`Đã điền ${filledCount} chỗ trống và lưu thành phiên bản mới.`, 'success');
+    } catch (err: any) {
+      setError(err?.message || 'Không lưu được các chỗ đã điền.');
     } finally {
       setBusy(null);
     }
@@ -285,8 +382,11 @@ export const DraftsWorkspace: React.FC = () => {
   const content = getContent(selected);
   const evidence = getEvidence(selected);
   const statusMeta = getStatusMeta(selected?.status);
-  const canExport = selected?.status === 'approved';
+  // Backend cho xuất mọi phiên bản (header X-Draft-Status mang trạng thái);
+  // đây là luồng "docx realtime để điền chỗ trống" — không bắt chờ phê duyệt.
+  const canExport = Boolean(content);
   const canGenerate = Boolean(selected && selected.status !== 'approved');
+  const placeholders = useMemo(() => listPlaceholders(content), [content]);
   const latestGrounding = selected?.latest_version?.grounding_status || selected?.grounding_status;
   const latestPlaceholders = selected?.latest_version?.placeholder_count ?? selected?.placeholder_count ?? 0;
   const selectedTemplate = templates.find((item) => item.id === form.template_id);
@@ -414,6 +514,18 @@ export const DraftsWorkspace: React.FC = () => {
                       Sinh nội dung
                     </button>
                   )}
+                  {content && selected.status !== 'approved' && placeholders.length > 0 && (
+                    <button
+                      onClick={() => {
+                        setFillValues(placeholders.map(() => ''));
+                        setShowFill(true);
+                      }}
+                      disabled={Boolean(busy)}
+                      className="px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 text-xs font-bold flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <ListChecks className="w-4 h-4" /> Điền chỗ trống ({placeholders.length})
+                    </button>
+                  )}
                   {content && selected.status !== 'approved' && (
                     <button
                       onClick={() => setShowRevise(true)}
@@ -429,9 +541,9 @@ export const DraftsWorkspace: React.FC = () => {
                       Phê duyệt
                     </button>
                   )}
-                  <button onClick={exportFile} disabled={!canExport || Boolean(busy)} title={canExport ? 'Xuất DOCX' : 'Chỉ xuất sau khi phê duyệt'} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">
+                  <button onClick={exportFile} disabled={!canExport || Boolean(busy)} title={canExport ? 'Tải DOCX (bản chưa duyệt vẫn tải được để điền tiếp)' : 'Chưa có nội dung để xuất'} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">
                     {busy === 'export' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                    Xuất DOCX
+                    Tải DOCX
                   </button>
                 </div>
               </div>
@@ -569,6 +681,85 @@ export const DraftsWorkspace: React.FC = () => {
                 </div>
               )}
 
+              <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <ScanLine className="w-4 h-4 text-hds-gold" /> Tự điền từ hồ sơ
+                    </p>
+                    <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
+                      Tải CCCD / sơ yếu lý lịch / CV (PDF, ảnh chụp, DOCX) — hệ thống bóc họ tên,
+                      số CCCD, địa chỉ… điền sẵn; ô bạn đã gõ tay được giữ nguyên.
+                    </p>
+                  </div>
+                  <input
+                    type="file"
+                    id="autofill-file-input"
+                    className="sr-only"
+                    accept=".pdf,.docx,.doc,.txt,.md,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp"
+                    onChange={handleAutofillFile}
+                  />
+                  <label
+                    htmlFor="autofill-file-input"
+                    className={`shrink-0 px-3 py-2 rounded-xl border text-[11px] font-bold cursor-pointer flex items-center gap-1.5 ${
+                      autofillBusy
+                        ? 'opacity-60 pointer-events-none border-slate-300 dark:border-slate-700'
+                        : 'border-hds-navy text-hds-navy dark:text-blue-300 dark:border-blue-700 hover:bg-hds-soft dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {autofillBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanLine className="w-3.5 h-3.5" />}
+                    {autofillBusy ? 'Đang đọc…' : 'Chọn hồ sơ'}
+                  </label>
+                </div>
+                {(() => {
+                  const requiredKeys = new Set(
+                    requiredFields.map((field, index) => {
+                      const spec = typeof field === 'string' ? { key: field } : field;
+                      return spec.key || spec.name || `field_${index + 1}`;
+                    })
+                  );
+                  const extraEntries = Object.entries(form.input_data || {}).filter(
+                    ([key]) => !requiredKeys.has(key)
+                  );
+                  if (!extraEntries.length) return null;
+                  return (
+                    <div className="mt-3 grid sm:grid-cols-2 gap-3">
+                      {extraEntries.map(([key, value]) => (
+                        <label key={key} className="space-y-1">
+                          <span className="flex items-center justify-between text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                            <span>{fieldLabels[key] || key}</span>
+                            <button
+                              type="button"
+                              aria-label={`Bỏ trường ${fieldLabels[key] || key}`}
+                              onClick={() =>
+                                setForm((prev) => {
+                                  const next = { ...(prev.input_data || {}) };
+                                  delete next[key];
+                                  return { ...prev, input_data: next };
+                                })
+                              }
+                              className="text-slate-400 hover:text-hds-red"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                          <input
+                            value={String(value ?? '')}
+                            onChange={(event) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                input_data: { ...(prev.input_data || {}), [key]: event.target.value },
+                              }))
+                            }
+                            className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 text-xs outline-none focus:ring-2 focus:ring-hds-blue"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+
               <label className="space-y-1 block">
                 <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Khách hàng (nếu có)</span>
                 <select value={form.client_id ?? ''} onChange={(event) => setForm((prev) => ({ ...prev, client_id: event.target.value ? Number(event.target.value) : null }))} className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 dark:bg-slate-800 text-xs">
@@ -655,6 +846,72 @@ export const DraftsWorkspace: React.FC = () => {
               <button type="submit" disabled={!revisionInstructions.trim() || busy === 'revise'} className="px-4 py-2 rounded-xl bg-hds-navy text-hds-gold text-xs font-bold flex items-center gap-2 disabled:opacity-50">
                 {busy === 'revise' ? <Loader2 className="w-4 h-4 animate-spin" /> : <WandSparkles className="w-4 h-4" />}
                 Tạo phiên bản
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {showFill && selected && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowFill(false)}
+          role="presentation"
+        >
+          <form
+            onSubmit={submitFill}
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl p-5"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-sm flex items-center gap-2">
+                  <ListChecks className="w-4 h-4 text-hds-gold" /> Điền chỗ trống ({placeholders.length})
+                </h3>
+                <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  Giá trị bạn điền thay thẳng vào bản nháp và lưu thành phiên bản mới.
+                  Ô bỏ trống giữ nguyên dấu [CẦN BỔ SUNG] để điền sau.
+                </p>
+              </div>
+              <button type="button" onClick={() => setShowFill(false)} aria-label="Đóng">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {placeholders.map((item, index) => (
+                <label key={`${index}-${item.hint}`} className="block space-y-1">
+                  <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    {index + 1}. {item.hint || 'Chỗ trống chưa ghi rõ cần gì'}
+                  </span>
+                  <input
+                    value={fillValues[index] || ''}
+                    autoFocus={index === 0}
+                    onChange={(event) =>
+                      setFillValues((prev) => {
+                        const next = [...prev];
+                        next[index] = event.target.value;
+                        return next;
+                      })
+                    }
+                    placeholder="Bỏ trống nếu chưa có thông tin"
+                    className="w-full px-3 py-2.5 rounded-xl border border-amber-200 dark:border-amber-800 dark:bg-slate-800 text-xs outline-none focus:ring-2 focus:ring-hds-blue"
+                  />
+                </label>
+              ))}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setShowFill(false)} className="px-4 py-2 text-xs font-semibold text-slate-500">
+                Huỷ
+              </button>
+              <button
+                type="submit"
+                disabled={busy === 'fill' || !fillValues.some((value) => value.trim())}
+                className="px-4 py-2 rounded-xl bg-hds-navy text-hds-gold text-xs font-bold flex items-center gap-2 disabled:opacity-50"
+              >
+                {busy === 'fill' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                Điền và lưu phiên bản
               </button>
             </div>
           </form>

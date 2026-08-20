@@ -113,7 +113,11 @@ DEFAULTS = {
     "llm_num_thread": "0",
     # Số lượt hỏi-đáp cũ đưa lại vào ngữ cảnh để bot hiểu "vụ đó", "khách kia".
     # Đặt 0 là tắt bộ nhớ hội thoại (mỗi câu hỏi độc lập).
-    "chat_history_turns": "3",
+    # 21/08/2026: chủ dự án yêu cầu bot nhớ dài — 10 lượt hỏi-đáp gần nhất kèm
+    # theo mỗi câu hỏi mới (trước là 3). Mỗi message trong lịch sử được giữ tới
+    # HISTORY_CHARS ký tự; hội thoại toàn câu trả lời rất dài mà chạm trần
+    # num_ctx thì hạ số này trên web trước tiên.
+    "chat_history_turns": "10",
     # Model sinh câu trả lời (Ollama). Chính sách 20/08/2026: chạy FULL
     # qwen3:14b cho mọi câu — không tự hạ xuống model nhỏ. Admin đổi trên web
     # nếu máy không kham nổi. KHÔNG áp cho model tạo vector (bge-m3): mọi đoạn

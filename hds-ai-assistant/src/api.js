@@ -716,6 +716,35 @@ export async function approveDraft(draftId, data = {}) {
   });
 }
 
+// POST /drafts/autofill (multipart) — tải MỘT hồ sơ (CCCD/sơ yếu/CV: PDF, ảnh,
+// DOCX), backend trích văn bản (OCR nếu cần) rồi bóc các trường định danh để
+// điền sẵn input_data. File dùng xong bỏ, không vào kho.
+export async function autofillDraft(file) {
+  if (useMockBackend) {
+    await new Promise((r) => setTimeout(r, 300));
+    return {
+      ok: true,
+      fields: { ho_ten: 'Nguyễn Thị Ngân (demo)', so_cccd: '049195003678' },
+      field_labels: { ho_ten: 'Họ và tên', so_cccd: 'Số CCCD/CMND' },
+      warnings: [],
+      method: 'demo',
+      text_chars: 0,
+    };
+  }
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${apiBaseUrl}/drafts/autofill`, {
+    method: 'POST',
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    body: form, // KHÔNG tự đặt Content-Type — trình duyệt phải tự thêm boundary
+  });
+  if (!res.ok) {
+    const rawText = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(rawText, res.status));
+  }
+  return res.json();
+}
+
 export async function exportDraft(draftId, filename) {
   if (useMockBackend) {
     const blob = new Blob(['Bản demo — chỉ xuất tệp khi kết nối backend thật.'], {

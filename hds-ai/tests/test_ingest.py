@@ -273,6 +273,51 @@ class IngestExtractionTests(unittest.TestCase):
             self.assertNotIn(safe, {"", ".", ".."})
 
 
+class ImageExtractionTests(unittest.TestCase):
+    """Ảnh chụp giấy tờ (CCCD, sơ yếu…) phải vào được kho qua OCR — người dùng
+    chụp điện thoại rồi tải thẳng ảnh, không bắt họ tự đổi sang PDF."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_dinh_dang_anh_duoc_ho_tro(self):
+        from app.ingest import IMAGE_EXTENSIONS, SUPPORTED_EXTENSIONS
+        for ext in (".jpg", ".jpeg", ".png", ".webp", ".tiff"):
+            self.assertIn(ext, SUPPORTED_EXTENSIONS, ext)
+            self.assertIn(ext, IMAGE_EXTENSIONS, ext)
+
+    def test_anh_di_qua_duong_ocr_va_luon_mang_canh_bao(self):
+        # Không phụ thuộc tesseract trên máy dev: giả lập tầng OCR trả chữ.
+        from app import ingest
+        path = self.root / "cccd.jpg"
+        path.write_bytes(b"anh gia lap")
+        with patch.object(ingest, "_extract_image",
+                          return_value=("SO 049195003678 NGUYEN THI NGAN",
+                                        "ocr-image",
+                                        ["Ảnh đọc bằng OCR — cần kiểm tra."],
+                                        {"pages": 1})):
+            result = extract_text_with_metadata(path)
+        self.assertEqual(result.method, "ocr-image")
+        self.assertEqual(result.status, "warning")   # bắt buộc chờ duyệt tay
+
+    def test_thieu_thu_vien_ocr_ra_loi_co_ma(self):
+        # Venv máy dev không có Pillow/pytesseract → phải ra ocr_missing với
+        # hint cài đặt, không phải crash lạ.
+        path = self.root / "cccd.png"
+        path.write_bytes(b"anh gia lap du dai de khong bi coi la file rong")
+        try:
+            result = extract_text_with_metadata(path)
+        except ExtractionError as exc:
+            self.assertIn(exc.code, {"ocr_missing", "image_unreadable"})
+        else:
+            # Máy có sẵn OCR thật thì kết quả phải mang cảnh báo OCR.
+            self.assertEqual(result.status, "warning")
+
+
 class AutoLearnSafetyTests(unittest.TestCase):
     def test_review_is_default_and_legacy_env_remains_compatible(self):
         self.assertFalse(auto_approve_from_env({}))
