@@ -335,14 +335,14 @@ def resolve_labels(parts, create_missing_client=True):
 
 def existing(drive_id):
     """(doc_id, checksum, doc_type, access_level, client_id, department_id,
-    matter_id, approved, label_verified, title) của tài liệu đã học từ file
-    Drive này, hoặc None. Cột mới nằm CUỐI để chỗ khác dùng row[0..6] không
-    xê dịch."""
+    matter_id, approved, label_verified, title, person_folder) của tài liệu đã
+    học từ file Drive này, hoặc None. Cột mới nằm CUỐI để chỗ khác dùng
+    row[0..6] không xê dịch."""
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT id, checksum, doc_type, access_level,
                                   client_id, department_id, matter_id,
-                                  approved, label_verified, title
+                                  approved, label_verified, title, person_folder
                              FROM documents WHERE drive_file_id=%s""", (drive_id,))
             return cur.fetchone()
 
@@ -358,9 +358,11 @@ def relabel(doc_id, labels, title=None):
         with conn.cursor() as cur:
             cur.execute("""UPDATE documents SET doc_type=%s, access_level=%s, client_id=%s,
                            department_id=%s, matter_id=%s,
+                           person_folder=%s,
                            title=coalesce(%s, title), updated_at=now() WHERE id=%s""",
                         (labels["doc_type"], labels["access_level"], labels["client_id"],
-                         labels["department_id"], labels.get("matter_id"), title, doc_id))
+                         labels["department_id"], labels.get("matter_id"),
+                         labels.get("title_context"), title, doc_id))
         db.audit(conn, None, "auto_relabel", "documents", doc_id,
                  {"labels": labels, **({"title": title} if title else {})})
 
@@ -491,15 +493,15 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
             cur.execute("""INSERT INTO documents
                 (title, source_path, drive_file_id, checksum, doc_type, access_level,
                  client_id, department_id, matter_id, approved, label_verified, source_kind, summary,
-                 extraction_status,extraction_error,source_version)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'drive',%s,%s,%s,%s) RETURNING id""",
+                 extraction_status,extraction_error,source_version,person_folder)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'drive',%s,%s,%s,%s,%s) RETURNING id""",
                 (title, str(path), drive_id, checksum,
                  labels["doc_type"], labels["access_level"],
                  labels["client_id"], labels["department_id"], labels.get("matter_id"),
                  should_approve, should_approve, summary,
                  "warning" if extraction.warnings else "ready",
                  json.dumps(extraction.warnings, ensure_ascii=False) if extraction.warnings else None,
-                 source_version))
+                 source_version, labels.get("title_context")))
             doc_id = cur.fetchone()[0]
             for idx, (piece, vec) in enumerate(zip(pieces, vecs)):
                 cur.execute("""INSERT INTO chunks
@@ -633,9 +635,10 @@ def run(dry_run=False):
         if row and remote_fingerprint and row[1] == remote_fingerprint:
             # Nội dung không đổi. Nhưng nếu NHÃN đã khác (vd trước đây chưa gắn
             # được khách, giờ gắn được), thì cập nhật nhãn — không nạp lại nội dung.
-            cur_labels = (row[2], row[3], row[4], row[5], row[6])
+            cur_labels = (row[2], row[3], row[4], row[5], row[6], row[10])
             new_labels = (labels["doc_type"], labels["access_level"], labels["client_id"],
-                          labels["department_id"], labels.get("matter_id"))
+                          labels["department_id"], labels.get("matter_id"),
+                          labels.get("title_context"))
             # Tiêu đề kỳ vọng có thể đã đổi dù nội dung y nguyên — hồ sơ nhân
             # sự học từ trước khi tiêu đề mang tên người ("Sơ yếu lý lịch" →
             # "Ngân — Sơ yếu lý lịch"). Cập nhật để nguồn trích dẫn phân biệt

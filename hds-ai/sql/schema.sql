@@ -141,6 +141,11 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_status TEXT DEFAULT 'r
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_error TEXT;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_version INT DEFAULT 1;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true;
+-- Tên THƯ MỤC CON trong "8. HỒ SƠ NHÂN SỰ" mà file thuộc về ("Ngân", "Mai").
+-- Nguyên tắc 21/08/2026: CÂY THƯ MỤC là nguồn sự thật về số lượng — bao nhiêu
+-- bộ (thư mục con) là bấy nhiêu nhân sự, chi tiết nằm trong từng bộ; giống
+-- cách mỗi thư mục [MÃ] trong ngăn 9 là một khách hàng (bảng clients).
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS person_folder TEXT;
 CREATE INDEX IF NOT EXISTS idx_doc_ready_active
   ON documents(active, extraction_status, approved, label_verified);
 

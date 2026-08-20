@@ -213,6 +213,32 @@ class InventoryAnswerTests(unittest.TestCase):
         out = rag.fit_context([chunk], chunk_chars=0, budget=0, question="")
         self.assertEqual(len(out[0]["content"]), 9000)   # giữ trọn đoạn
 
+    def test_tree_staff_lines_counts_folders_as_people(self):
+        """Nguyên tắc 21/08: cây là nguồn sự thật — N bộ hồ sơ = N nhân sự,
+        chi tiết nằm trong từng bộ."""
+        rows = [("Mai", 11), ("Ngân", 10), ("Nhi", 8)]
+        text = "\n".join(company_context._tree_staff_lines(rows))
+        self.assertIn("3 bộ hồ sơ = 3 nhân sự", text)
+        self.assertIn("Ngân** — 10 giấy tờ", text)
+        self.assertIn("hỏi tiếp", text)   # chỉ đường đọc chi tiết trong bộ
+
+    def test_inventory_declares_unlearned_files(self):
+        """File trên cây chưa học được phải được KHAI, không đếm thiếu im lặng."""
+        lines = company_context._inventory_lines(
+            ["ban_an"], [("ban_an", 4)], {"ban_an": ["BA 1", "BA 2", "BA 3", "BA 4"]},
+            unlearned=1)
+        text = "\n".join(lines)
+        self.assertIn("4 tài liệu bản án", text)
+        self.assertIn("1 file trên cây Drive CHƯA học được", text)
+
+    def test_warehouse_map_shows_staff_sets_and_clients(self):
+        rows = [("ho_so_ns", False, 29), ("law", False, 15)]
+        text = "\n".join(company_context._warehouse_lines(
+            rows, staff_folders=[("Mai", 11), ("Ngân", 10), ("Nhi", 8)],
+            client_count=3))
+        self.assertIn("3 BỘ hồ sơ = 3 nhân sự (Mai, Ngân, Nhi)", text)
+        self.assertIn("3 KHÁCH HÀNG", text)
+
     def test_warehouse_map_lines(self):
         """Bản đồ kho: ngăn 1–8 theo doc_type ngoài khách, ngăn 9 gom mọi giấy
         tờ thuộc khách — nạp mọi câu nội bộ để bot biết cây thư mục."""

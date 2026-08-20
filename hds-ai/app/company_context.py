@@ -606,21 +606,14 @@ def _staff_block(cur, is_banqt):
     if by_dept:
         out.append("- Theo phòng ban: " + ", ".join(f"{name} {n}" for name, n in by_dept))
 
-    if is_banqt:
-        cur.execute("""SELECT u.full_name, u.role,
-                              coalesce(string_agg(d.name, ', ' ORDER BY d.name), '')
-                         FROM users u
-                         LEFT JOIN user_departments ud ON ud.user_id = u.id
-                         LEFT JOIN departments d ON d.id = ud.department_id
-                        WHERE u.active AND u.role NOT IN ('client_free','client_plus','client_pro')
-                        GROUP BY u.id, u.full_name, u.role
-                        ORDER BY u.full_name""")
-        rows = cur.fetchall()
-        if rows:
-            out.append("- Danh sách tài khoản (chỉ Ban quản trị được xem):")
-            for name, role, depts in rows:
-                out.append(f"  · {name or '(chưa đặt tên)'} — {ROLE_VN.get(role, role)}"
-                           + (f", phòng {depts}" if depts else ""))
+    # KHÔNG đưa danh sách TÊN tài khoản vào câu hỏi nhân sự — kể cả cho Ban QT.
+    # Ca thật 21/08/2026: người hỏi vai BQT, prompt mang 6 tên tài khoản kèm lời
+    # dặn "đừng dùng làm quân số" — model vẫn gộp thành "06 nhân sự", trong đó
+    # 3 cái tên chỉ là TÀI KHOẢN ĐĂNG NHẬP ai đó tạo trên web, không phải người
+    # lao động có hồ sơ. Mớm dữ liệu rồi dặn đừng dùng là vô ích (cùng bài với
+    # "đừng mớm câu từ chối") — nguồn tên NGƯỜI duy nhất ở đây là HỒ SƠ NHÂN SỰ
+    # ghim bên dưới; còn danh sách tài khoản có đường riêng: hỏi "danh sách tài
+    # khoản nội bộ" đi qua account_directory, trả structured chính xác.
 
     # GHIM nội dung HỒ SƠ NHÂN SỰ đã học (HĐLĐ, quyết định, sơ yếu lý lịch…).
     # Đây mới là nguồn sự thật về nhân sự công ty. Không ghim thì bot phải trông
@@ -641,22 +634,35 @@ def _hr_block(cur, budget=MAX_HR_CHARS):
     hồ sơ. Vì vậy: liệt kê mọi hồ sơ trước (mỗi hồ sơ một dòng — rẻ và không
     bao giờ bỏ sót ai), rồi mới chia đều phần ngân sách còn lại cho nội dung.
     """
-    cur.execute("""SELECT d.id, d.title, d.summary
+    cur.execute("""SELECT d.id, d.title, d.summary, d.person_folder
                      FROM documents d
                     WHERE d.client_id IS NULL AND d.doc_type = 'ho_so_ns'
                       AND d.approved AND d.label_verified
                       AND coalesce(d.active, true)
-                    ORDER BY d.title""")
-    docs = cur.fetchall()
-    if not docs:
+                    ORDER BY d.person_folder NULLS LAST, d.title""")
+    rows = cur.fetchall()
+    if not rows:
         return []
+    docs = [(doc_id, title, summary) for doc_id, title, summary, _ in rows]
 
-    out = [f"- HỒ SƠ NHÂN SỰ ĐÃ HỌC — {len(docs)} hồ sơ (nguồn sự thật về người "
-           "lao động; đọc kỹ để trả lời quân số, họ tên, chức danh, thời hạn HĐLĐ).",
-           "  DANH MỤC ĐẦY ĐỦ (không hồ sơ nào bị bỏ sót — đếm người theo danh "
-           "mục này, một người có thể có NHIỀU hồ sơ nên phải gộp theo TÊN):"]
-    for _, title, summary in docs:
-        line = f"  · {title}"
+    # CÂY là nguồn sự thật về QUÂN SỐ (21/08/2026): mỗi thư mục con một BỘ =
+    # một NGƯỜI. Nêu con số bộ ngay đầu để model không phải tự gộp theo tên
+    # (từng gộp sai khi tên tài khoản lọt vào ngữ cảnh).
+    per_person = {}
+    for _, _, _, person in rows:
+        key = person or "(chưa xếp vào bộ nào)"
+        per_person[key] = per_person.get(key, 0) + 1
+    named = [p for p in per_person if p != "(chưa xếp vào bộ nào)"]
+    out = []
+    if named:
+        out.append(f"- QUÂN SỐ THEO CÂY THƯ MỤC: **{len(named)} bộ hồ sơ = "
+                   f"{len(named)} nhân sự** — "
+                   + ", ".join(f"{p} ({per_person[p]} giấy tờ)" for p in sorted(named))
+                   + ". Đây là con số quân số đúng; đếm theo số tài liệu là SAI.")
+    out += [f"- HỒ SƠ NHÂN SỰ ĐÃ HỌC — {len(docs)} giấy tờ, xếp theo bộ (người):",
+            "  DANH MỤC ĐẦY ĐỦ:"]
+    for _, title, summary, person in rows:
+        line = f"  · [{person or 'chưa xếp bộ'}] {title}"
         if summary:
             line += f" — {_cut(summary, 180)}"
         out.append(line)
@@ -992,7 +998,7 @@ def infer_intent(question, history=None, state=None):
 INVENTORY_LIST_MAX = 0   # 0 = liệt kê đủ tên, không cắt danh sách
 
 
-def _inventory_lines(wanted, counts_rows, titles_by_type):
+def _inventory_lines(wanted, counts_rows, titles_by_type, unlearned=0):
     """Dựng câu trả lời đếm kho. Hỏi ĐÍCH DANH một loại → đếm + LIỆT KÊ TÊN
     từng bộ của loại đó, không đổ bảng toàn kho (20/08/2026: "án lệ có mấy bộ"
     nhận nguyên bảng 11 loại — đúng số nhưng không ai cần). Hỏi chung về kho
@@ -1022,6 +1028,12 @@ def _inventory_lines(wanted, counts_rows, titles_by_type):
         if total:
             lines.append(f"(Toàn kho đang có {total} tài liệu đã duyệt trong "
                          "phạm vi bạn được xem.)")
+        if unlearned:
+            # Cây là nguồn sự thật: file nằm trên cây mà chưa học được cũng
+            # phải được khai, không thì con số "trong cây" bị đếm thiếu im lặng.
+            lines.append(f"⚠ Ngoài ra có {unlearned} file trên cây Drive CHƯA "
+                         "học được (lỗi trích xuất) — số trên chỉ tính file đã "
+                         "học; xem Quản trị → Kho tri thức để sửa.")
         return lines
     if total:
         lines.append(f"Toàn kho có {total} tài liệu đã duyệt trong phạm vi "
@@ -1106,12 +1118,12 @@ WAREHOUSE_SHELVES = [
 ]
 
 
-def _warehouse_lines(rows):
+def _warehouse_lines(rows, staff_folders=None, client_count=None):
     """Khối BẢN ĐỒ KHO cho prompt — rows = [(doc_type, thuộc_khách, count), …].
 
-    Chính sách 20/08/2026: nạp cấu trúc thư mục vào MỌI câu hỏi nội bộ để bot
-    luôn biết kho có ngăn nào, mỗi ngăn bao nhiêu tài liệu — trả lời meta chính
-    xác và trích dẫn đúng ngăn thay vì đoán."""
+    Chính sách 20/08/2026: nạp cấu trúc thư mục vào MỌI câu hỏi nội bộ.
+    Nguyên tắc 21/08/2026: CÂY là nguồn sự thật về SỐ LƯỢNG — ngăn 8 nêu rõ
+    "N bộ = N nhân sự", ngăn 9 nêu "N khách"; chi tiết nằm trong từng bộ."""
     per_type = {}
     client_total = 0
     for doc_type, is_client, count in rows:
@@ -1128,11 +1140,18 @@ def _warehouse_lines(rows):
         shelved.update(types)
         note = ""
         if shelf.startswith("8."):
-            note = " (thư mục con theo TÊN nhân sự; tiêu đề dạng 'Tên — Giấy tờ')"
+            if staff_folders:
+                names = ", ".join(p for p, _ in staff_folders)
+                note = (f" — {len(staff_folders)} BỘ hồ sơ = {len(staff_folders)} "
+                        f"nhân sự ({names}); mỗi thư mục con một người")
+            else:
+                note = " (thư mục con theo TÊN nhân sự; tiêu đề dạng 'Tên — Giấy tờ')"
         out.append(f"  · {shelf}: {n} tài liệu{note}")
-    out.append(f"  · 9. HỒ SƠ KHÁCH HÀNG: {client_total} tài liệu (thư mục con "
-               "theo [MÃ KHÁCH], bên trong chia Thông tin khách hàng / Dự án – "
-               "Vụ việc / Hợp đồng / Thư tư vấn / Hồ sơ nộp cơ quan / Công nợ)")
+    client_note = (f" — {client_count} KHÁCH HÀNG, mỗi thư mục [MÃ KHÁCH] một khách"
+                   if client_count is not None else " (thư mục con theo [MÃ KHÁCH])")
+    out.append(f"  · 9. HỒ SƠ KHÁCH HÀNG: {client_total} tài liệu{client_note}; "
+               "bên trong chia Thông tin khách hàng / Dự án – Vụ việc / Hợp đồng "
+               "/ Thư tư vấn / Hồ sơ nộp cơ quan / Công nợ")
     leftover = sum(n for t, n in per_type.items() if t not in shelved)
     if leftover:
         out.append(f"  · Khác/chưa xếp ngăn: {leftover} tài liệu")
@@ -1147,7 +1166,15 @@ def _warehouse_block(cur):
                          FROM documents
                         WHERE approved AND label_verified AND coalesce(active,true)
                         GROUP BY 1, 2""")
-        return _warehouse_lines(cur.fetchall())
+        rows = cur.fetchall()
+        cur.execute("""SELECT person_folder, count(*) FROM documents
+                        WHERE doc_type='ho_so_ns' AND person_folder IS NOT NULL
+                          AND approved AND label_verified AND coalesce(active,true)
+                        GROUP BY person_folder ORDER BY person_folder""")
+        staff_folders = cur.fetchall()
+        cur.execute("SELECT count(*) FROM clients")
+        client_count = cur.fetchone()[0]
+        return _warehouse_lines(rows, staff_folders, client_count)
     except Exception:
         return []
 
@@ -1161,6 +1188,41 @@ def _system_evidence(title, locator, quote):
         "quote": quote,
         "as_of": date.today().isoformat(),
     }
+
+
+def _tree_staff(dept_ids=None, is_banqt=False, can_finance=False):
+    """[(tên bộ hồ sơ, số giấy tờ đã duyệt), …] — đếm THƯ MỤC CON của ngăn
+    '8. HỒ SƠ NHÂN SỰ' trên cây Drive. RLS của phiên áp như thường."""
+    try:
+        with db.session(role="internal", dept_ids=dept_ids, is_banqt=is_banqt,
+                        can_finance=can_finance) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT person_folder, count(*)
+                                 FROM documents
+                                WHERE doc_type='ho_so_ns' AND person_folder IS NOT NULL
+                                  AND approved AND label_verified
+                                  AND coalesce(active,true)
+                                GROUP BY person_folder ORDER BY person_folder""")
+                return cur.fetchall()
+    except Exception:
+        return []
+
+
+def _tree_staff_lines(rows):
+    """Câu trả lời đếm nhân sự THEO CÂY: mỗi bộ một người, chi tiết nằm trong bộ.
+
+    Cố ý nói rõ nguồn là cây thư mục (không phải sổ nhân sự chính thức) và mời
+    hỏi tiếp vào từng bộ — đúng cách chủ dự án vận hành kho: "tôi tự up bộ hồ
+    sơ lên cây, bot biết bao nhiêu bộ là bấy nhiêu nhân sự"."""
+    lines = [f"Theo cây thư mục **8. HỒ SƠ NHÂN SỰ**, HDS đang có "
+             f"**{len(rows)} bộ hồ sơ = {len(rows)} nhân sự** "
+             f"(tính đến {date.today()}):"]
+    for person, n in rows:
+        lines.append(f"- **{person}** — {n} giấy tờ trong bộ")
+    lines.append("Chi tiết từng người nằm trong bộ hồ sơ — hỏi tiếp kiểu "
+                 "“sơ yếu lý lịch của Ngân” hay “HĐLĐ của Nhi” để mình đọc "
+                 "đúng bộ.")
+    return lines
 
 
 def _active_accounts():
@@ -1312,7 +1374,15 @@ def structured_answer(question, channel, client_id=None, dept_ids=None,
                                     ORDER BY title""", (wanted,))
                     for dt, title in cur.fetchall():
                         titles.setdefault(dt, []).append(title)
-        lines = _inventory_lines(wanted, rows, titles)
+                unlearned = 0
+                if wanted:
+                    try:
+                        cur.execute("""SELECT count(*) FROM ingest_failures
+                                        WHERE resolved_at IS NULL""")
+                        unlearned = cur.fetchone()[0]
+                    except Exception:
+                        unlearned = 0
+        lines = _inventory_lines(wanted, rows, titles, unlearned)
         next_state["doc_types"] = wanted
         total = sum(n for _, n in rows)
         return {
@@ -1341,11 +1411,29 @@ def structured_answer(question, channel, client_id=None, dept_ids=None,
         }
 
     employees = _employees_with_latest_contract()
+    if not employees and intent == "staff_directory":
+        # Chưa nhập sổ nhân sự thì CÂY THƯ MỤC là nguồn sự thật (nguyên tắc
+        # 21/08/2026): mỗi thư mục con trong "8. HỒ SƠ NHÂN SỰ" là MỘT BỘ hồ
+        # sơ = MỘT nhân sự — giống mỗi thư mục [MÃ] ngăn 9 là một khách. Đếm
+        # bộ bằng SQL, chính xác và không cho model cơ hội gộp tài khoản đăng
+        # nhập thành người (lỗi "06 nhân sự" 21/08).
+        rows = _tree_staff(dept_ids=dept_ids, is_banqt=is_banqt,
+                           can_finance=can_finance)
+        if rows:
+            lines = _tree_staff_lines(rows)
+            return {
+                "answer": "\n".join(lines), "answer_mode": "structured",
+                "grounding_status": "verified",
+                "evidence": [_system_evidence(
+                    "Cây thư mục HỒ SƠ NHÂN SỰ", "documents.person_folder",
+                    f"SỐ BỘ={len(rows)}; " + ", ".join(
+                        f"{p}={n}" for p, n in rows))],
+                "state": next_state,
+            }
     if not employees:
-        # Chưa có sổ nhân sự có cấu trúc KHÔNG có nghĩa là không biết gì. Hợp
-        # đồng lao động và hồ sơ nhân sự đã học vẫn trả lời được câu này. Trả
-        # None để rơi xuống luồng tra tài liệu, thay vì chặn người dùng bằng một
-        # câu từ chối trong khi tài liệu đang nằm sẵn trong kho.
+        # Không có sổ, cây cũng chưa có bộ nào (hoặc câu về HĐLĐ cần sổ thật).
+        # Trả None để rơi xuống luồng tra tài liệu, thay vì chặn người dùng
+        # bằng một câu từ chối trong khi tài liệu đang nằm sẵn trong kho.
         return None
 
     if intent == "employment_contract":
