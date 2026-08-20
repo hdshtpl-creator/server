@@ -1,8 +1,0 @@
-.venv/
-.env
-data/
-logs/
-credentials/*.json
-__pycache__/
-*.pyc
-backups/
