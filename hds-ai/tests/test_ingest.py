@@ -45,6 +45,14 @@ class PdfResilienceTests(unittest.TestCase):
         page = "Điều 1. Nội dung có chữ đầy đủ, mỗi trang vài trăm ký tự. " * 10
         self.assertFalse(_needs_ocr(page * 2, 2))
 
+    def test_needs_ocr_for_multi_column_cv(self):
+        """CV/sơ yếu trình bày nhiều cột (mẫu TopCV): pdfplumber trích được vài
+        trăm ký tự rời rạc — vượt ngưỡng cũ 120/trang nên KHÔNG được OCR, và
+        bot nhận về một hồ sơ gần như trống (ca thật 21/08/2026: hỏi ngày sinh
+        của một nhân sự, bot nói không có, trong khi CV ghi rõ)."""
+        thin = "BẠC THỊ MAI NHÂN VIÊN HÀNH CHÍNH 28/10/1996 Đại học Luật Hà Nội " * 3
+        self.assertTrue(_needs_ocr(thin, 2))     # ~190 ký tự/trang
+
     def test_no_ocr_when_pages_unknown_but_text_rich(self):
         page = "Nội dung dài và có nghĩa. " * 20
         self.assertFalse(_needs_ocr(page, 0))

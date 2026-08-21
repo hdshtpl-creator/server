@@ -207,6 +207,58 @@ Chỉ đọc và báo cáo, không sửa gì. Nó trả lời: pgvector đã cà
 còn không, có đoạn nào thiếu vector không, model tạo vector còn chạy không, và
 **tài liệu nào có trong Drive mà chưa học được**.
 
+### Bot nói "không có thông tin" về một người, dù giấy tờ nằm sẵn trên Drive
+
+Gần như luôn là **giấy tờ vào kho nhưng không có chữ** (bản scan mờ, PDF nhiều
+cột, thiếu công cụ OCR), chứ không phải tìm kiếm sai. Soi thẳng bộ hồ sơ đó:
+
+```bash
+bash deploy/soi-ho-so.sh Mai
+```
+
+Mỗi giấy tờ hiện ra kèm số ký tự đọc được. Dòng đỏ = gần như không có chữ →
+script tự kiểm tra luôn `tesseract`, gói tiếng Việt và `poppler` trên máy chủ
+rồi in lệnh cài nếu thiếu. Muốn xem bot thật sự đọc được gì trong một giấy tờ:
+
+```bash
+bash deploy/soi-ho-so.sh Mai --xem 137
+```
+
+Chạy không kèm tên để liệt kê tất cả các bộ hồ sơ đang có.
+
+**Giấy tờ có chữ nhưng là chữ hỏng.** Bản scan mờ hoặc có nền hoa văn (CCCD,
+bằng cấp) cho ra ký tự vụn kiểu `bai bel La n Å l Å _ ¬ s ,ã bô`. Bot **không**
+dùng những đoạn như vậy làm căn cứ nữa — nó nhận ra và nói thẳng là chưa đọc
+được file, thay vì suy đoán. Để đọc lại cho tử tế:
+
+```bash
+bash deploy/hoc-lai-file.sh --hong        # CHỈ file đọc hỏng — nên dùng
+bash deploy/hoc-lai-file.sh --pdf --thu   # xem trước: tất cả PDF, chưa xoá gì
+bash deploy/hoc-lai-file.sh --pdf         # đọc lại toàn bộ PDF
+bash deploy/hoc-lai-file.sh --bo Mai      # một bộ hồ sơ nhân sự
+bash deploy/hoc-lai-file.sh 567 573       # theo mã tài liệu
+```
+
+`--hong` tự tìm file có chữ hỏng: bản trích xuất mang cảnh báo, hoặc nội dung
+chứa chữ của bảng mã khác (Å, Ø, ƒ, Ð) — thứ gần như không bao giờ có trong hồ
+sơ tiếng Việt thật. Đây là lựa chọn nên dùng: nó bỏ qua các PDF vốn đã đọc tốt,
+nên nhanh hơn `--pdf` rất nhiều và không làm xáo trộn phần kho đang chạy ổn.
+
+Trước khi xoá, script luôn sao lưu hai bảng `documents`/`chunks`, in danh sách
+và bắt gõ xác nhận. Trạng thái duyệt được ghi nhớ rồi **trả lại cho những file
+lần này đọc sạch**; file scan mang cảnh báo vẫn phải qua người duyệt vì nội
+dung đã khác đi. Tài liệu tải lên qua web (không có trên Drive) được bỏ qua —
+xoá chúng là mất hẳn, không có nguồn nào để học lại.
+
+Thêm `--thu` để chỉ xem danh sách và ước lượng khối lượng. Chạy `--pdf` trên
+kho lớn có thể mất hàng giờ (mỗi đoạn tạo lại vector, bản scan còn phải OCR
+400 dpi), nên làm ngoài giờ và cân nhắc `nohup`/`tmux`.
+
+Bộ đọc hiện tại dùng 400 dpi kèm xám hoá + kéo giãn tương phản, thường cứu được
+phần lớn bản scan kém. Nếu vẫn hỏng thì bản gốc quá mờ: thay bản scan rõ hơn
+trên Drive, hoặc vào Quản trị → Kiểm duyệt → "Xem & sửa nội dung trích xuất"
+gõ tay phần quan trọng.
+
 ### Tài liệu có trong Drive nhưng bot không đọc được
 
 Xem ở **Quản trị → Kho tài liệu đã học**, khối đỏ trên cùng. Mỗi dòng ghi rõ

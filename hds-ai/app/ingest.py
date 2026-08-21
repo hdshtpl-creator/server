@@ -454,18 +454,26 @@ def _extract_docx(path):
     return text, method, warnings, {"tables": len(document.tables)}
 
 
+# Mật độ chữ tối thiểu của một trang PDF có chữ thật. Dưới mức này coi như
+# trang ảnh và phải thử OCR. Nâng 120 → 220 ngày 21/08/2026: CV/sơ yếu lý lịch
+# trình bày nhiều cột (mẫu TopCV và tương tự) thường chỉ trích được vài trăm ký
+# tự rời rạc — vượt ngưỡng cũ nên KHÔNG được OCR, và bot nhận về một hồ sơ gần
+# như trống mà không có tín hiệu nào báo thiếu. OCR thêm chỉ tốn thời gian học:
+# bản OCR chỉ được dùng khi nó ra NHIỀU chữ hơn bản trích thẳng.
+MIN_CHARS_PER_PAGE = _positive_int_env("INGEST_MIN_CHARS_PER_PAGE", 220)
+
+
 def _needs_ocr(text: str, page_count: int) -> bool:
     """PDF này có cần OCR không — quyết theo MẬT ĐỘ chữ, không chỉ tổng số.
 
     Ngưỡng cũ `len(text) < 100` bỏ sót loại scan phổ biến nhất của giấy tờ
     nhân sự: file scan nhưng có sẵn vài dòng text thật (header cơ quan, số
     trang) — tổng vượt 100 ký tự nên không bao giờ được OCR, và tài liệu vào
-    kho chỉ với mấy dòng header. Một trang PDF chữ thật hiếm khi dưới 120 ký
-    tự, nên trung bình mỗi trang thấp hơn mức đó coi như trang ảnh."""
+    kho chỉ với mấy dòng header."""
     body = clean(text)
     if len(body) < 100:
         return True
-    return bool(page_count) and len(body) / page_count < 120
+    return bool(page_count) and len(body) / page_count < MIN_CHARS_PER_PAGE
 
 
 def _pdf_text_via_pypdf(path):
@@ -547,7 +555,19 @@ def _extract_pdf(path):
                 text = ocr_text
                 method = "ocr"
                 warnings.append("PDF dạng scan/ít text; đã dùng OCR tiếng Việt.")
-    return text, method, warnings, {"pages": page_count, "pdf_error": bool(pdf_error)}
+    # Đã thử hết mọi tầng mà chữ vẫn quá thưa: tài liệu vào kho gần như trống.
+    # Phải KÊU LÊN — file lặng lẽ nằm trong kho với vài dòng chữ là kiểu hỏng
+    # tệ nhất: bot trả lời "không có thông tin" trong khi giấy tờ nằm ngay đó,
+    # và không ai biết để đi sửa. Cảnh báo đưa file vào hàng chờ duyệt và hiện
+    # badge đỏ "Học không ổn" trên giao diện Kiểm duyệt.
+    body_len = len(clean(text))
+    if page_count and body_len / page_count < MIN_CHARS_PER_PAGE:
+        warnings.append(
+            f"Chỉ đọc được {body_len} ký tự cho {page_count} trang — nội dung "
+            "gần như trống. Bản scan quá mờ hoặc chữ nằm trong ảnh: hãy scan "
+            "lại rõ hơn, hoặc mở Kiểm duyệt để xem và sửa nội dung trích xuất.")
+    return text, method, warnings, {"pages": page_count, "pdf_error": bool(pdf_error),
+                                    "characters": body_len}
 
 
 def extract_text_with_metadata(path: Path) -> ExtractionResult:
@@ -656,6 +676,31 @@ def extract_doc(path: Path) -> str:
         return ""
 
 
+# Độ phân giải và cấu hình OCR. 300 dpi là mức tối thiểu tesseract khuyến nghị;
+# giấy tờ Việt Nam nhiều dấu thanh nhỏ (ê/ề/ệ) nên 400 dpi đọc chắc hơn hẳn —
+# ca thật 21/08/2026: CCCD và bằng đại học ra chữ vụn hoàn toàn ở 300 dpi.
+OCR_DPI = _positive_int_env("INGEST_OCR_DPI", 400)
+# --oem 1 = chỉ dùng mạng LSTM (chính xác hơn engine cũ với chữ có dấu).
+# --psm 3 = tự phân tích bố cục, hợp với giấy tờ nhiều khối.
+OCR_CONFIG = os.getenv("INGEST_OCR_CONFIG", "--oem 1 --psm 3")
+
+
+def _prep_for_ocr(image):
+    """Chuẩn bị ảnh trước khi OCR: xám hoá + kéo giãn tương phản.
+
+    Bản scan giấy tờ hay bị nền ngả vàng, chữ nhạt, hoặc nền hoa văn (bằng cấp,
+    CCCD). Tesseract đọc chữ trên nền như vậy ra ký tự vụn. Hai phép biến đổi
+    rẻ tiền này thường cứu được phần lớn ca đó; nếu thư viện thiếu thì bỏ qua,
+    OCR vẫn chạy trên ảnh gốc.
+    """
+    try:
+        from PIL import ImageOps
+        image = image.convert("L")           # thang xám: bỏ nhiễu màu của nền
+        return ImageOps.autocontrast(image)  # kéo giãn tương phản chữ/nền
+    except Exception:
+        return image
+
+
 def _extract_image(path: Path):
     """Đọc file ẢNH đứng riêng (CCCD/giấy tờ chụp điện thoại) bằng OCR tiếng Việt.
 
@@ -682,9 +727,8 @@ def _extract_image(path: Path):
                 image = ImageOps.exif_transpose(image)
             except Exception:
                 pass
-            if image.mode not in ("RGB", "L"):
-                image = image.convert("RGB")
-            text = pytesseract.image_to_string(image, lang="vie")
+            text = pytesseract.image_to_string(
+                _prep_for_ocr(image), lang="vie", config=OCR_CONFIG)
     except ExtractionError:
         raise
     except Exception as e:
@@ -728,23 +772,25 @@ def _ocr_pdf_strict(path: Path) -> str:
             # OCR theo lô nhỏ để không giữ ảnh của cả PDF trong RAM cùng lúc.
             for first_page in range(1, page_count + 1, 10):
                 last_page = min(page_count, first_page + 9)
-                images = convert_from_path(str(path), dpi=300,
+                images = convert_from_path(str(path), dpi=OCR_DPI,
                                            first_page=first_page, last_page=last_page)
                 for offset, image in enumerate(images):
                     page_number = first_page + offset
-                    value = pytesseract.image_to_string(image, lang="vie")
+                    value = pytesseract.image_to_string(
+                        _prep_for_ocr(image), lang="vie", config=OCR_CONFIG)
                     if value.strip():
                         parts.append(f"[Trang {page_number}]\n{value}")
         else:
             # Không đếm được trang — render cả file một lượt rồi tự giới hạn.
-            images = convert_from_path(str(path), dpi=300)
+            images = convert_from_path(str(path), dpi=OCR_DPI)
             if len(images) > MAX_OCR_PAGES:
                 raise ExtractionError(
                     "ocr_page_limit",
                     f"PDF scan có {len(images)} trang, vượt giới hạn OCR {MAX_OCR_PAGES} trang.",
                     "Tách PDF thành các phần nhỏ hơn hoặc tăng INGEST_MAX_OCR_PAGES có kiểm soát.")
             for page_number, image in enumerate(images, 1):
-                value = pytesseract.image_to_string(image, lang="vie")
+                value = pytesseract.image_to_string(
+                    _prep_for_ocr(image), lang="vie", config=OCR_CONFIG)
                 if value.strip():
                     parts.append(f"[Trang {page_number}]\n{value}")
         return "\n\n".join(parts)

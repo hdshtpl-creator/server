@@ -40,6 +40,8 @@ CHUNK_CHARS = 0           # 0 = giữ trọn từng đoạn, không cắt
 CONTEXT_CHARS = 0         # 0 = không trần tổng tài liệu tham khảo
 HISTORY_CHARS = 4000      # mỗi lượt hỏi-đáp cũ giữ tới bấy nhiêu ký tự
 MIN_SCORE = 0.25          # vẫn lọc LIÊN QUAN: dưới ngưỡng này là rác, bỏ đi
+# Khi câu hỏi đã khoanh vào MỘT người, giữ bao nhiêu đoạn tìm được ở toàn kho.
+PERSON_OTHER_CHUNKS = 8
 RETRIEVAL_CANDIDATES = 300  # lấy rất rộng rồi xếp hạng lại trước khi lấy top_k
 MAX_CHUNKS_PER_DOC = 8    # một tài liệu vẫn không được chiếm hết mọi vị trí
 
@@ -367,6 +369,83 @@ def _with_neighbours(chosen, level, client_id, dept_ids, is_banqt, can_finance,
     return chosen
 
 
+# Giấy tờ mang THÔNG TIN ĐỊNH DANH của một con người, xếp theo mức đáng tin.
+# Hỏi "chi tiết về Mai" thì đây là thứ phải đọc — không phải bảng công việc
+# tháng. Nhận diện bằng TIÊU ĐỀ vì tiêu đề do người quản trị kho đặt tay.
+_IDENTITY_TITLE_WORDS = (
+    "so yeu", "ly lich", "li lich", "cccd", "can cuoc", "cmnd", "cv",
+    "hdld", "hop dong lao dong", "hop dong", "quyet dinh", "bang tot nghiep",
+    "bang dai hoc", "chung chi", "so bao hiem", "ho so",
+)
+
+
+def identity_documents(doc_pairs, max_docs=6):
+    """Lọc [(id, tiêu đề)…] còn lại các giấy tờ ĐỊNH DANH, xếp theo ưu tiên.
+
+    Hàm thuần để test không cần CSDL.
+    """
+    scored = []
+    for doc_id, title in doc_pairs or []:
+        folded = _fold(title or "")
+        rank = next((i for i, word in enumerate(_IDENTITY_TITLE_WORDS)
+                     if word in folded), None)
+        if rank is not None:
+            scored.append((rank, doc_id, title))
+    scored.sort(key=lambda x: (x[0], x[1]))
+    return [(doc_id, title) for _rank, doc_id, title in scored[:max_docs]]
+
+
+def head_chunks(document_ids, level, client_id=None, dept_ids=None,
+                is_banqt=False, can_finance=False, per_doc=2):
+    """Mấy đoạn ĐẦU của từng tài liệu, lấy thẳng bằng SQL — không qua vector.
+
+    Thông tin định danh (họ tên, ngày sinh, số CCCD, học vấn) nằm ở đầu giấy
+    tờ. Xếp hạng bằng vector không bảo đảm lấy được chúng: câu hỏi "chi tiết
+    Mai" khớp mạnh nhất với bảng báo cáo công việc có tên Mai lặp nhiều lần,
+    nên CV — nơi thật sự có ngày sinh — bị đẩy ra ngoài (ca thật 21/08/2026).
+    Lấy phần đầu mỗi giấy tờ là cách chắc chắn, rẻ và không phụ thuộc câu chữ.
+
+    RLS vẫn áp: đoạn ngoài quyền không trả về.
+    """
+    if not document_ids:
+        return []
+    with db.session(role=level, client_id=client_id, dept_ids=dept_ids,
+                    is_banqt=is_banqt, can_finance=can_finance) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT t.id,t.content,t.document_id,d.title,d.drive_file_id,
+                                  t.page_number,t.section_title,t.source_locator,
+                                  d.source_version,t.chunk_index,d.doc_type,
+                                  d.client_id,cl.name,d.extraction_status,
+                                  d.person_folder
+                             FROM (
+                               SELECT c.*, row_number() OVER (
+                                        PARTITION BY c.document_id
+                                        ORDER BY c.chunk_index) AS rn
+                                 FROM chunks c
+                                WHERE c.document_id = ANY(%s)
+                             ) t
+                             JOIN documents d ON d.id=t.document_id
+                             LEFT JOIN clients cl ON cl.id=d.client_id
+                            WHERE t.rn <= %s AND d.approved AND d.label_verified
+                              AND coalesce(d.active,true)
+                            ORDER BY t.document_id, t.chunk_index""",
+                        (list(document_ids), per_doc))
+            rows = cur.fetchall()
+    return [{
+        "chunk_id": r[0], "content": r[1], "document_id": r[2],
+        "title": r[3], "drive_file_id": r[4],
+        "semantic_score": 0.0, "lexical_score": 0.0,
+        "page_number": r[5], "section_title": r[6],
+        "source_locator": r[7], "source_version": r[8],
+        "chunk_index": r[9], "doc_type": r[10], "client_id": r[11],
+        "client_name": r[12], "extraction_status": r[13],
+        "person_folder": r[14],
+        # Đủ cao để `relevant_sources` không giấu mất khỏi panel trích dẫn:
+        # đây là giấy tờ được CHỌN CÓ CHỦ ĐÍCH, không phải đoán từ vector.
+        "score": 0.6,
+    } for r in rows]
+
+
 def tier_doc_types(role_level):
     """Loại tài liệu một GÓI KHÁCH được tra cứu, lấy từ bảng access_rules.
 
@@ -520,6 +599,69 @@ def fit_context(chunks, chunk_chars=None, budget=None, question=""):
     return out
 
 
+# Chữ OCR hỏng nhìn như: "bai bel La n Å l Å _ ¬ _..' s _ ,ã bô ˚i lyML OI NON".
+# Nó vô dụng với model nhưng vẫn chiếm chỗ trong ngữ cảnh, và tệ hơn: hiện
+# nguyên xi trong panel Nguồn trích dẫn khiến người dùng mất niềm tin vào cả
+# những nguồn ĐỌC TỐT nằm cạnh. Nhận ra và thay bằng một dòng nói thật.
+_OCR_GARBAGE_MIN_TOKENS = 12
+# Dấu phụ hợp lệ của tiếng Việt: huyền, sắc, ngã, hỏi, nặng, mũ, trăng, móc.
+_VN_MARKS = {"̀", "́", "̃", "̉", "̣",
+             "̂", "̆", "̛"}
+
+
+def _is_vietnamese_letter(ch: str) -> bool:
+    """Ký tự này có nằm trong bảng chữ cái tiếng Việt không.
+
+    Chữ Việt = một chữ Latin cơ bản cộng các dấu ở trên. Bộ OCR đọc hỏng lại
+    sinh ra chữ của bảng mã khác (Å, Ø, ƒ, Ð) — thứ gần như không bao giờ xuất
+    hiện trong hồ sơ pháp lý tiếng Việt, nên đó là dấu vân tay đáng tin để
+    nhận ra một đoạn đã hỏng.
+    """
+    if ch in "đĐ":                       # không phân tách được bằng NFD
+        return True
+    decomposed = unicodedata.normalize("NFD", ch)
+    base = decomposed[0]
+    if not base.isascii() or not base.isalpha():
+        return False
+    return all(mark in _VN_MARKS for mark in decomposed[1:])
+
+_UNREADABLE_NOTE = (
+    "[HỆ THỐNG CHƯA ĐỌC ĐƯỢC NỘI DUNG FILE NÀY — bản scan cho ra chữ hỏng. "
+    "Không có dữ kiện nào từ file này được phép dùng. Nếu người hỏi cần thông "
+    "tin trong đó, hãy nói rõ kho CÓ file nhưng nội dung chưa đọc được và cần "
+    "scan lại rõ hơn.]")
+_UNREADABLE_QUOTE = "(Bản scan — hệ thống chưa đọc được nội dung, cần scan lại rõ hơn.)"
+
+
+def looks_like_ocr_garbage(text: str) -> bool:
+    """Đoạn này có phải chữ OCR hỏng không.
+
+    Hai dấu hiệu, chỉ cần một là đủ:
+
+    1. Có chữ cái NGOÀI bảng chữ cái tiếng Việt (Å, Ø, ƒ, Ð…). Hồ sơ thật gần
+       như không bao giờ chứa chúng; bản scan đọc hỏng thì đầy.
+    2. Nhiều mẩu chỉ MỘT chữ cái đứng rời ("n Å l Å s ã") — bộ OCR vỡ chữ
+       thành mảnh vụn. Số một chữ số không tính: bảng biểu đầy "Cột 1 | Cột 2".
+
+    Chỉ xét đoạn đủ dài để có mẫu; đoạn ngắn giữ nguyên vì rất có thể là một
+    dòng bảng hoặc một tiêu đề thật.
+    """
+    body = text or ""
+    tokens = [t.strip("|-–—.,;:!?()[]{}\"'“”‘’…*_`/\\") for t in body.split()]
+    meaningful = [t for t in tokens if any(ch.isalnum() for ch in t)]
+    if len(meaningful) < _OCR_GARBAGE_MIN_TOKENS:
+        return False
+
+    letters = [ch for ch in body if ch.isalpha()]
+    if letters:
+        foreign = sum(1 for ch in letters if not _is_vietnamese_letter(ch))
+        if foreign >= 3 and foreign / len(letters) >= 0.01:
+            return True
+
+    lone = sum(1 for t in meaningful if len(t) == 1 and t.isalpha())
+    return lone / len(meaningful) >= 0.12
+
+
 def _source_owner_tag(chunk) -> str:
     """Nhãn CHỦ SỞ HỮU đặt trước tên tài liệu trong prompt.
 
@@ -577,14 +719,19 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             # để nó trả lời "file có trong kho nhưng nội dung chưa đọc được /
             # có thể sai ký tự" thay vì suy đoán từ chữ OCR rác — yêu cầu trực
             # tiếp của người dùng 20/08/2026.
+            content = c.get("content") or ""
             caveat = ""
-            if (c.get("extraction_status") or "ready") == "warning":
+            if looks_like_ocr_garbage(content):
+                # Chữ hỏng không mang dữ kiện nào — thay hẳn, đừng bắt model
+                # đọc mấy nghìn ký tự vô nghĩa rồi tự suy ra điều gì đó.
+                content = _UNREADABLE_NOTE
+            elif (c.get("extraction_status") or "ready") == "warning":
                 caveat = ("\n(LƯU Ý: file này là bản scan/trích xuất CÓ CẢNH BÁO — "
                           "nội dung bên dưới có thể thiếu trang hoặc sai ký tự. Nếu "
                           "không thấy thông tin cần trả lời, hãy nói rõ: kho CÓ file "
                           "này nhưng nội dung chưa đọc được đầy đủ, cần scan/lưu lại "
                           "bản rõ hơn — tuyệt đối không suy đoán.)")
-            parts.append(f"[Nguồn {i}] {owner}{c.get('title','')}{label}{caveat}\n{c['content']}\n")
+            parts.append(f"[Nguồn {i}] {owner}{c.get('title','')}{label}{caveat}\n{content}\n")
         # Chỉ dẫn phân biệt chủ thể — chỉ chèn khi thật sự có hồ sơ khách trong
         # bộ nguồn, để câu hỏi thuần pháp lý không phải cõng thêm chữ thừa.
         # Hồ sơ nhân sự của nhiều người cùng có mặt: nói thẳng rằng mỗi giấy tờ
@@ -639,7 +786,20 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                  "Khi câu hỏi liên quan hiệu lực/thời hạn (hợp đồng còn hạn không, ai "
                  "còn hợp đồng, vụ nào quá hạn), TỰ so từng ngày kết thúc trong tài liệu "
                  "với HÔM NAY ở đầu prompt: ngày kết thúc đã qua = ĐÃ HẾT HẠN, ĐỪNG coi "
-                 "là còn hiệu lực. Nói rõ hợp đồng nào còn, hợp đồng nào đã hết và hết từ khi nào.")
+                 "là còn hiệu lực. Nói rõ hợp đồng nào còn, hợp đồng nào đã hết và hết từ khi nào. "
+                 "TRẢ LỜI BẰNG THÔNG TIN, KHÔNG MÔ TẢ CẤU TRÚC TÀI LIỆU: tuyệt đối không "
+                 "liệt kê tên cột, tên sheet, tiêu đề bảng hay tên mục rồi nói rằng chúng "
+                 "'có mặt nhưng không có số liệu' — với người đọc thì đó là câu trả lời "
+                 "rỗng. Nguồn nào không chứa dữ kiện trả lời câu hỏi thì bỏ qua nguồn đó "
+                 "trong im lặng, chỉ nêu phần thật sự trả lời được và nói ngắn gọn còn "
+                 "thiếu thông tin gì. Viết như một đồng nghiệp đang tóm tắt cho người bận, "
+                 "không phải như máy đọc lại mục lục. "
+                 "NGƯỢC LẠI, dữ kiện ĐANG NẰM TRONG NGUỒN thì bắt buộc phải nêu: đừng kết "
+                 "luận hồ sơ thiếu một thông tin trong khi thông tin đó có trong tài liệu ở "
+                 "trên — hãy đọc kỹ từng nguồn trước khi nói là chưa có. Riêng dữ kiện trông "
+                 "vô lý (năm sinh lệch hàng chục năm so với quá trình học/làm việc, số giấy "
+                 "tờ thiếu chữ số) thì vẫn nêu ra kèm lưu ý rằng bản scan có thể đọc sai ký "
+                 "tự và cần đối chiếu bản gốc — không được lặng lẽ bỏ đi.")
     if company:
         # Đặt CUỐI CÙNG và viết mạnh: đây là thứ model đọc ngay trước khi viết.
         # Trước đây phần này chỉ là một dòng nhắc nhẹ giữa hàng loạt yêu cầu về
@@ -977,6 +1137,16 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         dept_ids, is_banqt, can_finance) if channel == "internal" else {})
     persons = (company_context.detect_staff_person(question, list(person_index))
                if person_index else [])
+    if not persons and person_index:
+        # Câu cụt hỏi một TRƯỜNG hồ sơ ("Sinh nhật", "quê quán", "lương bao
+        # nhiêu") ngay sau khi vừa nói về một người: vay lại đúng người đó.
+        # Không vay thì bot đi tìm hai chữ ấy khắp kho và vớ về nghị định,
+        # báo cáo công việc — đúng ca thật 21/08/2026.
+        remembered = [p for p in ((state or {}).get("person") or [])
+                      if p in person_index]
+        if remembered and company_context.person_field_question(question):
+            persons = remembered
+            timings["bo_ho_so_vay_lich_su"] = True
     if persons:
         timings["bo_ho_so"] = ",".join(persons)
         # Câu cụt "chi tiết mai" đi tìm bằng đúng năm chữ đó thì vector bám vào
@@ -1024,6 +1194,9 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     state_update = dict(state or {})
     state_update.update((direct or {}).get("state") or {})
     state_update["last_question"] = question[:1000]
+    if persons:
+        # Nhớ đang nói về ai để lượt sau hỏi cụt ("Sinh nhật") còn biết đường.
+        state_update["person"] = persons
 
     if direct:
         timings.update({"bo_qua_doan_yeu": 0, "bo_tra_tai_lieu": True,
@@ -1107,25 +1280,46 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     # và bot dễ trả lời bằng giấy tờ của người khác — đúng bài học 19/08/2026,
     # lần đó tên riêng mất hết sức nặng trong embedding.
     if persons and channel == "internal":
-        wanted_ids = [doc_id for name in persons
-                      for doc_id, _title in (person_index.get(name) or [])]
+        doc_pairs = [pair for name in persons
+                     for pair in (person_index.get(name) or [])]
         if source_document_ids is not None:
             # Người dùng đã tự chọn bộ nguồn — không được mở rộng ra ngoài đó.
             allowed = set(source_document_ids)
-            wanted_ids = [i for i in wanted_ids if i in allowed]
+            doc_pairs = [(i, t) for i, t in doc_pairs if i in allowed]
+        wanted_ids = [doc_id for doc_id, _title in doc_pairs]
         if wanted_ids:
-            # Trần 12 đoạn: một bộ hồ sơ có thể tới vài chục giấy tờ, nhồi hết
-            # vào prompt là mỗi câu hỏi về một người lại chậm gấp mấy lần.
+            # BƯỚC 1 — giấy tờ ĐỊNH DANH luôn có mặt, lấy phần đầu mỗi tờ. Chỉ
+            # xếp hạng bằng vector là hụt: câu "chi tiết Mai" khớp mạnh nhất
+            # với bảng công việc tháng (tên Mai lặp khắp bảng), còn CV — nơi
+            # thật sự ghi ngày sinh, học vấn — bị đẩy ra ngoài top-k.
+            identity = identity_documents(doc_pairs, max_docs=5)
+            head = head_chunks(
+                [doc_id for doc_id, _ in identity], CHANNEL_LEVEL[channel],
+                client_id=client_id, dept_ids=dept_ids, is_banqt=is_banqt,
+                can_finance=can_finance)
+            # BƯỚC 2 — phần còn lại của bộ, xếp theo độ khớp câu hỏi.
             person_chunks = retrieve(
                 search_question, channel, client_id, dept_ids=dept_ids,
-                is_banqt=is_banqt, top_k=min(max(8, len(wanted_ids)), 12),
-                can_finance=can_finance, document_ids=wanted_ids,
-                query_vector=query_vector, max_per_document=4,
+                is_banqt=is_banqt, top_k=8, can_finance=can_finance,
+                document_ids=wanted_ids, query_vector=query_vector,
+                max_per_document=2,
             )
             seen_ids = {c["chunk_id"] for c in kept}
-            added = [c for c in person_chunks if c["chunk_id"] not in seen_ids]
-            kept = added + kept
+            added = []
+            for chunk in head + person_chunks:
+                if chunk["chunk_id"] in seen_ids:
+                    continue
+                seen_ids.add(chunk["chunk_id"])
+                added.append(chunk)
+            # Câu hỏi đã khoanh vào MỘT người thì phần tìm được ở toàn kho gần
+            # như vô dụng — giữ ít thôi. Không cắt thì prompt phình lên gấp đôi
+            # và vượt cửa sổ ngữ cảnh của model (num_ctx), lúc đó Ollama cắt
+            # mất phần ĐẦU prompt, tức đúng khối DỮ LIỆU CÔNG TY.
+            # Số thật đo trên kho HDS: một bộ hồ sơ có tới 143 đoạn, riêng hai
+            # file báo cáo tháng đã chiếm 97 đoạn.
+            kept = added + kept[:PERSON_OTHER_CHUNKS]
             timings["bo_ho_so_them"] = len(added)
+            timings["bo_ho_so_dinh_danh"] = len(head)
     chunks = fit_context(kept,
                          _num("chunk_char_limit", CHUNK_CHARS, int),
                          _num("context_char_budget", CONTEXT_CHARS, int),
@@ -1202,7 +1396,11 @@ def format_sources(chunks):
     out = []
     for i, c in enumerate(chunks, 1):
         quote = re.sub(r"\s+", " ", (c.get("content") or "")).strip()
-        if len(quote) > 600:
+        # Không đổ chữ OCR hỏng vào panel trích dẫn: người đọc thấy một khối ký
+        # tự vô nghĩa được gọi là "căn cứ" thì mất tin cả những nguồn tốt bên cạnh.
+        if looks_like_ocr_garbage(quote):
+            quote = _UNREADABLE_QUOTE
+        elif len(quote) > 600:
             quote = quote[:600].rstrip() + "…"
         score = round(float(c.get("score") or 0), 3)
         # Tên khách đứng ngay trong tiêu đề nguồn: người đọc panel trích dẫn

@@ -1282,10 +1282,37 @@ PERSON_CONTEXT_WORDS = {
     "chuc danh", "chuc vu", "luong", "hdld", "hop dong lao dong", "kpi",
     "ca nhan", "nhan su", "nhan vien", "lam gi", "la ai", "ai vay", "cua",
     # Các trường thường hỏi khi mở một bộ hồ sơ ra xem.
-    "ngay sinh", "sinh nam", "bao nhieu tuoi", "que quan", "dia chi",
-    "so dien thoai", "email", "trinh do", "hoc van", "kinh nghiem",
-    "vao lam", "phong ban", "bo phan",
+    "ngay sinh", "sinh nhat", "sinh nam", "bao nhieu tuoi", "que quan",
+    "dia chi", "so dien thoai", "email", "trinh do", "hoc van", "kinh nghiem",
+    "vao lam", "phong ban", "bo phan", "gioi tinh",
 }
+
+# Tập HẸP hơn: các trường CHỈ có nghĩa khi đang nói về một con người. Dùng để
+# quyết định câu hỏi cụt có được VAY tên người của lượt trước hay không.
+# Cố ý bỏ "cua", "ho so", "thong tin", "chi tiet" — chúng xuất hiện trong đủ
+# loại câu hỏi, vay theo là ghim hồ sơ nhân sự vào một câu tra cứu pháp luật.
+PERSON_FIELD_WORDS = {
+    "sinh nhat", "ngay sinh", "sinh nam", "bao nhieu tuoi", "que quan",
+    "dia chi", "so dien thoai", "sdt", "email", "trinh do", "hoc van",
+    "bang cap", "kinh nghiem", "chuc danh", "chuc vu", "luong", "cccd",
+    "cmnd", "can cuoc", "so yeu", "ly lich", "li lich", "hdld",
+    "hop dong lao dong", "vao lam", "phong ban", "bo phan", "gioi tinh",
+    "gia dinh", "hon nhan", "tot nghiep", "truong nao", "hoc truong",
+}
+
+
+def person_field_question(question: str) -> bool:
+    """Câu hỏi này đang hỏi một TRƯỜNG trong hồ sơ của ai đó hay không.
+
+    Ca thật 21/08/2026: hỏi "chi tiết Mai" rồi hỏi tiếp đúng hai chữ "Sinh
+    nhật" — bot đi tìm chữ "sinh nhật" khắp kho, vớ Nghị định 168 và báo cáo
+    công việc, rồi trả lời không có dữ liệu; trong khi CV của Mai ghi rõ ngày
+    sinh. Câu cụt kiểu này phải hiểu là hỏi tiếp về đúng người vừa nói tới.
+    """
+    q = _fold(question)
+    if re.search(r"(?:^|\s)cv(?:$|\s)", q):
+        return True
+    return any(w in q for w in PERSON_FIELD_WORDS)
 
 # Từ đứng NGAY SAU tên một tiếng biến nó thành từ ghép, không còn là tên người:
 # ngân hàng / ngân sách / ngân quỹ, nhi đồng, thu nhập, an toàn… Rẻ hơn nhiều

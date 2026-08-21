@@ -323,6 +323,69 @@ class PromptWarningTests(unittest.TestCase):
         self.assertNotIn("CÓ CẢNH BÁO", prompt)
 
 
+class OcrGarbageTests(unittest.TestCase):
+    """Ca thật 21/08/2026: panel Nguồn trích dẫn hiện nguyên khối ký tự vụn từ
+    bản scan CCCD/bằng đại học. Người đọc thấy thứ đó được gọi là 'căn cứ' thì
+    mất tin cả những nguồn đọc tốt nằm ngay cạnh."""
+
+    # Chép nguyên từ màn hình người dùng (nguồn 5 và nguồn 8).
+    GARBAGE_CCCD = ("[Trang 1] bai bel La n Å l Å _ ¬ _..' s _ ,ã bô ˚i lyML OI "
+                    "NON CHỨNG THỰC BẢN $A0 BÙNG VỚI BẢN (Hồ Ø9-03-74-2013-·· "
+                    ": dT | Ngày: 18-07-. 122 lyHd OM1 NOON Số chứng thực: "
+                    "=sses=es.(QUYỀN Số:........ 9 TỊI CÔNG CHỨNG VIÊN dựng "
+                    "˚ổúự Åui J/Åani ẫ")
+    GARBAGE_SYLL = ("[Trang 1] IEOESJ: => SGO\\% bi CHỦ NGHĨA VIỆT NAM Ðề Mức: "
+                    "Từ dã2N: 1 phú ALỔ 2 22s = -= vi 252277892 XS) S 9292 sản "
+                    "sS: °I6 6T Tà xà ° ° AT 2: XE -Å. cục) \\OXSXSkMÅj ƒ 79/ Q "
+                    "St 4 M*h JO/-Å ị TU V2 . s (6 : 2 fk T1 nh Tư ~Å.")
+
+    CLEAN_CONTRACT = ("CÔNG TY LUẬT TNHH HDS CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM "
+                      "Số: 28/HĐLĐ-HDS Độc lập - Tự do - Hạnh phúc HỢP ĐỒNG LAO "
+                      "ĐỘNG Hôm nay, ngày 27 tháng 01 năm 2022 tại CÔNG TY LUẬT "
+                      "TNHH HDS. Người Lao Động: Bà BẠC THỊ MAI Sinh ngày: "
+                      "28/10/1996 Giới tính: Nữ Quốc tịch: Việt Nam")
+
+    CLEAN_TABLE = ("[Bảng: BC Tính thưởng Tháng 7] BÁO CÁO CÔNG VIỆC THÁNG 07 "
+                   "NĂM 2025: Cột 1 | Cột 2 | Cột 3 | Cột 4 | Cột 5 | Cột 6 | "
+                   "Cột 7 | Cột 8 | Cột 9 | Cột 10 | Cột 11 | Cột 12")
+
+    def test_nhan_ra_chu_ocr_hong(self):
+        self.assertTrue(rag.looks_like_ocr_garbage(self.GARBAGE_CCCD))
+        self.assertTrue(rag.looks_like_ocr_garbage(self.GARBAGE_SYLL))
+
+    def test_van_ban_that_khong_bi_coi_la_rac(self):
+        self.assertFalse(rag.looks_like_ocr_garbage(self.CLEAN_CONTRACT))
+        # Dòng bảng đầy dấu | vẫn là nội dung thật — không được nhầm là rác.
+        self.assertFalse(rag.looks_like_ocr_garbage(self.CLEAN_TABLE))
+
+    def test_doan_ngan_khong_du_mau_thi_giu_nguyen(self):
+        self.assertFalse(rag.looks_like_ocr_garbage("CÔNG CHỨNG VIÊN"))
+        self.assertFalse(rag.looks_like_ocr_garbage(""))
+
+    def test_prompt_thay_chu_rac_bang_loi_noi_that(self):
+        prompt = rag.build_prompt(
+            "số cccd của Mai",
+            [{"chunk_id": 1, "content": self.GARBAGE_CCCD, "title": "Mai — CCCD",
+              "doc_type": "ho_so_ns", "score": 0.6, "extraction_status": "warning"}],
+            chunk_chars=0, budget=0)
+        self.assertIn("CHƯA ĐỌC ĐƯỢC NỘI DUNG", prompt)
+        self.assertNotIn("lyML", prompt)          # chữ vụn không vào prompt
+        self.assertIn("Mai — CCCD", prompt)       # nhưng vẫn biết file tồn tại
+
+    def test_panel_nguon_khong_hien_chu_rac(self):
+        sources = rag.format_sources(
+            [{"chunk_id": 1, "content": self.GARBAGE_CCCD, "title": "Mai — CCCD",
+              "score": 0.6}])
+        self.assertNotIn("lyML", sources[0]["quote"])
+        self.assertIn("chưa đọc được", sources[0]["quote"])
+
+    def test_nguon_tot_giu_nguyen_trich_dan(self):
+        sources = rag.format_sources(
+            [{"chunk_id": 2, "content": self.CLEAN_CONTRACT, "title": "HĐLĐ",
+              "score": 0.9}])
+        self.assertIn("28/10/1996", sources[0]["quote"])
+
+
 class PersonFolderLabelTests(unittest.TestCase):
     """Mỗi đoạn hồ sơ nhân sự phải nói rõ nó thuộc BỘ CỦA AI. Ba bộ hồ sơ đọc
     na ná nhau (sơ yếu, CCCD, HĐLĐ) — thiếu nhãn là model gán số CCCD của
@@ -352,6 +415,39 @@ class PersonFolderLabelTests(unittest.TestCase):
         self.assertIn("BỘ CỦA Mai", prompt)
         self.assertIn("BỘ CỦA Nhi", prompt)
         self.assertIn("không lấy họ tên, ngày sinh, số CCCD", prompt)
+
+    def test_identity_documents_uu_tien_giay_to_dinh_danh(self):
+        # Ca thật 21/08/2026: hỏi "chi tiết Mai", bot đọc trúng bảng công việc
+        # tháng rồi kể tên cột; CV — nơi có ngày sinh — không lọt vào nguồn.
+        pairs = [
+            (1, "2026. Mẫu Báo Cáo Công Tháng. Mai"),
+            (2, "Mai — CV"),
+            (3, "Mai — KPI quý 3"),
+            (4, "Mai — Sơ yếu lý lịch"),
+            (5, "HĐLĐ BAC THI MAI"),
+        ]
+        got = rag.identity_documents(pairs)
+        ids = [doc_id for doc_id, _ in got]
+        self.assertIn(4, ids)                    # sơ yếu
+        self.assertIn(2, ids)                    # CV
+        self.assertIn(5, ids)                    # HĐLĐ
+        self.assertNotIn(3, ids)                 # KPI không phải giấy định danh
+        self.assertEqual(ids[0], 4)              # sơ yếu đứng trước CV
+        # Báo cáo công việc chỉ lọt vì tiêu đề không có từ định danh nào.
+        self.assertNotIn(1, ids)
+
+    def test_identity_documents_gioi_han_so_luong(self):
+        pairs = [(i, f"Mai — Hợp đồng {i}") for i in range(1, 20)]
+        self.assertEqual(len(rag.identity_documents(pairs)), 6)
+
+    def test_prompt_cam_liet_ke_ten_cot(self):
+        prompt = rag.build_prompt(
+            "chi tiết Mai",
+            [{"chunk_id": 3, "content": "[Dòng 16] BÁO CÁO | Cột 3: 1142",
+              "title": "Báo cáo tháng", "doc_type": "other", "score": 0.9}],
+            chunk_chars=2000, budget=8000)
+        self.assertIn("KHÔNG MÔ TẢ CẤU TRÚC TÀI LIỆU", prompt)
+        self.assertIn("không\nliệt kê tên cột".replace("\n", " "), prompt)
 
     def test_no_person_no_extra_instruction(self):
         # Câu hỏi luật không phải cõng thêm chỉ dẫn về hồ sơ nhân sự.
@@ -737,6 +833,19 @@ class StaffPersonTests(unittest.TestCase):
         got = company_context.detect_staff_person(
             "so sánh hợp đồng lao động của Mai và Nhi", self.NAMES)
         self.assertEqual(sorted(got), ["Mai", "Nhi"])
+
+    def test_cau_cut_hoi_truong_ho_so_duoc_vay_ten(self):
+        # "Sinh nhật" hỏi ngay sau "chi tiết Mai": phải nhận ra là câu hỏi một
+        # TRƯỜNG hồ sơ để rag.prepare vay lại tên người của lượt trước.
+        for q in ["Sinh nhật", "sinh nhat", "quê quán", "lương bao nhiêu",
+                  "số điện thoại", "tốt nghiệp trường nào", "cccd"]:
+            self.assertTrue(company_context.person_field_question(q), q)
+
+    def test_cau_tra_cuu_phap_luat_khong_bi_vay_ten(self):
+        # Vay nhầm là ghim hồ sơ nhân sự vào một câu hỏi luật.
+        for q in ["thời hiệu là gì", "án lệ 90 nói gì", "tóm tắt điều 35",
+                  "công ty có mấy khách", "hợp đồng dịch vụ mẫu"]:
+            self.assertFalse(company_context.person_field_question(q), q)
 
     def test_danh_sach_ten_rong_khong_no(self):
         self.assertEqual(company_context.detect_staff_person("chi tiết mai", []), [])
