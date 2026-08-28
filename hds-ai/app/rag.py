@@ -2090,7 +2090,7 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
                   use_temp=False, use_method=False, dept_ids=None, is_banqt=False,
                   can_finance=False, role=None, model=None, source_document_ids=None,
                   mode=None, template_doc_id=None, on_status=None, dept_codes=None,
-                  make_files=False):
+                  make_files=False, cancel=None):
     """Trả lời THEO DÒNG — generator sinh ra các sự kiện dict:
 
         {"type": "meta",  "sources": [...]}        gửi ngay khi biết nguồn
@@ -2100,6 +2100,13 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
     on_status (nếu có) nhận các mốc tiến trình TRONG lúc prepare chạy — api.py
     đẩy thẳng vào hàng đợi SSE thành sự kiện {"type":"status"}; các mốc sau
     prepare thì generator tự yield. Người gọi (api.py) chỉ việc đóng gói SSE.
+
+    cancel (threading.Event, nếu có): người dùng bấm "Dừng" hoặc rớt kết nối.
+    Không có nó thì bấm Dừng chỉ là giấu chữ đi cho đẹp — máy chủ vẫn sinh nốt
+    câu trả lời (vài phút CPU của một máy chạy 14b, chặn luôn câu hỏi kế tiếp)
+    rồi vẫn ghi bản ĐẦY ĐỦ vào hội thoại, nên tải lại trang là thấy nguyên câu
+    mình vừa dừng. Có nó thì vòng sinh chữ dừng ngay ở mẩu kế tiếp và phần đã
+    viết được lưu lại y như những gì người dùng đã nhìn thấy.
     """
     from app.models import llm_stream
     request_started = time.time()
@@ -2111,6 +2118,11 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
                 mode=mode, template_doc_id=template_doc_id, on_status=on_status,
                 dept_codes=dept_codes, make_files=make_files)
     timings, chunks, method = p["timings"], p["chunks"], p["method"]
+
+    # Dừng NGAY trong lúc tìm kho (prepare có thể mất hàng chục giây): đừng
+    # bước tiếp vào phần sinh chữ — đó mới là phần tốn CPU nhất.
+    if cancel is not None and cancel.is_set():
+        return
 
     # Nguồn trích dẫn đã biết trước khi model viết chữ nào — gửi ngay để giao
     # diện có cái hiển thị, và để trình duyệt nhận byte đầu tiên sớm nhất.
@@ -2140,11 +2152,39 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
     llm_stats: dict = {}
     t0 = time.time()
     parts = []
-    for piece in llm_stream(p["prompt"], system=p["system"],
-                            temperature=p["temperature"], model=p["model"],
-                            stats=llm_stats):
-        parts.append(piece)
-        yield {"type": "delta", "text": piece}
+    da_dung = False
+    dong_chu = llm_stream(p["prompt"], system=p["system"],
+                          temperature=p["temperature"], model=p["model"],
+                          stats=llm_stats)
+    try:
+        for piece in dong_chu:
+            if cancel is not None and cancel.is_set():
+                da_dung = True
+                break
+            parts.append(piece)
+            yield {"type": "delta", "text": piece}
+    finally:
+        # Đóng TAY generator thay vì chờ bộ dọn rác: close() ném GeneratorExit
+        # vào llm_stream, khối finally trong đó gọi r.close() và Ollama ngừng
+        # sinh chữ ngay. Không đóng thì model vẫn chạy tiếp cho tới hết dù
+        # chẳng ai đọc nữa.
+        dong_chu.close()
+
+    if da_dung:
+        # Lưu ĐÚNG phần người dùng đã thấy, kèm dấu cho biết bị cắt giữa
+        # chừng — để lượt hỏi sau (đọc lại lịch sử) không tưởng đây là câu
+        # trả lời hoàn chỉnh. Bỏ qua lượt "bot đọc lại" và bộ kiểm chứng: cả
+        # hai đều tốn thêm một lượt LLM cho một câu đã bị bỏ.
+        stopped = "".join(parts).strip()
+        if stopped:
+            stopped += "\n\n_(Người dùng đã dừng câu trả lời giữa chừng.)_"
+            save_turn(question, stopped, chunks, conversation_id, channel,
+                      client_id=client_id, user_id=user_id,
+                      model_used=p["model"],
+                      latency=int((time.time() - t0) * 1000), method=method,
+                      evidence=evidence, answer_mode=p["answer_mode"],
+                      grounding_status="stopped", state=p.get("state"))
+        return
 
     raw_text = "".join(parts).strip()
     # Bot ĐỌC LẠI chạy trước bộ kiểm chứng: bản thay (nếu có) mới là bản cần

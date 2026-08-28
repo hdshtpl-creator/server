@@ -480,6 +480,12 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
         HEARTBEAT_SEC = 15
         q: "_queue.Queue" = _queue.Queue()
         DONE = object()
+        # Cờ HUỶ: bật khi trình duyệt đóng kết nối — người dùng bấm "Dừng",
+        # đóng tab, hoặc rớt mạng. Luồng sinh chữ chạy trong thread riêng nên
+        # nó KHÔNG tự biết khách đã đi; không có cờ này thì model cứ viết nốt
+        # câu trả lời không ai đọc, giữ CPU của máy chạy 14b và chặn luôn câu
+        # hỏi kế tiếp.
+        cancel = threading.Event()
 
         def on_status(label):
             # Mốc tiến trình phát TRONG lúc prepare chạy (tìm kho, đọc file
@@ -503,7 +509,8 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
                         model=None if is_client else body.model,
                         source_document_ids=source_ids,
                         mode=chat_mode, template_doc_id=template_doc_id,
-                        make_files=make_files, on_status=on_status):
+                        make_files=make_files, on_status=on_status,
+                        cancel=cancel):
                     q.put(("event", ev))
             except Exception as e:  # noqa: BLE001 - báo lỗi qua dòng, không để luồng chết câm
                 q.put(("error", str(e)))
@@ -513,26 +520,33 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
         worker = threading.Thread(target=produce, daemon=True)
         worker.start()
 
-        while True:
-            try:
-                kind, payload = q.get(timeout=HEARTBEAT_SEC)
-            except _queue.Empty:
-                yield ": hb\n\n"          # đang đọc tài liệu — giữ kết nối sống
-                continue
-            if kind is DONE:
-                break
-            if kind == "error":
-                yield _sse({"type": "error", "message": payload})
-                continue
-            ev = payload
-            if ev.get("type") == "done" and is_client:
-                with db.session(role="internal", admin=True) as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("UPDATE users SET used_this_month=used_this_month+1 "
-                                    "WHERE id=%s", (user["id"],))
-                ev["quota"] = {"used": (user.get("used_this_month") or 0) + 1,
-                               "limit": user.get("monthly_quota") or 0}
-            yield _sse(ev)
+        try:
+            while True:
+                try:
+                    kind, payload = q.get(timeout=HEARTBEAT_SEC)
+                except _queue.Empty:
+                    yield ": hb\n\n"      # đang đọc tài liệu — giữ kết nối sống
+                    continue
+                if kind is DONE:
+                    break
+                if kind == "error":
+                    yield _sse({"type": "error", "message": payload})
+                    continue
+                ev = payload
+                if ev.get("type") == "done" and is_client:
+                    with db.session(role="internal", admin=True) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("UPDATE users SET used_this_month=used_this_month+1 "
+                                        "WHERE id=%s", (user["id"],))
+                    ev["quota"] = {"used": (user.get("used_this_month") or 0) + 1,
+                                   "limit": user.get("monthly_quota") or 0}
+                yield _sse(ev)
+        finally:
+            # Trình duyệt đóng kết nối → Starlette đóng generator này → lệnh
+            # yield ở trên ném GeneratorExit và ta rơi vào đây. Bật cờ để luồng
+            # sinh chữ dừng ở mẩu kế tiếp. Chạy hết bình thường cũng vào đây,
+            # lúc đó worker đã xong nên cờ vô hại.
+            cancel.set()
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache",

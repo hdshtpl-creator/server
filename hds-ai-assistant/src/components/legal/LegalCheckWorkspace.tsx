@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   Download,
   History,
+  Square,
   Plus,
   Trash2,
 } from 'lucide-react';
@@ -127,6 +128,8 @@ export const LegalCheckWorkspace: React.FC = () => {
   // Hai cú "tạo hội thoại" chạy song song (upload trong lúc đang gửi câu đầu)
   // phải nhận về CÙNG một conversation — giữ promise, không giữ mỗi kết quả.
   const convPromiseRef = useRef<Promise<number> | null>(null);
+  /** Tay cam cat luot tra loi dang chay — nut "Dung" dung no. */
+  const stopRef = useRef<AbortController | null>(null);
 
   // ---- Write-through helpers: cache trước, MÀN HÌNH ĐANG GẮN sau --------
   // Mọi lối ghi đều đi qua sessionCache.sync?.() chứ KHÔNG gọi thẳng setState
@@ -365,6 +368,8 @@ export const LegalCheckWorkspace: React.FC = () => {
     // epoch lệch và mọi sự kiện còn lại của lượt bị vứt (xem sessionCache).
     const epoch = sessionCache.epoch;
     const alive = () => sessionCache.epoch === epoch;
+    const stopper = new AbortController();
+    stopRef.current = stopper;
     rememberBusy(true);
     setInput('');
 
@@ -395,6 +400,7 @@ export const LegalCheckWorkspace: React.FC = () => {
           mode: templateDocId || makeFiles ? undefined : 'legal_review',
           template_doc_id: templateDocId ?? undefined,
           make_files: makeFiles || undefined,
+          signal: stopper.signal,
         },
         (evt) => {
           if (!alive()) return;
@@ -460,6 +466,21 @@ export const LegalCheckWorkspace: React.FC = () => {
       );
     } catch (err: any) {
       if (!alive()) return;
+      // Bam "Dung" khong phai su co: giu phan chu da viet, dong con tro nhap
+      // nhay, khong bao do. May chu da luu dung phan nay kem dau bi cat.
+      if (err?.code === api.DUNG_BOI_NGUOI_DUNG) {
+        updateMessage(aiMsgId, (m) => ({
+          ...m,
+          isStreaming: false,
+          statusLabel: undefined,
+          text: m.text
+            ? `${m.text}
+
+_(Người dùng đã dừng câu trả lời giữa chừng.)_`
+            : 'Đã dừng trước khi AI kịp viết câu nào.',
+        }));
+        return;
+      }
       const errMsg = err?.message || 'Có lỗi xảy ra khi hỏi AI.';
       if (opened) {
         updateMessage(aiMsgId, (m) => ({
@@ -478,11 +499,18 @@ export const LegalCheckWorkspace: React.FC = () => {
         ]);
       }
     } finally {
+      stopRef.current = null;
       if (alive()) {
         rememberBusy(false);
         textareaRef.current?.focus();
       }
     }
+  };
+
+  /** Cat luot tra loi dang chay. Dong ket noi la tin hieu de may chu bat co
+   *  huy va model ngung sinh chu — khong phai chi giau chu di. */
+  const handleStop = () => {
+    stopRef.current?.abort();
   };
 
   const handleAsk = (e?: React.FormEvent) => {
@@ -725,14 +753,29 @@ export const LegalCheckWorkspace: React.FC = () => {
             className="flex-1 resize-none bg-transparent text-sm leading-relaxed focus:outline-none placeholder:text-slate-400 dark:text-slate-100 max-h-40"
             disabled={busy}
           />
-          <button
-            type="submit"
-            disabled={busy || uploading || !input.trim()}
-            className="p-2.5 rounded-xl bg-hds-navy text-hds-gold hover:bg-hds-navy-light disabled:opacity-50 transition-colors shrink-0"
-            title={uploading ? 'Đang đọc file đính kèm — chờ một chút' : 'Phân tích pháp lý (Enter)'}
-          >
-            {busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-          </button>
+          {/* Đang chạy thì đây là nút DỪNG. Quan trọng nhất ở tab này: lượt
+              "Tạo bộ file" có thể chạy vài phút, không có lối thoát thì người
+              dùng chỉ còn cách ngồi chờ hoặc tải lại trang. */}
+          {busy ? (
+            <button
+              type="button"
+              onClick={handleStop}
+              className="p-2.5 rounded-xl bg-hds-red text-white hover:bg-red-700 transition-colors shrink-0"
+              title="Dừng lượt đang chạy"
+              aria-label="Dừng lượt đang chạy"
+            >
+              <Square className="w-5 h-5 fill-current" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={uploading || !input.trim()}
+              className="p-2.5 rounded-xl bg-hds-navy text-hds-gold hover:bg-hds-navy-light disabled:opacity-50 transition-colors shrink-0"
+              title={uploading ? 'Đang đọc file đính kèm — chờ một chút' : 'Phân tích pháp lý (Enter)'}
+            >
+              <Send className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Menu chọn file mẫu — ngay dưới khung chat theo yêu cầu */}

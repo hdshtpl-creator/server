@@ -24,6 +24,16 @@ let accessToken = localStorage.getItem('hds_access_token') || '';
 let apiBaseUrl = DEFAULT_API_BASE_URL;
 let useMockBackend = false;
 
+/** Luồng trả lời im lặng quá bấy nhiêu mili giây thì coi như kết nối đã chết.
+ *  Máy chủ phát nhịp tim mỗi 15 giây (HEARTBEAT_SEC trong api.py) nên đây là
+ *  5 nhịp liên tiếp mất tăm — đủ rộng để không cắt nhầm lượt trả lời chậm
+ *  trên máy CPU, đủ chặt để người dùng không ngồi trước khung chat khoá cứng. */
+const SSE_SILENCE_MS = 75_000;
+
+/** Mã lỗi của lượt bị NGƯỜI DÙNG bấm "Dừng" — khác hẳn lỗi mạng: không phải
+ *  sự cố, không báo đỏ, chỉ chốt lại phần chữ đã viết được. */
+export const DUNG_BOI_NGUOI_DUNG = 'hds/dung-boi-nguoi-dung';
+
 /** Địa chỉ backend mặc định lúc build (dùng làm giá trị khởi tạo cho context). */
 export function getDefaultApiBaseUrl() {
   return DEFAULT_API_BASE_URL;
@@ -241,7 +251,7 @@ export async function chatInternal({
  */
 export async function chatStream(
   { question, conversation_id, use_temp, use_method, model, source_document_ids,
-    mode, template_doc_id, make_files },
+    mode, template_doc_id, make_files, signal },
   onEvent
 ) {
   const payload = {
@@ -259,67 +269,127 @@ export async function chatStream(
     make_files: make_files ? true : undefined,
   };
 
-  if (useMockBackend) return mockChatStream(payload, onEvent);
+  // `signal` không đi vào thân yêu cầu (payload gửi lên máy chủ) — chỉ chuyền
+  // riêng cho bản giả lập để nó cũng dừng được.
+  if (useMockBackend) return mockChatStream({ ...payload, signal }, onEvent);
 
-  let response;
-  try {
-    response = await fetch(`${apiBaseUrl}/chat/stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-User-Id': currentUserId,
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch (err) {
-    console.error('[HDS AI] Không kết nối được /chat/stream.', err);
-    if (fallbackListener) fallbackListener(apiBaseUrl);
-    throw new Error(
-      `Không kết nối được backend tại ${apiBaseUrl}. ` +
-        'Câu hỏi chưa được gửi và hệ thống không thay bằng câu trả lời mẫu.'
-    );
-  }
-
-  if (!response.ok || !response.body) {
-    const rawText = await response.text().catch(() => '');
-    throw new Error(parseErrorBody(rawText, response.status));
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let last = null;
-
-  // Một sự kiện SSE kết thúc bằng dòng trống. Mẩu dữ liệu từ mạng có thể cắt
-  // ngang giữa sự kiện nên phải gom đệm rồi mới tách.
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    let sep;
-    while ((sep = buffer.indexOf('\n\n')) >= 0) {
-      const raw = buffer.slice(0, sep).trim();
-      buffer = buffer.slice(sep + 2);
-      if (!raw.startsWith('data:')) continue;
-      let evt;
-      try {
-        evt = JSON.parse(raw.slice(5).trim());
-      } catch {
-        continue;
-      }
-      if (evt.type === 'error') throw new Error(evt.message || 'Máy chủ báo lỗi giữa chừng.');
-      onEvent?.(evt);
-      last = evt;
+  // ĐỒNG HỒ CANH IM LẶNG. Máy chủ phát nhịp tim ': hb' mỗi 15 giây kể cả khi
+  // model đang nghĩ (HEARTBEAT_SEC trong api.py), nên byte luôn về đều đặn.
+  // Im quá 5 nhịp = kết nối đã chết: backend khởi động lại giữa chừng, máy
+  // tính ngủ dậy, rớt Wi-Fi, hoặc proxy giữ một socket rỗng. Trong những ca
+  // đó reader.read() KHÔNG bao giờ trả về mà cũng KHÔNG báo lỗi — không có
+  // đồng hồ này thì lời gọi treo vĩnh viễn, khối finally bên ChatLayout không
+  // chạy, cờ isChatStreaming kẹt true và cả khung chat xám ngắt: ô nhập bị
+  // khoá, nút "Cuộc trò chuyện mới" mờ 40%, người dùng phải tải lại trang mới
+  // gõ tiếp được. Hết giờ thì huỷ kết nối để lỗi nổi lên và giao diện mở lại.
+  const control = new AbortController();
+  let lastByteAt = Date.now();
+  let imLang = false;
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastByteAt > SSE_SILENCE_MS) {
+      imLang = true;
+      control.abort();
     }
-  }
-  if (!last || last.type !== 'done') {
-    throw new Error(
-      'Kết nối bị đóng trước khi máy chủ xác nhận đã lưu xong câu trả lời.'
+  }, 5000);
+  const loiImLang = () =>
+    new Error(
+      'Máy chủ ngừng phản hồi giữa chừng (mất mạng hoặc backend vừa khởi động lại). ' +
+        'Câu trả lời này chưa được lưu — hãy gửi lại câu hỏi.'
     );
+  const loiDung = () =>
+    Object.assign(new Error('Đã dừng theo yêu cầu.'), { code: DUNG_BOI_NGUOI_DUNG });
+
+  // Nút "Dừng" của giao diện đi vào đây. Đóng kết nối cũng chính là cách báo
+  // cho máy chủ: Starlette đóng generator SSE, backend bật cờ huỷ và model
+  // ngừng sinh chữ ngay (xem rag.answer_stream) — không chỉ là giấu chữ đi.
+  let nguoiDungDung = false;
+  const dung = () => {
+    nguoiDungDung = true;
+    control.abort();
+  };
+  if (signal) {
+    if (signal.aborted) dung();
+    else signal.addEventListener('abort', dung, { once: true });
   }
-  return last;
+
+  try {
+    let response;
+    try {
+      response = await fetch(`${apiBaseUrl}/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': currentUserId,
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify(payload),
+        signal: control.signal,
+      });
+    } catch (err) {
+      if (nguoiDungDung) throw loiDung();
+      if (imLang) throw loiImLang();
+      console.error('[HDS AI] Không kết nối được /chat/stream.', err);
+      if (fallbackListener) fallbackListener(apiBaseUrl);
+      throw new Error(
+        `Không kết nối được backend tại ${apiBaseUrl}. ` +
+          'Câu hỏi chưa được gửi và hệ thống không thay bằng câu trả lời mẫu.'
+      );
+    }
+
+    if (!response.ok || !response.body) {
+      const rawText = await response.text().catch(() => '');
+      throw new Error(parseErrorBody(rawText, response.status));
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let last = null;
+
+    // Một sự kiện SSE kết thúc bằng dòng trống. Mẩu dữ liệu từ mạng có thể cắt
+    // ngang giữa sự kiện nên phải gom đệm rồi mới tách.
+    for (;;) {
+      let value;
+      let done;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        if (nguoiDungDung) throw loiDung();
+        if (imLang) throw loiImLang();
+        throw err;
+      }
+      if (done) break;
+      // MỌI byte đều tính, kể cả nhịp tim ': hb' (không mở đầu bằng 'data:'
+      // nên không sinh sự kiện) — chính nó chứng minh kết nối còn sống.
+      lastByteAt = Date.now();
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, sep).trim();
+        buffer = buffer.slice(sep + 2);
+        if (!raw.startsWith('data:')) continue;
+        let evt;
+        try {
+          evt = JSON.parse(raw.slice(5).trim());
+        } catch {
+          continue;
+        }
+        if (evt.type === 'error') throw new Error(evt.message || 'Máy chủ báo lỗi giữa chừng.');
+        onEvent?.(evt);
+        last = evt;
+      }
+    }
+    if (!last || last.type !== 'done') {
+      throw new Error(
+        'Kết nối bị đóng trước khi máy chủ xác nhận đã lưu xong câu trả lời.'
+      );
+    }
+    return last;
+  } finally {
+    clearInterval(watchdog);
+    if (signal) signal.removeEventListener('abort', dung);
+  }
 }
 
 // POST /chat/portal (dành cho khách hàng)
@@ -1443,7 +1513,33 @@ let mockState = {
  * Nhờ có bản này mà giao diện chảy chữ kiểm chứng được khi backend chưa chạy.
  */
 async function mockChatStream(payload, onEvent) {
-  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+  // Chế độ giả lập cũng phải tôn trọng nút "Dừng" — không thì demo và bản
+  // thật cư xử khác nhau ở đúng chỗ người ta cần tin tưởng nhất.
+  const { signal } = payload;
+  const kiemTraDung = () => {
+    if (signal?.aborted) {
+      throw Object.assign(new Error('Đã dừng theo yêu cầu.'), {
+        code: DUNG_BOI_NGUOI_DUNG,
+      });
+    }
+  };
+  const wait = (ms) =>
+    new Promise((res, rej) => {
+      const t = setTimeout(res, ms);
+      signal?.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(t);
+          rej(
+            Object.assign(new Error('Đã dừng theo yêu cầu.'), {
+              code: DUNG_BOI_NGUOI_DUNG,
+            })
+          );
+        },
+        { once: true }
+      );
+    });
+  kiemTraDung();
   // Không có conversation_id → "cuộc trò chuyện mới": tạo hội thoại mới, đặt
   // tiêu đề từ câu hỏi, đúng như backend thật.
   let convObj = mockState.conversations.find(

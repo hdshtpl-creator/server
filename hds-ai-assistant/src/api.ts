@@ -85,9 +85,15 @@ export const chatStream = ApiJs.chatStream as (
     template_doc_id?: number | null;
     /** "Tạo bộ file": AI tự lên danh sách văn bản cần soạn từ hồ sơ đính kèm. */
     make_files?: boolean;
+    /** Nút "Dừng" của giao diện. Huỷ signal là đóng kết nối, và chính việc
+     *  đóng kết nối báo cho máy chủ ngừng sinh chữ (xem rag.answer_stream). */
+    signal?: AbortSignal;
   },
   onEvent: (evt: ChatStreamEvent) => void
 ) => Promise<ChatStreamEvent | null>;
+
+/** Mã lỗi ném ra khi lượt bị NGƯỜI DÙNG bấm "Dừng" — không phải sự cố. */
+export const DUNG_BOI_NGUOI_DUNG: string = ApiJs.DUNG_BOI_NGUOI_DUNG;
 
 export const createConversation = ApiJs.createConversation as () => Promise<{
   conversation_id: number;

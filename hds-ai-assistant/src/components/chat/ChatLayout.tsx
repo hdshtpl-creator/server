@@ -8,6 +8,7 @@ import type { BrowseDocument, MethodTemplate } from '../../types';
 import { isClientRole } from '../../constants';
 import {
   Send,
+  Square,
   Upload,
   Sliders,
   FileText,
@@ -79,6 +80,8 @@ export const ChatLayout: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** Tay cầm cắt lượt trả lời đang chạy — nút "Dừng" dùng nó. */
+  const stopRef = useRef<AbortController | null>(null);
 
   const isClient = isClientRole(currentUser?.role);
   const serverConvId = activeConversation?.server_id;
@@ -165,6 +168,10 @@ export const ChatLayout: React.FC = () => {
     });
 
     setChatStreaming(true);
+    // Tay cầm để nút "Dừng" cắt đúng lượt này. Đóng kết nối cũng là tín hiệu
+    // dừng gửi tới máy chủ — model ngừng viết ngay, không viết nốt cho không.
+    const stopper = new AbortController();
+    stopRef.current = stopper;
     // Ô trống cho câu trả lời, chữ sẽ chảy dần vào đây.
     const aiMsgId = `ai-${Date.now()}`;
     let opened = false;
@@ -179,6 +186,7 @@ export const ChatLayout: React.FC = () => {
           model: isClient ? undefined : selectedModel,
           source_document_ids:
             isClient || selectedSourceIds.length === 0 ? undefined : selectedSourceIds,
+          signal: stopper.signal,
         },
         (evt) => {
           if (evt.type === 'start' && evt.conversation_id) {
@@ -251,6 +259,20 @@ export const ChatLayout: React.FC = () => {
         }
       );
     } catch (err: any) {
+      // Người dùng chủ động bấm "Dừng" — không phải sự cố: giữ nguyên phần
+      // chữ đã viết, đóng con trỏ nhấp nháy, KHÔNG hiện băng lỗi đỏ. Máy chủ
+      // đã lưu đúng phần này kèm dấu bị cắt, nên mở lại hội thoại vẫn khớp.
+      if (err?.code === api.DUNG_BOI_NGUOI_DUNG) {
+        updateMessage(aiMsgId, (m) => ({
+          ...m,
+          isStreaming: false,
+          statusLabel: undefined,
+          text: m.text
+            ? `${m.text}\n\n_(Người dùng đã dừng câu trả lời giữa chừng.)_`
+            : 'Đã dừng trước khi AI kịp viết câu nào.',
+        }));
+        return;
+      }
       const errMsg = err?.message || 'Có lỗi xảy ra khi hỏi AI.';
       setErrorMessage(errMsg);
       if (opened) {
@@ -278,9 +300,16 @@ export const ChatLayout: React.FC = () => {
         });
       }
     } finally {
+      stopRef.current = null;
       setChatStreaming(false);
       textareaRef.current?.focus();
     }
+  };
+
+  /** Cắt lượt trả lời đang chạy. Đóng kết nối là tín hiệu để máy chủ bật cờ
+   *  huỷ và model ngừng sinh chữ — không phải chỉ giấu chữ đi trên màn hình. */
+  const handleStop = () => {
+    stopRef.current?.abort();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -494,20 +523,32 @@ export const ChatLayout: React.FC = () => {
                   </button>
                 )}
 
-                <button
-                  id="send-chat-btn"
-                  type="submit"
-                  disabled={!inputQuestion.trim() || isChatStreaming}
-                  className="p-2.5 rounded-xl transition-colors bg-hds-navy text-hds-gold hover:bg-hds-navy-light disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 disabled:cursor-not-allowed"
-                  title="Gửi câu hỏi"
-                  aria-label="Gửi câu hỏi"
-                >
-                  {isChatStreaming ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
+                {/* Đang trả lời thì chính chỗ này là nút DỪNG — không bắt
+                    người dùng ngồi chờ hết một câu họ không cần nữa, và cũng
+                    là lối thoát khi máy chạy quá lâu. */}
+                {isChatStreaming ? (
+                  <button
+                    id="stop-chat-btn"
+                    type="button"
+                    onClick={handleStop}
+                    className="p-2.5 rounded-xl transition-colors bg-hds-red text-white hover:bg-red-700"
+                    title="Dừng câu trả lời đang chạy"
+                    aria-label="Dừng câu trả lời"
+                  >
+                    <Square className="w-4 h-4 fill-current" />
+                  </button>
+                ) : (
+                  <button
+                    id="send-chat-btn"
+                    type="submit"
+                    disabled={!inputQuestion.trim()}
+                    className="p-2.5 rounded-xl transition-colors bg-hds-navy text-hds-gold hover:bg-hds-navy-light disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 disabled:cursor-not-allowed"
+                    title="Gửi câu hỏi"
+                    aria-label="Gửi câu hỏi"
+                  >
                     <Send className="w-4 h-4" />
-                  )}
-                </button>
+                  </button>
+                )}
               </div>
             </div>
 
