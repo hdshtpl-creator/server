@@ -84,8 +84,12 @@ const sessionCache: {
    *  lượt cũ bị vứt, tuyệt đối không ghi hội thoại (hồ sơ khách!) của người
    *  trước vào màn hình người sau. */
   epoch: number;
+  /** Tay cầm cắt lượt đang chạy. Ở ĐÂY chứ không phải useRef: chuyển tab là
+   *  component bị tháo hẳn, ref rỗng lại — khi đó nút Dừng hiện ra mà bấm
+   *  không ăn gì, ô nhập khoá cứng. */
+  stopper: AbortController | null;
 } = { userId: null, messages: [], serverConvId: null, attachments: [], busy: false,
-      sync: null, epoch: 0 };
+      sync: null, epoch: 0, stopper: null };
 
 export const LegalCheckWorkspace: React.FC = () => {
   const { showToast, currentUser } = useApp();
@@ -100,6 +104,8 @@ export const LegalCheckWorkspace: React.FC = () => {
     sessionCache.attachments = [];
     sessionCache.busy = false;
     sessionCache.epoch += 1; // vô hiệu mọi lượt stream còn chạy của người trước
+    sessionCache.stopper?.abort();   // và cắt hẳn nó, đừng để chạy cho không
+    sessionCache.stopper = null;
   }
 
   const [messages, setMessages] = useState<ChatMessage[]>(sessionCache.messages);
@@ -128,8 +134,6 @@ export const LegalCheckWorkspace: React.FC = () => {
   // Hai cú "tạo hội thoại" chạy song song (upload trong lúc đang gửi câu đầu)
   // phải nhận về CÙNG một conversation — giữ promise, không giữ mỗi kết quả.
   const convPromiseRef = useRef<Promise<number> | null>(null);
-  /** Tay cam cat luot tra loi dang chay — nut "Dung" dung no. */
-  const stopRef = useRef<AbortController | null>(null);
 
   // ---- Write-through helpers: cache trước, MÀN HÌNH ĐANG GẮN sau --------
   // Mọi lối ghi đều đi qua sessionCache.sync?.() chứ KHÔNG gọi thẳng setState
@@ -369,7 +373,7 @@ export const LegalCheckWorkspace: React.FC = () => {
     const epoch = sessionCache.epoch;
     const alive = () => sessionCache.epoch === epoch;
     const stopper = new AbortController();
-    stopRef.current = stopper;
+    sessionCache.stopper = stopper;
     rememberBusy(true);
     setInput('');
 
@@ -499,7 +503,7 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
         ]);
       }
     } finally {
-      stopRef.current = null;
+      if (sessionCache.stopper === stopper) sessionCache.stopper = null;
       if (alive()) {
         rememberBusy(false);
         textareaRef.current?.focus();
@@ -510,7 +514,13 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
   /** Cat luot tra loi dang chay. Dong ket noi la tin hieu de may chu bat co
    *  huy va model ngung sinh chu — khong phai chi giau chu di. */
   const handleStop = () => {
-    stopRef.current?.abort();
+    if (sessionCache.stopper) {
+      sessionCache.stopper.abort();
+      return;
+    }
+    // Không còn tay cầm mà cờ vẫn bật: lượt cũ đã chết mà quên tắt cờ. Mở
+    // khoá — nút Dừng KHÔNG BAO GIỜ được phép bấm mà không có gì xảy ra.
+    rememberBusy(false);
   };
 
   const handleAsk = (e?: React.FormEvent) => {

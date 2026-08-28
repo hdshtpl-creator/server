@@ -26,6 +26,18 @@ import {
 const nowLabel = () =>
   new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 
+/**
+ * Tay cầm cắt lượt trả lời đang chạy — để Ở MỨC MODULE, không phải useRef.
+ *
+ * App.tsx render khung chat trong một ternary theo `activeView`, nên bấm sang
+ * Quản trị / Kiểm tra pháp lý là component bị THÁO HẲN. Cờ `isChatStreaming`
+ * thì nằm ở AppContext nên sống tiếp; nếu tay cầm nằm trong useRef thì bản
+ * gắn lại có ref RỖNG: ô nhập vẫn khoá, nút Dừng hiện ra nhưng bấm KHÔNG ăn
+ * gì — đúng cảnh "khung chat mờ, không gõ được". Ở mức module thì bản nào
+ * đang gắn cũng cắt được đúng lượt đang chạy.
+ */
+let luotDangChay: AbortController | null = null;
+
 export const ChatLayout: React.FC = () => {
   const {
     activeConversation,
@@ -80,8 +92,6 @@ export const ChatLayout: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  /** Tay cầm cắt lượt trả lời đang chạy — nút "Dừng" dùng nó. */
-  const stopRef = useRef<AbortController | null>(null);
 
   const isClient = isClientRole(currentUser?.role);
   const serverConvId = activeConversation?.server_id;
@@ -171,7 +181,7 @@ export const ChatLayout: React.FC = () => {
     // Tay cầm để nút "Dừng" cắt đúng lượt này. Đóng kết nối cũng là tín hiệu
     // dừng gửi tới máy chủ — model ngừng viết ngay, không viết nốt cho không.
     const stopper = new AbortController();
-    stopRef.current = stopper;
+    luotDangChay = stopper;
     // Ô trống cho câu trả lời, chữ sẽ chảy dần vào đây.
     const aiMsgId = `ai-${Date.now()}`;
     let opened = false;
@@ -300,7 +310,8 @@ export const ChatLayout: React.FC = () => {
         });
       }
     } finally {
-      stopRef.current = null;
+      // Chỉ dọn nếu vẫn là lượt của mình — lượt mới đã ghi đè thì để yên.
+      if (luotDangChay === stopper) luotDangChay = null;
       setChatStreaming(false);
       textareaRef.current?.focus();
     }
@@ -309,7 +320,14 @@ export const ChatLayout: React.FC = () => {
   /** Cắt lượt trả lời đang chạy. Đóng kết nối là tín hiệu để máy chủ bật cờ
    *  huỷ và model ngừng sinh chữ — không phải chỉ giấu chữ đi trên màn hình. */
   const handleStop = () => {
-    stopRef.current?.abort();
+    if (luotDangChay) {
+      luotDangChay.abort();
+      return;
+    }
+    // Không còn tay cầm mà cờ vẫn bật: lượt cũ đã chết mà quên tắt cờ (ví dụ
+    // đăng nhập lại giữa chừng). Mở khoá giao diện — nút Dừng KHÔNG BAO GIỜ
+    // được phép bấm mà không có gì xảy ra.
+    setChatStreaming(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
