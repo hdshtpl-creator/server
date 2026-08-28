@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "hds-frontend",
+      "name": "webapp",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "hds-ai-assistant"],
-      "port": 5173
+      "runtimeArgs": ["--prefix", "hds-ai-assistant", "run", "dev"],
+      "port": 3000
     }
   ]
 }

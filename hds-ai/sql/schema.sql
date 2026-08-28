@@ -146,8 +146,14 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true;
 -- bộ (thư mục con) là bấy nhiêu nhân sự, chi tiết nằm trong từng bộ; giống
 -- cách mỗi thư mục [MÃ] trong ngăn 9 là một khách hàng (bảng clients).
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS person_folder TEXT;
+-- Danh tính nguồn CŨ trước khi chuyển kho từ Drive về máy chủ (27/08/2026).
+-- Giữ lại để `python -m app.local_learn --chuyen-doi --nguoc` còn đường lùi.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS prev_source_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_doc_ready_active
   ON documents(active, extraction_status, approved, label_verified);
+-- Bộ quét thư mục dò file ĐỔI TÊN / CHUYỂN THƯ MỤC bằng md5 nội dung: không có
+-- chỉ mục này thì mỗi file lạ phải quét toàn bảng documents.
+CREATE INDEX IF NOT EXISTS idx_doc_checksum ON documents(checksum);
 
 -- -------------------------------------------------------------
 -- NÂNG CẤP CSDL TẠO TỪ BẢN TRƯỚC
@@ -156,6 +162,12 @@ CREATE INDEX IF NOT EXISTS idx_doc_ready_active
 -- mỗi lần cập nhật, nên khai ở đây là máy chủ tự lên phiên bản mới.
 -- -------------------------------------------------------------
 ALTER TABLE users ADD COLUMN IF NOT EXISTS can_view_finance BOOLEAN DEFAULT false;
+-- 27/08/2026: bỏ Google Drive, kho tài liệu chuyển hẳn về thư mục trên máy chủ.
+-- Thêm nguồn 'local' cho tài liệu do bộ quét thư mục nội bộ (app/local_learn.py)
+-- nạp vào. Giữ 'drive' để tài liệu học từ Drive trước đây vẫn hợp lệ.
+ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_source_kind_check;
+ALTER TABLE documents ADD CONSTRAINT documents_source_kind_check CHECK (source_kind IN
+  ('drive','local','manual','chat','web'));
 ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_doc_type_check;
 ALTER TABLE documents ADD CONSTRAINT documents_doc_type_check CHECK (doc_type IN
   ('law','ban_an','an_le','mau_hd','nhan_hieu','thu_mau','quy_trinh','ho_so_ns',
@@ -241,6 +253,24 @@ CREATE TABLE IF NOT EXISTS conversations (
   started_at  TIMESTAMPTZ DEFAULT now()
 );
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS context_state JSONB DEFAULT '{}'::jsonb;
+-- Loại hội thoại: 'chat' = tab Hội thoại AI; 'legal' = tab Kiểm tra pháp lý.
+-- Tách ra để hai tab có lịch sử riêng — phiên kiểm tra hồ sơ không lẫn vào cột
+-- hội thoại thường và ngược lại.
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'chat';
+-- BỘ NHỚ DÀI (kiểu Claude/ChatGPT): hội thoại vượt cửa sổ nhớ nguyên văn thì
+-- phần cũ được LLM cô đọng vào `summary`; `summary_upto` là id tin nhắn cuối
+-- cùng đã gộp — các tin sau mốc này vẫn đưa vào prompt nguyên văn.
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary TEXT;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary_upto BIGINT NOT NULL DEFAULT 0;
+-- Chuyển các phiên tab Kiểm tra pháp lý tạo TRƯỚC khi có cột kind. File này
+-- được update.sh chạy lại MỖI lần nâng cấp, nên mẫu so khớp phải chặt đúng
+-- title máy đóng dấu ("Kiểm tra pháp lý 28/08 12:33") — so LIKE 'Kiểm tra
+-- pháp lý%' là vơ luôn hội thoại thường mà CÂU HỎI ĐẦU của người dùng mở đầu
+-- bằng mấy chữ đó (title chat đặt theo câu hỏi đầu), âm thầm giấu nó khỏi cột
+-- chat ở lần deploy kế tiếp.
+UPDATE conversations SET kind='legal'
+ WHERE kind='chat'
+   AND title ~ '^Kiểm tra pháp lý [0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}$';
 
 CREATE TABLE IF NOT EXISTS messages (
   id              BIGSERIAL PRIMARY KEY,
@@ -443,9 +473,13 @@ CREATE TABLE IF NOT EXISTS temp_files (
   filename        TEXT,
   content         TEXT,
   embedding_json  JSONB,
+  -- Bản .docx GỐC của file đính kèm (data/work/chat_uploads/…): luồng "tạo bộ
+  -- file" dùng nó làm khuôn giữ định dạng. NULL với định dạng khác.
+  source_path     TEXT,
   expires_at      TIMESTAMPTZ DEFAULT (now() + interval '6 hours'),
   created_at      TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE temp_files ADD COLUMN IF NOT EXISTS source_path TEXT;
 CREATE INDEX IF NOT EXISTS idx_temp_expire ON temp_files(expires_at);
 
 CREATE TABLE IF NOT EXISTS leads (

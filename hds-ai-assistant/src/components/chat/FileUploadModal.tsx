@@ -137,13 +137,19 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
     setProgress(0);
     try {
       if (mode === 'temp') {
-        await api.uploadFile({
+        const up = await api.uploadFile({
           conversation_id: conversationId,
           filename: selectedFile.name,
           content: fileContent,
           mode: 'temp',
         });
-        setConvTempFile(localConversationId, { filename: selectedFile.name, content: fileContent });
+        // Giữ id để nút × gỡ được ĐÚNG bản ghi trên máy chủ. Không giữ thì file
+        // vẫn nằm đó và quay lại ngữ cảnh ở lượt hỏi sau.
+        setConvTempFile(localConversationId, {
+          filename: selectedFile.name,
+          content: fileContent,
+          id: up?.temp_file_id,
+        });
         showToast(`Đã nạp tài liệu tạm "${selectedFile.name}".`, 'success');
       } else {
         const res = await api.uploadDocument({

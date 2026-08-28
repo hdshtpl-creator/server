@@ -78,21 +78,65 @@ case "$MODE" in
   ids)  WHERE="d.id = ANY(ARRAY[${IDS// /,}]::int[])" ;;
 esac
 
+# --- Chọn bộ học TRƯỚC khi lọc ----------------------------------------
+# Phải biết bộ học nào sẽ chạy mới quyết được tài liệu nào "học lại được":
+# Drive thì cần drive_file_id, kho local thì cần khoá local: VÀ tệp còn trên
+# đĩa. Đoán sai ở đây là xoá tài liệu không có gì phục hồi (rà soát 27/08/2026).
+if grep -qE '^DRIVE_FOLDER_ID=.+' hds-ai/.env 2>/dev/null; then
+  LEARNER="app.auto_learn"; SRC="Drive"
+else
+  LEARNER="app.local_learn"; SRC="kho trên máy chủ"
+fi
+LIB="$(grep -E '^DATA_LIB=' hds-ai/.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"'' || true)"
+[ -n "$LIB" ] || LIB="$(grep -E '^DATA_RAW=' hds-ai/.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"'' || true)"
+[ -n "$LIB" ] || LIB="./data/raw"
+case "$LIB" in /*) ;; *) LIB="hds-ai/${LIB#./}" ;; esac
+
+# Con dấu duyệt được nhớ theo drive_file_id. Học lại bằng bộ quét local trong
+# khi bảng còn tài liệu mang danh tính Drive thì khoá không khớp và TOÀN BỘ
+# con dấu mất — cả kho rơi về hàng chờ duyệt.
+if [ "$LEARNER" = "app.local_learn" ]; then
+  DRIVE_KEYS="$(q "SELECT count(*) FROM documents WHERE drive_file_id IS NOT NULL AND drive_file_id NOT LIKE 'local:%'")"
+  if [ "${DRIVE_KEYS:-0}" != "0" ]; then
+    c_bad "$DRIVE_KEYS tài liệu vẫn mang danh tính Drive, nhưng sắp học lại bằng bộ quét thư mục."
+    echo "     Con dấu duyệt sẽ KHÔNG trả lại được. Chạy trước:"
+    echo "       cd hds-ai && .venv/bin/python -m app.local_learn --chuyen-doi"
+    exit 1
+  fi
+fi
+
 # --- Xem trước ---------------------------------------------------------
-c_head "Tài liệu sẽ được đọc lại"
+c_head "Tài liệu sẽ được đọc lại (bộ học: $SRC)"
 LIST="$(q "SELECT d.id || '|' || d.title || '|' ||
                   coalesce(d.extraction_status,'ready') || '|' ||
-                  (CASE WHEN d.drive_file_id IS NULL THEN 'x' ELSE 'd' END)
+                  coalesce(d.drive_file_id,'')
              FROM documents d WHERE $WHERE ORDER BY d.title")"
 [ -n "$LIST" ] || { c_bad "Không có tài liệu nào khớp."; exit 0; }
 
-TOTAL=0; SCAN=0; NO_DRIVE=0; SKIP_IDS=""
-while IFS='|' read -r id title status drive; do
+TOTAL=0; SCAN=0; NO_SRC=0; SKIP_IDS=""
+while IFS='|' read -r id title status key; do
   [ -z "$id" ] && continue
   TOTAL=$((TOTAL + 1))
-  if [ "$drive" = "x" ]; then
-    NO_DRIVE=$((NO_DRIVE + 1)); SKIP_IDS="$SKIP_IDS $id"
-    c_warn "#$id  $title  — KHÔNG từ Drive, sẽ BỎ QUA (xoá là mất hẳn)"
+  # "Học lại được" theo đúng bộ học sắp chạy.
+  RELEARNABLE=1; WHY=""
+  if [ -z "$key" ]; then
+    RELEARNABLE=0; WHY="không có nguồn gốc (tải lên qua web) — xoá là mất hẳn"
+  elif [ "$LEARNER" = "app.local_learn" ]; then
+    case "$key" in
+      local:*)
+        REL="${key#local:}"
+        [ -f "$LIB/$REL" ] || { RELEARNABLE=0; WHY="không còn tệp trong kho ($REL) — xoá là mất hẳn"; }
+        ;;
+      *) RELEARNABLE=0; WHY="danh tính cũ từ Drive, Drive đã ngắt — xoá là mất hẳn" ;;
+    esac
+  else
+    case "$key" in
+      local:*) RELEARNABLE=0; WHY="danh tính kho local, không tải lại từ Drive được" ;;
+    esac
+  fi
+  if [ "$RELEARNABLE" = "0" ]; then
+    NO_SRC=$((NO_SRC + 1)); SKIP_IDS="$SKIP_IDS $id"
+    c_warn "#$id  $title  — BỎ QUA: $WHY"
     continue
   fi
   if [ "$status" != "ready" ]; then
@@ -102,10 +146,10 @@ while IFS='|' read -r id title status drive; do
   fi
 done <<< "$LIST"
 
-# Không đụng tới file tải lên qua web: xoá đi thì không có nguồn nào học lại.
+# Không đụng tới tài liệu không có nguồn học lại: xoá đi là mất hẳn.
 if [ -n "${SKIP_IDS// /}" ]; then
   WHERE="($WHERE) AND d.id <> ALL(ARRAY[${SKIP_IDS// /,}]::int[])"
-  TOTAL=$((TOTAL - NO_DRIVE))
+  TOTAL=$((TOTAL - NO_SRC))
 fi
 [ "$TOTAL" -gt 0 ] || { c_bad "Không còn tài liệu nào học lại được."; exit 0; }
 
@@ -113,7 +157,7 @@ CHUNKS="$(q "SELECT count(*) FROM chunks c JOIN documents d ON d.id=c.document_i
 c_head "Tóm tắt"
 echo "  Sẽ đọc lại       : $TOTAL tài liệu ($CHUNKS đoạn phải tạo lại vector)"
 echo "  Trong đó bản scan: $SCAN — các file này BẮT BUỘC qua người duyệt lại"
-echo "  Bỏ qua           : $NO_DRIVE tài liệu không có trên Drive"
+echo "  Bỏ qua           : $NO_SRC tài liệu không có nguồn để học lại"
 echo
 echo "  Thời gian: mỗi đoạn phải tạo vector lại, bản scan còn phải OCR 400 dpi."
 echo "  Vài trăm đoạn mất vài phút; vài nghìn đoạn có thể mất hàng giờ."
@@ -130,8 +174,13 @@ read -r CONFIRM </dev/tty
 [ "$CONFIRM" = "DOC LAI" ] || { echo "Đã huỷ, không thay đổi gì."; exit 0; }
 
 # --- Sao lưu ----------------------------------------------------------
-BACKUP="/var/backups/hds-ai-tailieu-$(date +%Y%m%d-%H%M%S).sql.gz"
-mkdir -p /var/backups 2>/dev/null || BACKUP="$HOME/hds-ai-tailieu-$(date +%Y%m%d-%H%M%S).sql.gz"
+# /var/backups là thư mục hệ thống: user thường TẠO được (nó có sẵn) nhưng
+# GHI thì không. Kiểm tra quyền ghi thật, đừng tin mỗi mkdir — nếu không, script
+# đi tới bước ghi rồi mới chết vì Permission denied (gặp thật 21/08/2026).
+BACKUP_DIR="/var/backups"
+mkdir -p "$BACKUP_DIR" 2>/dev/null
+[ -w "$BACKUP_DIR" ] || BACKUP_DIR="$HOME"
+BACKUP="$BACKUP_DIR/hds-ai-tailieu-$(date +%Y%m%d-%H%M%S).sql.gz"
 c_head "Sao lưu trước khi xoá → $BACKUP"
 if dump_docs | gzip > "$BACKUP" && [ -s "$BACKUP" ]; then
   c_ok "Đã sao lưu ($(du -h "$BACKUP" | cut -f1))."
@@ -146,7 +195,7 @@ psql_in <<SQL
 BEGIN;
 DROP TABLE IF EXISTS relearn_approvals;
 CREATE TABLE relearn_approvals AS
-  SELECT d.drive_file_id, d.approved, d.label_verified
+  SELECT d.drive_file_id, d.source_path, d.approved, d.label_verified
     FROM documents d
    WHERE ($WHERE) AND d.drive_file_id IS NOT NULL
      AND (d.approved OR d.label_verified);
@@ -159,18 +208,30 @@ SQL
 c_ok "Đã xoá $TOTAL bản ghi (ghi nhớ $(q 'SELECT count(*) FROM relearn_approvals') con dấu duyệt)."
 
 # --- Học lại ----------------------------------------------------------
-c_head "Đồng bộ lại từ Drive — bắt đầu $(date '+%H:%M:%S')"
-bash deploy/auto-learn.sh
+# ($LEARNER và $SRC đã chọn ở đầu script, trước bước lọc tài liệu.)
+c_head "Đọc lại từ $SRC — bắt đầu $(date '+%H:%M:%S')"
+# Bộ học chết giữa chừng mà script chạy tiếp là mất trắng con dấu duyệt: bảng
+# relearn_approvals bị DROP ở cuối, trong khi tài liệu đã xoá và chưa học lại.
+if ! ( cd hds-ai && .venv/bin/python -m "$LEARNER" ); then
+  c_bad "Bộ học DỪNG GIỮA CHỪNG — tài liệu vừa bị xoá và CHƯA học lại."
+  echo "  Con dấu duyệt VẪN GIỮ trong bảng relearn_approvals (script không xoá bảng này)."
+  echo "  Sửa nguyên nhân (thường là thư mục kho chưa mount / sai DATA_LIB), rồi chạy:"
+  echo "    cd hds-ai && .venv/bin/python -m $LEARNER"
+  echo "  sau đó chạy lại script này để trả con dấu duyệt, hoặc phục hồi từ: $BACKUP"
+  exit 1
+fi
 c_head "Đã học xong lúc $(date '+%H:%M:%S')"
 
 # --- Trả lại con dấu duyệt cho file đọc SẠCH --------------------------
 psql_in <<'SQL'
+-- Ghép theo danh tính nguồn, hoặc theo đường dẫn tệp nếu danh tính đã đổi.
 UPDATE documents d
    SET approved       = d.approved OR r.approved,
        label_verified = d.label_verified OR r.label_verified,
        updated_at     = now()
   FROM relearn_approvals r
- WHERE d.drive_file_id = r.drive_file_id
+ WHERE (d.drive_file_id = r.drive_file_id
+        OR (r.source_path IS NOT NULL AND d.source_path = r.source_path))
    AND coalesce(d.extraction_status,'ready') = 'ready';
 DROP TABLE IF EXISTS relearn_approvals;
 SQL

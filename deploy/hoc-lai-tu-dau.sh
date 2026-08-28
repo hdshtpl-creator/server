@@ -74,8 +74,13 @@ fi
 # --- Sao lưu trước khi xoá -------------------------------------------
 # Xoá xong mới phát hiện sai thì không còn đường lùi. Bản sao này nhỏ vì
 # chỉ chứa hai bảng, nhưng đủ để khôi phục nếu lần học lại gặp sự cố.
-BACKUP="/var/backups/hds-ai-tailieu-$(date +%Y%m%d-%H%M%S).sql.gz"
-mkdir -p /var/backups 2>/dev/null || BACKUP="$HOME/hds-ai-tailieu-$(date +%Y%m%d-%H%M%S).sql.gz"
+# /var/backups la thu muc he thong: user thuong TAO duoc (no co san) nhung GHI
+# thi khong. Kiem tra quyen ghi that, dung tin moi mkdir - neu khong, script di
+# toi buoc ghi roi moi chet vi Permission denied (gap that 21/08/2026).
+BACKUP_DIR="/var/backups"
+mkdir -p "$BACKUP_DIR" 2>/dev/null
+[ -w "$BACKUP_DIR" ] || BACKUP_DIR="$HOME"
+BACKUP="$BACKUP_DIR/hds-ai-tailieu-$(date +%Y%m%d-%H%M%S).sql.gz"
 c_head "Sao lưu trước khi xoá → $BACKUP"
 if dump_docs | gzip > "$BACKUP" && [ -s "$BACKUP" ]; then
   c_ok "Đã sao lưu ($(du -h "$BACKUP" | cut -f1))."
@@ -98,11 +103,29 @@ fi
 # Nhãn bám theo cấu trúc thư mục nên học lại cho ra nhãn y hệt; thứ duy nhất
 # đáng giữ là con dấu "đã có người xem và đồng ý". Ghi ra bảng thật (không phải
 # temp) vì nó phải sống qua nhiều phiên psql và cả lượt chạy python ở giữa.
+# Con dấu duyệt được nhớ theo drive_file_id. Nếu sắp học lại bằng bộ quét thư
+# mục trong khi bảng còn tài liệu mang danh tính Drive, khoá hai bên không khớp
+# và TOÀN BỘ con dấu mất — cả kho rơi về hàng chờ duyệt (rà soát 27/08/2026).
+if grep -qE '^DRIVE_FOLDER_ID=.+' "$BACKEND_DIR/.env" 2>/dev/null; then
+  LEARNER_CHECK="app.auto_learn"
+else
+  LEARNER_CHECK="app.local_learn"
+fi
+if [ "$LEARNER_CHECK" = "app.local_learn" ]; then
+  DRIVE_KEYS="$(q "SELECT count(*) FROM documents WHERE drive_file_id IS NOT NULL AND drive_file_id NOT LIKE 'local:%'")"
+  if [ "${DRIVE_KEYS:-0}" != "0" ]; then
+    c_bad "$DRIVE_KEYS tài liệu vẫn mang danh tính Drive, nhưng sẽ học lại bằng bộ quét thư mục."
+    echo "     Con dấu duyệt sẽ KHÔNG trả lại được — cả kho rơi về hàng chờ duyệt."
+    echo "     Chạy trước:  cd $BACKEND_DIR && .venv/bin/python -m app.local_learn --chuyen-doi"
+    exit 1
+  fi
+fi
+
 c_head "Ghi nhớ trạng thái duyệt hiện tại..."
 psql_in <<'SQL'
 DROP TABLE IF EXISTS relearn_approvals;
 CREATE TABLE relearn_approvals AS
-  SELECT drive_file_id, approved, label_verified
+  SELECT drive_file_id, source_path, approved, label_verified
     FROM documents
    WHERE drive_file_id IS NOT NULL AND (approved OR label_verified);
 SQL
@@ -135,15 +158,34 @@ fi
 c_ok "Đã xoá sạch kho đã học."
 
 # --- Học lại ------------------------------------------------------------
-# Xoá checksum nghĩa là auto_learn coi mọi file là mới và học lại toàn bộ.
-c_head "Bắt đầu học lại từ Google Drive (có thể mất nhiều giờ)..."
+# Bảng documents đã trống nên bộ học coi mọi file là mới và học lại toàn bộ.
+LEARNER="$LEARNER_CHECK"
+SRC_LABEL="$([ "$LEARNER" = "app.auto_learn" ] && echo "Google Drive" || echo "kho trên máy chủ")"
+c_head "Bắt đầu học lại từ $SRC_LABEL (có thể mất nhiều giờ)..."
 echo "Theo dõi tiến độ ở cửa sổ này, hoặc mở Quản trị → Kho tài liệu đã học."
+echo "   Bộ học: $LEARNER"
 echo
 
-if [ -x "$(dirname "$0")/auto-learn.sh" ]; then
-  bash "$(dirname "$0")/auto-learn.sh"
-else
-  cd "$BACKEND_DIR" && "$BACKEND_DIR/.venv/bin/python" -m app.auto_learn
+# Bộ học chết giữa chừng mà script chạy tiếp là mất trắng con dấu duyệt: khối
+# bên dưới DROP bảng relearn_approvals trong khi kho vừa bị xoá sạch.
+cd "$BACKEND_DIR" || { c_bad "Không vào được $BACKEND_DIR."; exit 1; }
+if ! "$BACKEND_DIR/.venv/bin/python" -m "$LEARNER"; then
+  c_bad "Bộ học $LEARNER DỪNG GIỮA CHỪNG — kho vừa bị xoá và CHƯA học lại."
+  echo "  Con dấu duyệt (${KEPT:-0}) VẪN GIỮ trong bảng relearn_approvals."
+  echo "  Sửa nguyên nhân (thường là thư mục kho chưa mount / sai DATA_LIB), rồi chạy:"
+  echo "    cd $BACKEND_DIR && .venv/bin/python -m $LEARNER"
+  echo "  sau đó chạy lại script này để trả con dấu duyệt, hoặc phục hồi: $BACKUP"
+  exit 1
+fi
+
+# Học xong mà kho vẫn trống = bộ học chạy nhưng không thấy tệp nào (ổ chưa
+# mount). Đừng DROP bảng con dấu duyệt trong tình huống đó.
+LEARNED="$(q 'SELECT count(*) FROM documents')"
+if [ "${LEARNED:-0}" = "0" ] && [ "${KEPT:-0}" != "0" ]; then
+  c_bad "Học xong nhưng kho TRỐNG (0 tài liệu) trong khi trước đó có ${KEPT} tài liệu đã duyệt."
+  echo "  Nhiều khả năng thư mục kho chưa mount. Con dấu duyệt vẫn giữ trong relearn_approvals."
+  echo "  Kiểm tra thư mục rồi chạy lại bộ học; hoặc phục hồi: $BACKUP"
+  exit 1
 fi
 
 # --- Trả lại con dấu duyệt --------------------------------------------
@@ -152,12 +194,16 @@ fi
 # dung đã khác đi thì con dấu cũ không còn nói lên điều gì.
 c_head "Trả lại trạng thái duyệt cho tài liệu đã được duyệt trước đây..."
 psql_in <<'SQL'
+-- Ghép theo danh tính nguồn, hoặc theo đường dẫn tệp nếu danh tính đã đổi
+-- (đổi bộ học Drive ↔ local). Thiếu vế source_path là mất sạch con dấu duyệt
+-- khi khoá hai bên khác không gian tên.
 UPDATE documents d
    SET approved       = d.approved OR r.approved,
        label_verified = d.label_verified OR r.label_verified,
        updated_at     = now()
   FROM relearn_approvals r
- WHERE d.drive_file_id = r.drive_file_id
+ WHERE (d.drive_file_id = r.drive_file_id
+        OR (r.source_path IS NOT NULL AND d.source_path = r.source_path))
    AND coalesce(d.extraction_status,'ready') = 'ready';
 DROP TABLE IF EXISTS relearn_approvals;
 SQL

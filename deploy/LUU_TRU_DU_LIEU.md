@@ -1,13 +1,26 @@
 # Dữ liệu AI nằm ở đâu trên máy chủ
 
-Ba nơi lưu, mỗi nơi một vai trò. Hiểu đúng ba chỗ này là biết cần sao lưu gì, xoá gì
+Bốn nơi lưu, mỗi nơi một vai trò. Hiểu đúng các chỗ này là biết cần sao lưu gì, xoá gì
 khi hết chỗ, và mất gì nếu ổ cứng hỏng.
 
 | Nơi lưu | Đường dẫn | Chứa gì | Sao lưu? |
 |---|---|---|---|
-| **Hệ tệp** | `hds-ai/data/raw/` | Bản gốc mọi tài liệu (từ Drive + web tải lên) | Có — hoặc dựa vào Drive |
+| **Hệ tệp** | `hds-ai/data/raw/` | Bản gốc tài liệu BOT HỌC ĐƯỢC (từ Drive + web tải lên) | Có — hoặc dựa vào Drive |
+| **Kho lưu trữ** | `/data/archive/` (tuỳ chọn) | Mirror TOÀN BỘ Drive, mọi định dạng — `deploy/luu-tru-drive.sh` | Chính nó là bản lưu trữ |
 | **PostgreSQL** | Docker volume `pgdata` | Vector, nhãn, hội thoại, cài đặt, phân quyền | **BẮT BUỘC** |
-| **Ollama** | `/usr/share/ollama/.ollama/models` | Mô hình `qwen3:8b`, `bge-m3` | Không — tải lại được |
+| **Ollama** | `/usr/share/ollama/.ollama/models` | Mô hình `qwen3:14b`, `bge-m3` | Không — tải lại được |
+
+> Phân biệt hai tầng file: `data/raw/` là cái **gương phục vụ học** — auto_learn chỉ
+> tải định dạng đọc được và có trần dung lượng. Muốn "toàn bộ tài liệu về local"
+> thì chạy `bash deploy/luu-tru-drive.sh` (mirror mọi file bằng rclone, dùng chung
+> service account; `--install-timer` để chạy hằng đêm). Kho lưu trữ nên đặt trên ổ
+> gắn thêm — ổ 512GB gốc sẽ chật.
+
+Ngoài ra `data/work/` chứa hàng tạm tự sinh lại được: `preview/` (bản PDF xem trước
+của file Office, sinh khi người dùng bấm Xem trước), `template_fills/` (file tạo từ
+chat — điền mẫu / tạo bộ file, tự dọn sau 24 giờ) và `chat_uploads/` (bản .docx gốc
+của file đính kèm hội thoại, làm khuôn cho "Tạo bộ file", xoá theo file tạm).
+Xoá cả thư mục cũng không mất gì.
 
 ---
 

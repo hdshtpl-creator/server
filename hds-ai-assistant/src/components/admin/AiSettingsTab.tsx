@@ -216,21 +216,33 @@ const ModelSection: React.FC = () => {
                   {typeof bench.uoc_tinh_giay === 'number' && (
                     <div
                       className={`flex justify-between gap-3 pt-1.5 border-t border-slate-200 dark:border-slate-700 font-semibold ${
-                        bench.uoc_tinh_giay > 90
+                        (bench.uoc_tinh_giay_toi_da ?? bench.uoc_tinh_giay) > 90
                           ? 'text-hds-red dark:text-red-400'
-                          : bench.uoc_tinh_giay > 45
+                          : (bench.uoc_tinh_giay_toi_da ?? bench.uoc_tinh_giay) > 45
                             ? 'text-amber-700 dark:text-amber-400'
                             : 'text-hds-green dark:text-green-400'
                       }`}
                     >
                       <span>Ước tính một câu hỏi đầy đủ ngữ cảnh</span>
-                      <span className="font-mono">≈ {bench.uoc_tinh_giay}s</span>
+                      <span className="font-mono">
+                        ≈ {bench.uoc_tinh_giay}s
+                        {typeof bench.uoc_tinh_giay_toi_da === 'number' &&
+                          ` – ${bench.uoc_tinh_giay_toi_da}s`}
+                      </span>
                     </div>
                   )}
-                  {typeof bench.uoc_tinh_giay === 'number' && bench.uoc_tinh_giay > 90 && (
+                  {bench.uoc_tinh_dien_giai && (
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500 text-right -mt-1">
+                      {bench.uoc_tinh_dien_giai}
+                    </p>
+                  )}
+                  {typeof bench.uoc_tinh_giay === 'number' &&
+                    (bench.uoc_tinh_giay_toi_da ?? bench.uoc_tinh_giay) > 90 && (
                     <p className="text-hds-red dark:text-red-400 leading-relaxed pt-0.5">
-                      Vượt mốc 100 giây của Cloudflare → sẽ gặp lỗi 524. Hãy chọn model nhẹ hơn,
-                      hoặc giảm "Trần ký tự tài liệu" ở phần Tham số bên dưới.
+                      Người dùng phải chờ hơn một phút rưỡi mỗi câu. Kết nối thì không đứt (luồng
+                      trả lời có nhịp tim giữ sống qua Cloudflare), nhưng chờ lâu là bỏ dùng. Chọn
+                      model nhẹ hơn, hoặc hạ "Số đoạn tài liệu đưa vào" / đặt trần ở "Trần ký tự
+                      tài liệu" trong phần Tham số bên dưới.
                     </p>
                   )}
                   {typeof bench.write_tok_s === 'number' && bench.write_tok_s < 8 && (
@@ -257,11 +269,16 @@ interface FieldDef {
   key: string;
   label: string;
   hint: string;
-  kind: 'textarea' | 'range' | 'number' | 'json';
-  /** Giới hạn riêng cho ô số — mỗi tham số một thang khác nhau. */
+  kind: 'textarea' | 'range' | 'number' | 'json' | 'select';
+  /** Giới hạn riêng cho ô số — mỗi tham số một thang khác nhau.
+   *  QUY TẮC: min/max phải BAO ĐƯỢC giá trị mặc định đang chạy trên máy chủ.
+   *  Thang loại trừ chính mặc định thì trình duyệt tự kẹp giá trị khi lưu, và
+   *  admin đổi một tham số khác lại vô tình đổi luôn tham số này. */
   min?: number;
   max?: number;
   step?: number;
+  /** Chỉ cho kind='select'. */
+  options?: { value: string; label: string }[];
 }
 
 const PROMPT_FIELDS: FieldDef[] = [
@@ -283,6 +300,12 @@ const PROMPT_FIELDS: FieldDef[] = [
     hint: 'Áp dụng cho khách vãng lai. Trả lời khái quát, mời liên hệ luật sư.',
     kind: 'textarea',
   },
+  {
+    key: 'prompt_legal_review',
+    label: 'Phong cách rà soát — tab Kiểm tra pháp lý',
+    hint: 'Áp dụng khi nhân viên tải hồ sơ lên tab Kiểm tra pháp lý và hỏi. Quyết định bố cục bài rà soát: tóm tắt hồ sơ → từng điểm ĐÚNG/CẦN LƯU Ý/TRÁI QUY ĐỊNH kèm căn cứ → rủi ro và khuyến nghị.',
+    kind: 'textarea',
+  },
 ];
 
 const PARAM_FIELDS: FieldDef[] = [
@@ -293,28 +316,85 @@ const PARAM_FIELDS: FieldDef[] = [
     kind: 'range',
   },
   {
+    key: 'history_summary_enabled',
+    label: 'Bộ nhớ dài của hội thoại (tóm tắt phần cũ)',
+    hint: 'Hội thoại vượt số lượt nhớ nguyên văn thì phần cũ được AI cô đọng thành bản tóm tắt — chạy NGẦM sau khi đã trả lời, không làm chậm câu nào. Nhờ vậy mở lại chat cũ dài bao nhiêu bot vẫn nắm được tên khách, số hợp đồng, kết luận từ những lượt đầu.',
+    kind: 'select',
+    options: [
+      { value: 'true', label: 'Bật — bot nhớ cả hội thoại dài (khuyến nghị)' },
+      { value: 'false', label: 'Tắt — chỉ nhớ đúng số lượt gần nhất' },
+    ],
+  },
+  {
+    key: 'history_summary_max_chars',
+    label: 'Trần độ dài bản tóm tắt hội thoại (ký tự)',
+    hint: 'To hơn = nhớ chi tiết hơn nhưng mỗi câu hỏi tốn thêm bấy nhiêu ký tự ngữ cảnh. 2500 là đủ cho tên người, số hợp đồng và các kết luận đã chốt.',
+    kind: 'number',
+    min: 500,
+    max: 8000,
+    step: 100,
+  },
+  {
+    key: 'answer_review',
+    label: 'Bot đọc lại câu trả lời trước khi hiện',
+    hint: 'Lượt AI thứ hai soát lại bài vừa viết. Tự động = chỉ khi câu trả lời quá dài, bỏ lửng hoặc lặp. Luôn luôn = mọi câu, CHẬM GẤP ĐÔI trên máy CPU. Tắt = nhanh nhất, chấp nhận câu trả lời thô.',
+    kind: 'select',
+    options: [
+      { value: 'auto', label: 'Tự động — chỉ khi cần (khuyến nghị)' },
+      { value: 'always', label: 'Luôn luôn — chậm gấp đôi' },
+      { value: 'off', label: 'Tắt — nhanh nhất' },
+    ],
+  },
+  {
+    key: 'strict_grounding',
+    label: 'Chặn câu trả lời không có căn cứ',
+    hint: 'Bật: đoạn nào không đối chiếu được với tài liệu thì bị cắt, không câu nào có căn cứ thì bot từ chối trả lời. TẮT LÀ BOT ĐƯỢC PHÉP SUY ĐOÁN — chỉ tắt tạm khi đang xử lý sự cố, nhớ bật lại.',
+    kind: 'select',
+    options: [
+      { value: 'true', label: 'Bật — chỉ trả lời khi có căn cứ (khuyến nghị)' },
+      { value: 'false', label: 'Tắt — cho phép trả lời thiếu trích dẫn' },
+    ],
+  },
+  {
     key: 'retrieval_top_k',
     label: 'Số đoạn tài liệu tham chiếu mỗi câu hỏi',
-    hint: 'Mỗi đoạn thêm vào là mỗi lần trả lời chậm thêm. Khuyến nghị 4–6.',
+    hint: 'Mỗi đoạn thêm vào là mỗi lần trả lời chậm thêm. Mặc định 24; máy chậm hạ còn 4–6.',
     kind: 'number',
     min: 1,
-    max: 20,
+    max: 64,
+  },
+  {
+    key: 'retrieval_candidate_k',
+    label: 'Số đoạn lấy về trước khi xếp hạng lại',
+    hint: 'Lưới quét rộng: lấy nhiều rồi mới chấm điểm chọn ra số đoạn ở trên. Rộng hơn = tìm kỹ hơn nhưng chậm hơn một chút. Mặc định 300.',
+    kind: 'number',
+    min: 20,
+    max: 1000,
+    step: 10,
+  },
+  {
+    key: 'retrieval_max_chunks_per_doc',
+    label: 'Tối đa bao nhiêu đoạn từ CÙNG một tài liệu',
+    hint: 'Chặn một tài liệu dài chiếm hết chỗ tham chiếu, để câu trả lời có nhiều nguồn khác nhau. Mặc định 8.',
+    kind: 'number',
+    min: 1,
+    max: 64,
   },
   {
     key: 'context_char_budget',
     label: 'Trần ký tự tài liệu đưa vào mỗi câu hỏi',
-    hint: 'Đây là tham số ảnh hưởng tốc độ mạnh nhất. 6000 ký tự ≈ 2000 từ. Tăng gấp đôi là chậm gần gấp đôi.',
+    hint: 'Tham số ảnh hưởng tốc độ mạnh nhất. 0 = KHÔNG cắt (mặc định hiện tại). Đặt số dương để ép trần, ví dụ 6000 ký tự ≈ 2000 từ.',
     kind: 'number',
-    min: 1000,
+    min: 0,
     max: 40000,
     step: 500,
   },
   {
     key: 'chunk_char_limit',
     label: 'Cắt mỗi đoạn tài liệu còn tối đa (ký tự)',
-    hint: 'Chặn một đoạn quá dài chiếm hết chỗ của các đoạn khác.',
+    hint: 'Chặn một đoạn quá dài chiếm hết chỗ của các đoạn khác. 0 = giữ trọn đoạn (mặc định hiện tại).',
     kind: 'number',
-    min: 300,
+    min: 0,
     max: 8000,
     step: 100,
   },
@@ -338,16 +418,16 @@ const PARAM_FIELDS: FieldDef[] = [
   {
     key: 'llm_num_predict',
     label: 'Trần độ dài câu trả lời (token)',
-    hint: 'Chặn trần thời gian trả lời. 700 token ≈ 450 từ, đủ cho câu trả lời gọn.',
+    hint: '-1 = KHÔNG chặn độ dài (mặc định hiện tại). Đặt số dương để ép trần thời gian, 700 token ≈ 450 từ.',
     kind: 'number',
-    min: 128,
+    min: -1,
     max: 4096,
     step: 64,
   },
   {
     key: 'llm_num_ctx',
     label: 'Cửa sổ ngữ cảnh của model (token)',
-    hint: 'Phải lớn hơn tổng prompt + câu trả lời. Đặt quá to chỉ tốn RAM chứ không giúp gì.',
+    hint: 'Trần vật lý duy nhất. Prompt dài hơn mức này bị cắt mất PHẦN ĐẦU. Đặt quá to chỉ tốn RAM.',
     kind: 'number',
     min: 2048,
     max: 32768,
@@ -452,7 +532,7 @@ export const AiSettingsTab: React.FC = () => {
         <div>
           <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Cài đặt AI</h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Phong cách tư vấn của bot, tham số sinh câu trả lời và bản đồ thư mục Drive
+            Phong cách trả lời của bot, tham số sinh câu trả lời và bản đồ thư mục kho
           </p>
         </div>
         <button
@@ -479,7 +559,7 @@ export const AiSettingsTab: React.FC = () => {
       <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
         <div className="flex items-center gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
           <Sparkles className="w-4 h-4 text-hds-gold" />
-          <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Phong cách tư vấn</h3>
+          <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Phong cách tư vấn &amp; rà soát</h3>
         </div>
 
         {PROMPT_FIELDS.map((f) => (
@@ -535,13 +615,53 @@ export const AiSettingsTab: React.FC = () => {
 
         {PARAM_FIELDS.map((f) => (
           <div key={f.key} className="space-y-1">
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-              {f.label}
-            </label>
+            {/* Hàng tiêu đề KHÔNG được là <label> bọc cả nút: <button> là phần
+                tử gán nhãn được, nên bấm vào chữ tên tham số sẽ kích hoạt luôn
+                nút "Về mặc định" — xoá cài đặt trong CSDL mà không hỏi han gì.
+                Tách ra: <label> chỉ ôm tên và trỏ vào đúng ô nhập bằng htmlFor. */}
+            <div className="flex items-center justify-between gap-2">
+              <label
+                htmlFor={`param-${f.key}`}
+                className="text-xs font-semibold text-slate-700 dark:text-slate-300"
+              >
+                {f.label}
+              </label>
+              <span className="flex items-center gap-2">
+                {dirty(f.key) && (
+                  <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 px-1.5 py-0.5 rounded">
+                    chưa lưu
+                  </span>
+                )}
+                {/* Xoá dòng cài đặt trong CSDL để quay về mặc định của mã nguồn —
+                    sổ tay IT chỉ dùng nút này khi một tham số "không chịu đổi"
+                    sau nâng cấp, nên nó phải có ở CẢ nhóm tham số. */}
+                <button
+                  onClick={() => reset(f.key)}
+                  disabled={savingKey !== null}
+                  className="text-[10px] font-semibold text-slate-500 hover:text-hds-navy dark:hover:text-blue-300 underline disabled:opacity-50"
+                >
+                  Về mặc định
+                </button>
+              </span>
+            </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">{f.hint}</p>
-            {f.kind === 'range' ? (
+            {f.kind === 'select' ? (
+              <select
+                id={`param-${f.key}`}
+                value={values[f.key] ?? ''}
+                onChange={(e) => patch(f.key, e.target.value)}
+                className="w-full max-w-md px-3 py-2 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl text-xs focus:ring-2 focus:ring-hds-blue focus:outline-none"
+              >
+                {(f.options ?? []).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            ) : f.kind === 'range' ? (
               <div className="flex items-center gap-3">
                 <input
+                  id={`param-${f.key}`}
                   type="range"
                   min={0}
                   max={1}
@@ -556,6 +676,7 @@ export const AiSettingsTab: React.FC = () => {
               </div>
             ) : (
               <input
+                id={`param-${f.key}`}
                 type="number"
                 min={f.min ?? 0}
                 max={f.max}
@@ -580,11 +701,11 @@ export const AiSettingsTab: React.FC = () => {
         </div>
       </section>
 
-      {/* Bản đồ thư mục Drive */}
+      {/* Bản đồ thư mục kho tài liệu */}
       <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-3">
         <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
           <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-            Bản đồ thư mục Drive → nhãn tài liệu
+            Bản đồ thư mục kho → nhãn tài liệu
           </h3>
           {driveDirty && (
             <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 px-1.5 py-0.5 rounded">
@@ -595,9 +716,9 @@ export const AiSettingsTab: React.FC = () => {
         <div className="flex items-start gap-2 text-[11px] text-slate-500 dark:text-slate-400 bg-hds-soft dark:bg-slate-800/60 border border-blue-100 dark:border-slate-700 rounded-lg p-2.5">
           <Info className="w-3.5 h-3.5 shrink-0 mt-px text-hds-blue" />
           <span>
-            Quy định thư mục trên Drive tương ứng loại tài liệu và mức truy cập nào. Tên thư mục
-            được chuẩn hoá (bỏ số thứ tự, bỏ dấu) trước khi so khớp. Cấu trúc chuẩn xem trong tài
-            liệu <code className="font-mono">CAU_TRUC_DRIVE.md</code>.
+            Quy định thư mục trong kho tài liệu tương ứng loại tài liệu và mức truy cập nào. Tên
+            thư mục được chuẩn hoá (bỏ số thứ tự, bỏ dấu) trước khi so khớp. Cấu trúc chuẩn xem
+            trong tài liệu <code className="font-mono">CAU_TRUC_DRIVE.md</code>.
           </span>
         </div>
         <textarea

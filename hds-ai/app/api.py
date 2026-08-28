@@ -2,12 +2,16 @@
 api.py — Máy chủ API cho toàn hệ thống.
 
 Nhóm đường dẫn:
-  /chat/*     — 3 kênh chat (public/internal/portal)
-  /upload/*   — tải file trong chat: chế độ lưu / dùng-xong-bỏ
+  /chat/*     — 3 kênh chat (public/internal/portal); mode=legal_review +
+                template_doc_id cho tab "Kiểm tra pháp lý & tạo file mẫu"
+  /conversations — tạo hội thoại trống (tải hồ sơ trước, hỏi sau)
+  /upload/*   — tải file trong chat: lưu / dùng-xong-bỏ / trích-xuất-máy-chủ
   /review/*   — duyệt nhãn tài liệu (chỉ người có can_review)
   /learn/*    — duyệt hội thoại đưa vào kho (tự học)
   /methods/*  — dạy AI cách phân tích (mẫu phương pháp)
   /drafts/*   — soạn tài liệu có nguồn, version, duyệt và xuất DOCX/Markdown
+  /files/*    — tải lên kho, tải bản gốc về, XEM TRƯỚC trong trình duyệt
+  /templates/* + /template-fills/* — kệ file mẫu và file đã điền chủ thể
   /users/*    — quản lý người dùng và quyền (chỉ admin)
   /stats,/health
 
@@ -253,6 +257,38 @@ class ChatIn(BaseModel):
     use_method: bool = False     # áp mẫu phương pháp phân tích
     model: str | None = None     # '' = mặc định máy chủ | 'auto' | tên model cụ thể
     source_document_ids: list[int] | None = None  # bộ nguồn người dùng chủ động chọn
+    # Tab "Kiểm tra pháp lý & tạo file mẫu" (chỉ kênh nội bộ):
+    mode: str | None = None            # None | 'legal_review'
+    template_doc_id: int | None = None  # điền chủ thể vào file mẫu này
+    # "Tạo bộ file": AI tự lên danh sách file cần soạn (biên bản nghiệm thu,
+    # giấy đề nghị thanh toán…) từ hồ sơ đính kèm; mẫu là template_doc_id
+    # (nếu chọn) hoặc file .docx đã tải lên hội thoại.
+    make_files: bool = False
+
+
+_CHAT_MODES = {None, "", "legal_review"}
+
+
+def _chat_mode(body: ChatIn, internal: bool) -> str | None:
+    """Chế độ đặc biệt của khung chat — chỉ nhân viên nội bộ được dùng."""
+    if body.mode not in _CHAT_MODES:
+        raise HTTPException(422, "mode chỉ nhận 'legal_review'")
+    mode = body.mode or None
+    return mode if internal else None
+
+
+def _chat_template_id(body: ChatIn, internal: bool) -> int | None:
+    if body.template_doc_id is None:
+        return None
+    if not internal:
+        return None
+    if isinstance(body.template_doc_id, bool) or body.template_doc_id <= 0:
+        raise HTTPException(422, "template_doc_id phải là số nguyên dương")
+    return body.template_doc_id
+
+
+def _chat_make_files(body: ChatIn, internal: bool) -> bool:
+    return bool(body.make_files) and internal
 
 
 def _chat_source_ids(body: ChatIn) -> list[int] | None:
@@ -346,7 +382,13 @@ def chat_internal(body: ChatIn, user=Depends(current_user)):
                      use_temp=body.use_temp, use_method=body.use_method,
                      dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
                      can_finance=user["can_finance"], model=body.model,
-                     source_document_ids=source_ids)
+                     source_document_ids=source_ids,
+                     mode=_chat_mode(body, internal=True),
+                     template_doc_id=_chat_template_id(body, internal=True),
+                     make_files=_chat_make_files(body, internal=True),
+                     # role + dept_codes: kênh internal không dùng cho tier,
+                     # nhưng luồng điền mẫu cần chúng để soi ma trận access_rules.
+                     role=user["role"], dept_codes=user["dept_codes"])
     res["conversation_id"] = conv
     return res
 
@@ -398,6 +440,9 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
     question = _clean_question(body)
     source_ids = _chat_source_ids(body)
     is_client = user["role"] in CLIENT_ROLES
+    chat_mode = _chat_mode(body, internal=not is_client)
+    template_doc_id = _chat_template_id(body, internal=not is_client)
+    make_files = _chat_make_files(body, internal=not is_client)
 
     if is_client:
         quota = user.get("monthly_quota") or 0
@@ -436,6 +481,12 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
         q: "_queue.Queue" = _queue.Queue()
         DONE = object()
 
+        def on_status(label):
+            # Mốc tiến trình phát TRONG lúc prepare chạy (tìm kho, đọc file
+            # mẫu…) — đẩy thẳng vào hàng đợi để người dùng thấy hệ thống đang
+            # làm gì thay vì màn hình im lặng hàng chục giây.
+            q.put(("event", {"type": "status", "label": str(label)[:300]}))
+
         def produce():
             try:
                 for ev in rag.answer_stream(
@@ -444,9 +495,15 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
                         use_method=body.use_method and not is_client,
                         dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
                         can_finance=user["can_finance"],
-                        role=user["role"] if is_client else None,
+                        # role luôn truyền: portal dùng cho tier gói dịch vụ,
+                        # internal dùng cho ma trận access_rules của luồng
+                        # điền mẫu (kèm dept_codes).
+                        role=user["role"],
+                        dept_codes=user["dept_codes"],
                         model=None if is_client else body.model,
-                        source_document_ids=source_ids):
+                        source_document_ids=source_ids,
+                        mode=chat_mode, template_doc_id=template_doc_id,
+                        make_files=make_files, on_status=on_status):
                     q.put(("event", ev))
             except Exception as e:  # noqa: BLE001 - báo lỗi qua dòng, không để luồng chết câm
                 q.put(("error", str(e)))
@@ -502,10 +559,17 @@ def _message_evidence(value):
 
 
 @app.get("/conversations")
-def conversations_list(user=Depends(current_user), limit: int = 100):
+def conversations_list(user=Depends(current_user), limit: int = 100,
+                       kind: str = "chat"):
     """Danh sách hội thoại của người đang đăng nhập, mới hoạt động xếp trước —
-    để dựng cột 'cuộc trò chuyện' bên trái (mô hình ChatGPT)."""
+    để dựng cột 'cuộc trò chuyện' bên trái (mô hình ChatGPT).
+
+    kind: 'chat' (tab Hội thoại AI — mặc định) | 'legal' (tab Kiểm tra pháp
+    lý) | 'all'. Tách để phiên kiểm tra hồ sơ không lẫn vào cột hội thoại
+    thường và ngược lại — mỗi tab thấy đúng lịch sử của mình."""
     require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    if kind not in ("chat", "legal", "all"):
+        raise HTTPException(400, "kind chỉ nhận 'chat', 'legal' hoặc 'all'")
     channel = _user_channel(user)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
@@ -515,9 +579,11 @@ def conversations_list(user=Depends(current_user), limit: int = 100):
                              FROM conversations c
                              LEFT JOIN messages m ON m.conversation_id = c.id
                             WHERE c.user_id=%s AND c.channel=%s
+                              AND (%s = 'all' OR c.kind = %s)
                             GROUP BY c.id
                             ORDER BY last_at DESC
-                            LIMIT %s""", (user["id"], channel, limit))
+                            LIMIT %s""",
+                        (user["id"], channel, kind, kind, limit))
             rows = cur.fetchall()
     return [{"id": r[0], "title": r[1] or "Cuộc trò chuyện",
              "updated_at": str(r[3]), "message_count": r[4]} for r in rows]
@@ -544,10 +610,22 @@ def conversation_delete(conv_id: int, user=Depends(current_user)):
     """Xoá một hội thoại và toàn bộ tin nhắn của nó (messages có ON DELETE CASCADE)."""
     require(user, INTERNAL_ROLES | CLIENT_ROLES)
     check_conversation(user, conv_id, _user_channel(user))
+    # Bản .docx gốc của file đính kèm nằm NGOÀI Postgres (data/work/chat_uploads)
+    # — CASCADE chỉ xoá bản ghi, không unlink hộ. Lấy đường dẫn TRƯỚC khi xoá,
+    # không thì hồ sơ mật của khách thành file mồ côi nằm lại vô hạn.
+    kept_paths = rag.conversation_temp_paths(conv_id)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM conversations WHERE id=%s", (conv_id,))
         db.audit(conn, user["id"], "delete_conversation", "conversations", conv_id, {})
+    for p in kept_paths:
+        try:
+            path = Path(p)
+            path.unlink(missing_ok=True)
+            if path.parent.exists() and not any(path.parent.iterdir()):
+                path.parent.rmdir()
+        except OSError:
+            continue
     return {"ok": True, "id": conv_id}
 
 
@@ -564,9 +642,13 @@ def chat_history(user=Depends(current_user), conversation_id: int | None = None,
     else:
         with db.session(role="internal", admin=True) as conn:
             with conn.cursor() as cur:
+                # Chỉ xét hội thoại THƯỜNG: mở app mà nhảy vào một phiên Kiểm
+                # tra pháp lý (vì nó mới hoạt động nhất) là người dùng thấy
+                # cột chat trái trống trơn nhưng khung giữa đầy hồ sơ khách.
                 cur.execute("""SELECT c.id FROM conversations c
                                 LEFT JOIN messages m ON m.conversation_id=c.id
                                WHERE c.user_id=%s AND c.channel=%s
+                                 AND c.kind='chat'
                                GROUP BY c.id
                                ORDER BY coalesce(max(m.created_at), c.started_at) DESC
                                LIMIT 1""", (user["id"], channel))
@@ -601,10 +683,15 @@ def chat_search(q: str, user=Depends(current_user), limit: int = 40):
     channel = _user_channel(user)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
+            # Chỉ hội thoại THƯỜNG: ô tìm kiếm nằm ở cột trái tab Hội thoại
+            # AI — trả hit từ phiên Kiểm tra pháp lý là bấm vào mở ra một
+            # hội thoại không có trong cột, lượt hỏi tiếp rơi vào phiên đó
+            # mà người dùng không thấy đâu.
             cur.execute("""SELECT m.id, m.role, m.content, m.created_at,
                                   m.conversation_id, c.title
                              FROM messages m JOIN conversations c ON c.id=m.conversation_id
-                            WHERE c.user_id=%s AND c.channel=%s AND m.content ILIKE %s
+                            WHERE c.user_id=%s AND c.channel=%s AND c.kind='chat'
+                              AND m.content ILIKE %s
                             ORDER BY m.id DESC LIMIT %s""",
                         (user["id"], channel, f"%{q}%", limit))
             rows = cur.fetchall()
@@ -661,6 +748,27 @@ def notes_delete(note_id: int, user=Depends(current_user)):
     return {"ok": True, "id": note_id}
 
 
+# ---------- 1b. TẠO HỘI THOẠI TRỐNG ----------
+@app.post("/conversations")
+def conversation_create(user=Depends(current_user)):
+    """Tạo hội thoại nội bộ TRƯỚC câu hỏi đầu tiên.
+
+    Vì sao cần: file 'dùng xong bỏ' phải gắn vào một conversation_id có thật,
+    nên luồng cũ bắt người dùng hỏi một câu trước rồi mới tải file được. Tab
+    "Kiểm tra pháp lý" làm ngược lại — tải hồ sơ lên trước, hỏi sau — nên cho
+    tạo hội thoại rỗng ngay khi cần."""
+    require(user, INTERNAL_ROLES)
+    # Gắn mốc thời gian vào tiêu đề: một người kiểm tra chục hồ sơ một ngày,
+    # danh sách hội thoại toàn dòng "Kiểm tra pháp lý" giống hệt nhau thì
+    # không mở lại đúng phiên nào được.
+    from zoneinfo import ZoneInfo
+    stamp = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).strftime("%d/%m %H:%M")
+    conv = rag.start_conversation(user["id"], "internal", None,
+                                  title=f"Kiểm tra pháp lý {stamp}",
+                                  kind="legal")
+    return {"conversation_id": conv}
+
+
 # ---------- 2. UPLOAD FILE TRONG CHAT ----------
 class UploadIn(BaseModel):
     conversation_id: int
@@ -676,8 +784,9 @@ def upload_in_chat(body: UploadIn, user=Depends(current_user)):
         # File tạm gắn vào cuộc trao đổi và sẽ được đọc lại làm ngữ cảnh —
         # phải chắc cuộc trao đổi là của chính người này.
         check_conversation(user, body.conversation_id, "internal")
-        n = rag.add_temp_file(body.conversation_id, user["id"], body.filename, body.content)
-        return {"ok": True, "mode": "temp", "chunks": n,
+        n, temp_id = rag.add_temp_file(body.conversation_id, user["id"],
+                                       body.filename, body.content)
+        return {"ok": True, "mode": "temp", "chunks": n, "temp_file_id": temp_id,
                 "note": "File dùng xong bỏ — tự xóa sau 6 giờ, không vào kho."}
     # mode == 'save' → vào hàng chờ duyệt
     from app.ingest import split_document
@@ -698,6 +807,111 @@ def upload_in_chat(body: UploadIn, user=Depends(current_user)):
         db.audit(conn, user["id"], "upload_save", "documents", doc_id, {"file": body.filename})
     return {"ok": True, "mode": "save", "document_id": doc_id,
             "note": "Đã vào hàng chờ duyệt. Duyệt xong mới thành tri thức lâu dài."}
+
+
+_EXTRACT_UPLOAD_EXT = {".pdf", ".docx", ".doc", ".txt", ".md", ".csv", ".xlsx",
+                       ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"}
+
+
+@app.post("/upload/extract")
+async def upload_extract(conversation_id: int = Form(...),
+                         file: UploadFile = File(...),
+                         user=Depends(current_user)):
+    """File 'dùng xong bỏ' cho MỌI định dạng kho đọc được (.pdf, .docx, ảnh…).
+
+    Khác POST /upload (trình duyệt tự đọc text nên chỉ nhận .txt/.md/.csv):
+    ở đây MÁY CHỦ trích văn bản + OCR bằng đúng bộ đọc của kho — đường đưa
+    hồ sơ khách gửi (docx/pdf/scan) vào tab Kiểm tra pháp lý. File chỉ nằm
+    trong thư mục tạm lúc trích, KHÔNG vào kho, không lưu lại."""
+    import tempfile
+
+    require(user, INTERNAL_ROLES)
+    check_conversation(user, conversation_id, "internal")
+    from app.ingest import ExtractionError, extract_text_with_metadata
+
+    safe = _safe_filename(file.filename or "tai_lieu")
+    suffix = Path(safe).suffix.lower()
+    if suffix not in _EXTRACT_UPLOAD_EXT:
+        raise HTTPException(400, f"Chưa hỗ trợ định dạng {suffix or '(không rõ)'} "
+                                 "cho file đính kèm hội thoại")
+    limit = MAX_UPLOAD_MB * 1024 * 1024
+    size = 0
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, f"Tệp vượt quá {MAX_UPLOAD_MB} MB")
+                tmp.write(chunk)
+        # OCR một bản scan có thể mất hàng phút CPU — chạy trong threadpool,
+        # đừng treo event loop (nghẽn là MỌI request khác đứng theo, kể cả
+        # nhịp tim SSE đang chống 524).
+        from fastapi.concurrency import run_in_threadpool
+        try:
+            extraction = await run_in_threadpool(extract_text_with_metadata, tmp_path)
+        except ExtractionError as e:
+            raise HTTPException(400, f"Không đọc được nội dung: {e.message} {e.hint}")
+        # File .docx: giữ thêm BẢN GỐC (không chỉ text) trong data/work — luồng
+        # "tạo bộ file" dùng nó làm khuôn giữ định dạng. Hàng tạm như temp_files:
+        # gỡ chip hoặc quá 6 giờ là mất.
+        kept_path = None
+        if suffix == ".docx":
+            import shutil as _shutil
+            import uuid as _uuid
+            keep_dir = DATA_WORK / "chat_uploads" / str(conversation_id)
+            keep_dir.mkdir(parents=True, exist_ok=True)
+            kept = keep_dir / f"{_uuid.uuid4().hex[:8]}_{safe}"
+            _shutil.copyfile(tmp_path, kept)
+            kept_path = str(kept)
+        n, temp_id = await run_in_threadpool(
+            rag.add_temp_file, conversation_id, user["id"], safe, extraction.text,
+            kept_path)
+    finally:
+        await file.close()
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "chat_temp_upload", "conversation",
+                 conversation_id, {"file": safe, "bytes": size,
+                                   "status": extraction.status})
+    note = "File dùng xong bỏ — tự xóa sau 6 giờ, không vào kho."
+    if extraction.status == "warning":
+        note += (" LƯU Ý: file là bản scan/trích xuất có cảnh báo — nội dung "
+                 "đọc ra có thể thiếu hoặc sai ký tự.")
+    return {"ok": True, "mode": "temp", "filename": safe, "chunks": n,
+            "temp_file_id": temp_id,
+            "warnings": extraction.warnings, "status": extraction.status,
+            "text_chars": len(extraction.text or ""), "note": note}
+
+
+@app.get("/conversations/{conv_id}/temp-files")
+def conversation_temp_files(conv_id: int, user=Depends(current_user)):
+    """File 'dùng xong bỏ' còn hạn của một hội thoại — tab Kiểm tra pháp lý mở
+    lại phiên cũ thì dựng lại đúng các chip đính kèm còn dùng được (file quá
+    6 giờ đã tự xoá, không dựng lại để người dùng khỏi tưởng bot còn đọc)."""
+    require(user, INTERNAL_ROLES)
+    check_conversation(user, conv_id, "internal")
+    return {"items": rag.list_temp_files(conv_id)}
+
+
+@app.delete("/temp-files/{temp_id}")
+def temp_file_delete(temp_id: int, user=Depends(current_user)):
+    """Gỡ một file 'dùng xong bỏ' THẬT SỰ (không chỉ ẩn chip trên giao diện).
+
+    Quyền sở hữu đi qua check_conversation — temp_files không có RLS."""
+    require(user, INTERNAL_ROLES)
+    conv_id = rag.delete_temp_file(temp_id)
+    if conv_id is None:
+        return {"ok": True, "note": "File đã hết hạn hoặc đã xoá trước đó."}
+    check_conversation(user, conv_id, "internal")
+    rag.remove_temp_file(temp_id)
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "delete_temp_file", "conversation", conv_id,
+                 {"temp_file_id": temp_id})
+    return {"ok": True}
 
 
 # ---------- 3. DUYỆT NHÃN ----------
@@ -871,6 +1085,11 @@ def learn_review(message_id: int, body: LearnIn, user=Depends(current_user)):
     require_reviewer(user)
     if body.action not in ("approve", "edit", "reject"):
         raise HTTPException(400, "action không hợp lệ")
+    # Chỉ hai mức: 'internal' (mặc định) và 'public'. KHÔNG nhận 'client' — bản
+    # ghi hỏi đáp không gắn client_id nào, đặt mức 'client' sẽ tạo tài liệu mà
+    # RLS lọc theo khách hàng không ai đọc được (hoặc lọt sang khách khác).
+    if body.access_level not in ("internal", "public"):
+        raise HTTPException(400, "access_level chỉ nhận 'internal' hoặc 'public'")
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT m.content,
@@ -1097,14 +1316,21 @@ def documents_list(user=Depends(current_user), q: str = "", doc_type: str = "", 
 
 @app.get("/drive/sync-status")
 def drive_sync_status(user=Depends(current_user)):
-    """Trạng thái lần quét Google Drive gần nhất (app/auto_learn.py ghi lại).
+    """Trạng thái lần quét kho tài liệu gần nhất.
+
+    Từ 27/08/2026 nguồn là THƯ MỤC TRÊN MÁY CHỦ (app/local_learn.py); máy chủ
+    còn khai DRIVE_FOLDER_ID thì vẫn là bộ quét Drive (app/auto_learn.py). Cả
+    hai ghi chung một khoá trạng thái, phân biệt bằng trường `source`.
 
     Đây là nơi admin biết bot đã học file nào, file nào bị bỏ qua và lý do —
     không cần SSH vào máy chủ xem log."""
     require_reviewer(user)
     raw = settings.get("drive_sync_status")
     data = json.loads(raw) if raw else None
+    source = (data or {}).get("source") or ("drive" if os.getenv("DRIVE_FOLDER_ID") else "local")
     return {
+        "source": source,
+        "library_root": (data or {}).get("root"),
         "configured": bool(raw) or bool(os.getenv("DRIVE_FOLDER_ID")),
         "last_run": data,
         # Lỗi CHƯA XỬ LÝ, tích luỹ qua mọi lần quét. Khác `last_run.error_items`
@@ -1371,15 +1597,56 @@ def models_benchmark(user=Depends(current_user), model: str | None = None):
     from app.models import benchmark
     res = benchmark(model)
     if res.get("ok"):
-        # Ước lượng thời gian một lượt hỏi điển hình với ngân sách ngữ cảnh
-        # đang đặt — cho admin thấy hậu quả của việc nới ngân sách.
-        ctx_chars = settings.get_int("context_char_budget", 6000)
+        # Ước lượng thời gian một lượt hỏi điển hình — cho admin thấy hậu quả
+        # của việc nới ngân sách.
+        #
+        # Chính sách 20/08/2026 đặt context_char_budget=0 và llm_num_predict=-1
+        # (nghĩa là KHÔNG CẮT). Công thức cũ chia thẳng hai con số đó nên ra
+        # ~2 giây trong khi máy chạy vài phút — sai tới mức admin nới thêm
+        # ngân sách vì tưởng còn dư. Khi không có trần, phải ước từ trần THẬT:
+        # số đoạn lấy về × độ dài mỗi đoạn, và cửa sổ ngữ cảnh của model.
+        ctx_chars = settings.get_int("context_char_budget", 0)
+        if ctx_chars <= 0:
+            top_k = settings.get_int("retrieval_top_k", 24)
+            per_chunk = settings.get_int("chunk_char_limit", 0)
+            if per_chunk <= 0:
+                per_chunk = 2500      # đoạn giữ trọn — cỡ trung bình đo trên kho
+            ctx_chars = top_k * per_chunk
         # ~3 ký tự tiếng Việt cho một token, cộng hồ sơ công ty + lịch sử + câu hỏi
         est_prompt = ctx_chars / 3 + 2000
+        cap = settings.get_int("llm_num_predict", -1)
+        # -1/0 = không chặn độ dài; lấy độ dài câu trả lời điển hình đo được
+        # trên kho này (~1200 token) thay cho một trần không tồn tại.
+        est_out = cap if cap > 0 else 1200
+        # Prompt không thể vượt cửa sổ ngữ cảnh — Ollama cắt phần đầu chứ không
+        # đọc thêm. Cửa sổ chứa CẢ phần sinh ra, nên trần của prompt là
+        # num_ctx trừ đi chỗ dành cho câu trả lời.
+        num_ctx = settings.get_int("llm_num_ctx", 32768)
+        if num_ctx > 0:
+            est_prompt = min(est_prompt, max(num_ctx - est_out, 512))
         r, w = res.get("read_tok_s"), res.get("write_tok_s")
         if r and w:
-            res["uoc_tinh_giay"] = round(est_prompt / r + settings.get_int(
-                "llm_num_predict", 700) / w, 1)
+            giay = est_prompt / r + est_out / w
+            # Lượt "bot đọc lại" là một lượt sinh NỮA, nhưng nó chỉ gửi câu hỏi
+            # + bản nháp (rag.review_answer), KHÔNG gửi lại tài liệu tham chiếu
+            # — nên cộng đúng phần đó, đừng nhân đôi cả thời gian đọc ngữ cảnh.
+            mode = (settings.get("answer_review", "auto") or "auto").strip().lower()
+            them = est_out / r + est_out / w
+            ghi_chu = ""
+            if mode == "always":
+                giay += them
+                ghi_chu = ", đã cộng lượt bot đọc lại"
+            elif mode not in ("off", "0", "false", "no"):
+                # auto: chỉ chạy khi câu trả lời có dấu hiệu chưa ổn — mà câu
+                # dài hơn REVIEW_LONG_CHARS là đã đủ bật. Câu trả lời điển hình
+                # ở đây (~est_out token ≈ 3× ký tự) thường vượt ngưỡng đó, nên
+                # báo cả mức xấu nhất thay vì im lặng bỏ qua.
+                res["uoc_tinh_giay_toi_da"] = round(giay + them, 1)
+                ghi_chu = ", chưa gồm lượt bot đọc lại (chạy khi câu dài)"
+            res["uoc_tinh_giay"] = round(giay, 1)
+            res["uoc_tinh_dien_giai"] = (
+                f"~{int(est_prompt)} token đọc vào, ~{est_out} token viết ra"
+                + ghi_chu)
     return res
 
 
@@ -1483,10 +1750,13 @@ async def files_upload(
             "extraction_status": extraction_status, "note": note}
 
 
-@app.get("/files/{doc_id}/download")
-def files_download(doc_id: int, user=Depends(current_user)):
-    """Tải bản gốc tài liệu. Quyền mở dùng CHUNG một hàm với cơ chế che tên
-    (rag.can_open_doc) nên không thể tải thứ mình không được xem."""
+def _original_file(doc_id: int, user) -> tuple[Path, str]:
+    """Tìm tệp gốc của tài liệu VÀ kiểm quyền mở — dùng chung cho tải về lẫn
+    xem trước, để hai cửa không bao giờ lệch nhau về phân quyền.
+
+    Quyền mở dùng CHUNG một hàm với cơ chế che tên (rag.can_open_doc) nên
+    không thể mở thứ mình không được xem. Đường dẫn bị nhốt trong DATA_RAW.
+    """
     require(user, INTERNAL_ROLES)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
@@ -1512,17 +1782,167 @@ def files_download(doc_id: int, user=Depends(current_user)):
     path = Path(row[1])
     if not path.is_absolute():
         path = Path.cwd() / path
-    # Chốt an toàn: đường dẫn phải nằm trong thư mục dữ liệu
-    data_root = (Path.cwd() / DATA_RAW).resolve()
+    # Chốt an toàn: đường dẫn phải nằm trong một trong các thư mục dữ liệu.
+    # Dùng CHUNG local_learn.allowed_roots (KHO tài liệu + DATA_RAW) — tách kho
+    # ra ổ khác mà rào chỉ biết DATA_RAW thì mọi nút Tải về/Xem trước trả 404.
+    from app.local_learn import allowed_roots
     try:
         resolved = path.resolve(strict=True)
-        resolved.relative_to(data_root)
-    except (FileNotFoundError, ValueError):
+    except (FileNotFoundError, OSError):
         raise HTTPException(404, "Tệp gốc không còn trên máy chủ")
+    for root in allowed_roots():
+        try:
+            resolved.relative_to(root)
+            break
+        except ValueError:
+            continue
+    else:
+        raise HTTPException(404, "Tệp gốc nằm ngoài thư mục dữ liệu được phép")
+    return resolved, row[0] or resolved.stem
 
+
+@app.get("/files/{doc_id}/download")
+def files_download(doc_id: int, user=Depends(current_user)):
+    """Tải bản gốc tài liệu về máy người dùng."""
+    resolved, _title = _original_file(doc_id, user)
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user["id"], "download_document", "documents", doc_id, {})
     return FileResponse(resolved, filename=resolved.name.split("_", 1)[-1])
+
+
+# Các định dạng trình duyệt tự mở được — trả thẳng, không cần chuyển đổi.
+_INLINE_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".txt", ".md"}
+# Định dạng Office: chuyển sang PDF một lần bằng LibreOffice rồi cache lại.
+_CONVERT_SUFFIXES = {".docx", ".doc", ".xlsx", ".csv"}
+DATA_WORK = Path(os.getenv("DATA_WORK", "./data/work"))
+
+
+def _preview_pdf(resolved: Path, doc_id: int) -> Path:
+    """Bản PDF xem trước của một file Office, sinh một lần rồi dùng lại.
+
+    Cache theo mtime: file gốc đổi (Drive đồng bộ bản mới) thì sinh lại.
+    LibreOffice đã có sẵn trên máy chủ (update.sh cài libreoffice-writer cho
+    khâu đọc .doc) — máy dev thiếu thì trả 409 để giao diện lùi về nút Tải về.
+    """
+    import shutil as _shutil
+    import subprocess
+    import tempfile
+
+    out_dir = DATA_WORK / "preview"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{doc_id}.pdf"
+    try:
+        if out.exists() and out.stat().st_mtime >= resolved.stat().st_mtime:
+            return out
+    except OSError:
+        pass
+    soffice = _shutil.which("libreoffice") or _shutil.which("soffice")
+    if not soffice:
+        raise HTTPException(409, "Máy chủ chưa có LibreOffice để tạo bản xem "
+                                 "trước — hãy dùng nút Tải về.")
+    with tempfile.TemporaryDirectory() as tmp:
+        # Hồ sơ LibreOffice riêng cho mỗi lượt — cùng lý do với khâu đọc .doc
+        # trong ingest: hai lượt chuyển đổi chạy song song không giẫm profile.
+        cmd = [soffice, "--headless", "--convert-to", "pdf",
+               "--outdir", tmp, f"-env:UserInstallation=file://{tmp}/profile",
+               str(resolved)]
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=120, check=True)
+        except (subprocess.SubprocessError, OSError):
+            raise HTTPException(409, "Chưa chuyển được file này sang PDF để xem "
+                                     "trước — hãy dùng nút Tải về.")
+        produced = Path(tmp) / (resolved.stem + ".pdf")
+        if not produced.exists():
+            raise HTTPException(409, "Chưa chuyển được file này sang PDF để xem "
+                                     "trước — hãy dùng nút Tải về.")
+        _shutil.move(str(produced), str(out))
+    return out
+
+
+@app.get("/files/{doc_id}/preview")
+def files_preview(doc_id: int, user=Depends(current_user)):
+    """XEM TRƯỚC bản gốc ngay trong trình duyệt (không phải tải về).
+
+    PDF/ảnh/text trả thẳng; .docx/.doc/.xlsx chuyển sang PDF một lần bằng
+    LibreOffice rồi cache ở data/work/preview. Cùng chốt quyền với tải về
+    (_original_file) — không có cửa phân quyền thứ hai."""
+    resolved, title = _original_file(doc_id, user)
+    suffix = resolved.suffix.lower()
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "preview_document", "documents", doc_id, {})
+    if suffix in _INLINE_SUFFIXES:
+        media = {".pdf": "application/pdf", ".txt": "text/plain; charset=utf-8",
+                 ".md": "text/plain; charset=utf-8"}.get(suffix)
+        return FileResponse(resolved, media_type=media,
+                            filename=resolved.name.split("_", 1)[-1],
+                            content_disposition_type="inline")
+    if suffix in {".tif", ".tiff", ".bmp"} or suffix in _CONVERT_SUFFIXES:
+        if suffix in {".tif", ".tiff", ".bmp"}:
+            # Trình duyệt không mở TIFF/BMP — nhóm này chưa có bản xem trước.
+            raise HTTPException(409, "Định dạng ảnh này trình duyệt không mở "
+                                     "được — hãy dùng nút Tải về.")
+        pdf = _preview_pdf(resolved, doc_id)
+        return FileResponse(pdf, media_type="application/pdf",
+                            filename=f"{title}.pdf",
+                            content_disposition_type="inline")
+    raise HTTPException(409, "Định dạng này chưa có bản xem trước — hãy dùng "
+                             "nút Tải về.")
+
+
+# ---------- 8a2. FILE MẪU: DANH SÁCH + TẢI BẢN ĐÃ ĐIỀN ----------
+@app.get("/templates/files")
+def template_files(user=Depends(current_user)):
+    """Danh sách file trong kệ HỢP ĐỒNG MẪU / THƯ MẪU - BIỂU MẪU cho menu
+    "Tạo file mẫu" dưới khung chat. Đi qua RLS của chính người hỏi."""
+    require(user, INTERNAL_ROLES)
+    with db.session(role="internal", dept_ids=user["dept_ids"],
+                    is_banqt=user["is_banqt"],
+                    can_finance=user["can_finance"]) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, title, doc_type, source_path,
+                                  access_level, department_id, client_id
+                             FROM documents
+                            WHERE doc_type IN ('mau_hd','thu_mau')
+                              AND approved AND label_verified
+                              AND coalesce(active,true)
+                            ORDER BY doc_type, title""")
+            rows = cur.fetchall()
+    # RLS internal cho documents là USING(true) — quyền MỞ thật sự nằm ở ma
+    # trận access_rules, cùng chốt với /files/{id}/download. Không lọc ở đây
+    # là kê cho người dùng những mẫu mà bấm vào chỉ nhận 403.
+    rules = rag.load_access_rules()
+    items = []
+    for doc_id, title, doc_type, source_path, access_level, dept_id, client_id in rows:
+        doc = {"access_level": access_level, "department_id": dept_id,
+               "doc_type": doc_type, "client_id": client_id, "title": title}
+        if not rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"],
+                                doc, can_finance=user["can_finance"],
+                                rules=rules, dept_codes=user["dept_codes"]):
+            continue
+        folder = ""
+        if source_path:
+            folder = Path(source_path).parent.name
+        items.append({"id": doc_id, "title": title, "doc_type": doc_type,
+                      "folder": folder,
+                      "fillable": bool(source_path and
+                                       source_path.lower().endswith(".docx"))})
+    return {"items": items}
+
+
+@app.get("/template-fills/{token}/download")
+def template_fill_download(token: str, user=Depends(current_user)):
+    """Tải file mẫu ĐÃ ĐIỀN chủ thể (tạo từ khung chat). File là hàng tạm
+    trong data/work/template_fills, tự dọn sau 24 giờ."""
+    require(user, INTERNAL_ROLES)
+    from app import template_fill as _tf
+    path = _tf.find_fill_file(token)
+    if path is None:
+        raise HTTPException(404, "File đã điền không còn trên máy chủ (quá 24 "
+                                 "giờ hoặc token sai). Hãy tạo lại từ khung chat.")
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "download_template_fill", "template_fill",
+                 None, {"token": token})
+    return FileResponse(path, filename=path.name)
 
 
 # ---------- 8b. CÀI ĐẶT AI (phong cách tư vấn, bản đồ Drive) ----------
@@ -1647,6 +2067,11 @@ def feedback_review(fid: int, body: FeedbackReviewIn, user=Depends(current_user)
     require_reviewer(user)
     if body.action not in ("apply", "reject"):
         raise HTTPException(400, "action chỉ nhận 'apply' hoặc 'reject'")
+    # Cùng lý do như /learn/{id}: bản ghi hỏi đáp không gắn client_id nào, đặt
+    # mức 'client' là tạo tài liệu mồ côi — RLS lọc theo khách hàng nên không
+    # ai đọc được, mà thống kê "thiếu chủ sở hữu" thì kêu mãi.
+    if body.access_level not in ("internal", "public"):
+        raise HTTPException(400, "access_level chỉ nhận 'internal' hoặc 'public'")
 
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:

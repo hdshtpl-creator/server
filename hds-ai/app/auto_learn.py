@@ -431,7 +431,7 @@ def compose_title(stem: str, title_context=None) -> str:
 
 
 def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=None,
-              prev_approved=False):
+              prev_approved=False, source_kind="drive"):
     """Học một file; ``diagnostics`` nhận method/warnings/lỗi mà không phá API bool cũ.
 
     ``prev_approved``: bản cũ của CHÍNH file này đã được duyệt và đang phục vụ
@@ -494,11 +494,11 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
                 (title, source_path, drive_file_id, checksum, doc_type, access_level,
                  client_id, department_id, matter_id, approved, label_verified, source_kind, summary,
                  extraction_status,extraction_error,source_version,person_folder)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'drive',%s,%s,%s,%s,%s) RETURNING id""",
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                 (title, str(path), drive_id, checksum,
                  labels["doc_type"], labels["access_level"],
                  labels["client_id"], labels["department_id"], labels.get("matter_id"),
-                 should_approve, should_approve, summary,
+                 should_approve, should_approve, source_kind, summary,
                  "warning" if extraction.warnings else "ready",
                  json.dumps(extraction.warnings, ensure_ascii=False) if extraction.warnings else None,
                  source_version, labels.get("title_context")))
@@ -596,6 +596,24 @@ def _write_status(started_at, folder_id, counts, new_items, updated_items,
 def run(dry_run=False):
     if not FOLDER_ID:
         print("[LỖI] Chưa đặt DRIVE_FOLDER_ID trong .env")
+        sys.exit(1)
+    # Kho đã chuyển về máy chủ (27/08/2026) thì tài liệu mang danh tính
+    # 'local:…'. Chạy bộ quét Drive lúc này sẽ KHÔNG nhận ra chúng và học lại
+    # toàn bộ thành bản ghi trùng. Muốn quay lại Drive thật thì đảo danh tính
+    # trước: python -m app.local_learn --chuyen-doi --nguoc
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM documents "
+                            "WHERE drive_file_id LIKE 'local:%'")
+                n_local = cur.fetchone()[0]
+    except Exception:  # noqa: BLE001 — không chặn được thì thôi, đừng chết ở đây
+        n_local = 0
+    if n_local and not dry_run:
+        print(f"[DỪNG] {n_local} tài liệu đang mang danh tính KHO TRÊN MÁY CHỦ.")
+        print("       Quét Drive bây giờ sẽ học lại toàn bộ thành bản ghi TRÙNG.")
+        print("       Muốn quay lại Drive:  python -m app.local_learn --chuyen-doi --nguoc")
+        print("       Muốn dùng kho local:  python -m app.local_learn")
         sys.exit(1)
     started_at = datetime.now(timezone.utc)
     service = get_service()

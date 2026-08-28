@@ -19,6 +19,7 @@ import {
   X,
   UserCircle2,
   FilePenLine,
+  Scale,
 } from 'lucide-react';
 
 export const Header: React.FC = () => {
@@ -135,6 +136,18 @@ export const Header: React.FC = () => {
               <MessageSquare className="w-4 h-4" />
               <span className="hidden sm:inline">Hội thoại AI</span>
             </button>
+
+            {showDraftsTab && (
+              <button
+                id="nav-legal-btn"
+                onClick={() => setActiveView('legal')}
+                className={tabClass(activeView === 'legal')}
+                aria-current={activeView === 'legal' ? 'page' : undefined}
+              >
+                <Scale className="w-4 h-4" />
+                <span className="hidden sm:inline">Kiểm tra pháp lý &amp; mẫu</span>
+              </button>
+            )}
 
             {showDraftsTab && (
               <button

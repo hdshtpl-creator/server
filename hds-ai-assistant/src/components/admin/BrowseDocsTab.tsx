@@ -12,6 +12,7 @@ import {
   Building,
   ShieldAlert,
   Download,
+  Eye,
 } from 'lucide-react';
 
 export const BrowseDocsTab: React.FC = () => {
@@ -20,6 +21,16 @@ export const BrowseDocsTab: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
+
+  // Xem bản gốc ngay trong trình duyệt — người duyệt cần nhìn tận mắt trang
+  // scan trước khi quyết định, không phải tải về rồi mở bằng ứng dụng khác.
+  const handlePreview = async (docId: number) => {
+    try {
+      await api.previewDocument(docId);
+    } catch (err: any) {
+      showToast(err?.message || 'Không mở được bản xem trước.', 'error');
+    }
+  };
 
   const handleDownload = async (docId: number, title: string) => {
     setDownloadingId(docId);
@@ -196,6 +207,15 @@ export const BrowseDocsTab: React.FC = () => {
 
                     <td className="p-4 text-right">
                       {doc.can_open ? (
+                        <span className="inline-flex items-center gap-1.5">
+                        <button
+                          onClick={() => handlePreview(doc.id)}
+                          className="px-3 py-1.5 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg text-xs inline-flex items-center gap-1 border border-blue-200 dark:border-slate-700 transition-colors"
+                          title="Mở bản gốc ngay trong trình duyệt"
+                        >
+                          <Eye className="w-3 h-3" />
+                          <span>Xem trước</span>
+                        </button>
                         <button
                           onClick={() => handleDownload(doc.id, doc.title)}
                           disabled={downloadingId === doc.id}
@@ -209,6 +229,7 @@ export const BrowseDocsTab: React.FC = () => {
                           )}
                           <span>Tải về</span>
                         </button>
+                        </span>
                       ) : (
                         <button
                           disabled

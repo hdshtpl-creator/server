@@ -25,8 +25,8 @@ interface AppContextType {
   reloadUsers: () => Promise<void>;
 
   // Điều hướng
-  activeView: 'chat' | 'drafts' | 'admin';
-  setActiveView: (view: 'chat' | 'drafts' | 'admin') => void;
+  activeView: 'chat' | 'legal' | 'drafts' | 'admin';
+  setActiveView: (view: 'chat' | 'legal' | 'drafts' | 'admin') => void;
   adminTab: string;
   setAdminTab: (tab: string) => void;
 
@@ -57,7 +57,7 @@ interface AppContextType {
   setConvServerId: (convId: string, serverId: number) => void;
   setConvTempFile: (
     convId: string,
-    tempFile: { filename: string; content: string } | undefined
+    tempFile: { filename: string; content: string; id?: number } | undefined
   ) => void;
   /** Khoá mọi lượt gửi mới cho tới khi backend phát sự kiện `done`. */
   isChatStreaming: boolean;
@@ -127,7 +127,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     Boolean(localStorage.getItem('hds_access_token'))
   );
 
-  const [activeView, setActiveView] = useState<'chat' | 'drafts' | 'admin'>('chat');
+  const [activeView, setActiveView] = useState<'chat' | 'legal' | 'drafts' | 'admin'>('chat');
   const [adminTab, setAdminTab] = useState<string>('overview');
 
   const [apiBaseUrl, setApiBaseUrlState] = useState<string>(

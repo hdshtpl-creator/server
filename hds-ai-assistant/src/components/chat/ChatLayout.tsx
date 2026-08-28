@@ -36,7 +36,29 @@ export const ChatLayout: React.FC = () => {
     currentUser,
     isChatStreaming,
     setChatStreaming,
+    showToast,
   } = useApp();
+
+  /**
+   * Gỡ tài liệu tạm — xoá THẬT trên máy chủ, không chỉ ẩn chip.
+   *
+   * Bản trước chỉ xoá state cục bộ: bản ghi temp_files vẫn còn, nên lượt hỏi
+   * sau (hoặc khi đính kèm file thứ hai) bot vẫn đọc lại đúng tài liệu người
+   * dùng tưởng đã gỡ. Hồ sơ khách gỡ nhầm rồi vẫn nằm trong ngữ cảnh là chuyện
+   * không chấp nhận được ở một hãng luật.
+   */
+  const removeTempFile = async () => {
+    const id = activeConversation?.temp_file?.id;
+    if (id != null) {
+      try {
+        await api.deleteTempFile(id);
+      } catch (err: any) {
+        showToast(err?.message || 'Không gỡ được tài liệu tạm trên máy chủ.', 'error');
+        return; // giữ chip để người dùng biết file vẫn còn
+      }
+    }
+    setConvTempFile(activeConvId, undefined);
+  };
 
   const [inputQuestion, setInputQuestion] = useState('');
   const [useMethod, setUseMethod] = useState(false);
@@ -160,35 +182,50 @@ export const ChatLayout: React.FC = () => {
         },
         (evt) => {
           if (evt.type === 'start' && evt.conversation_id) {
-            // Ghi nhớ mã hội thoại do backend cấp để các lượt sau nối đúng ngữ cảnh
+            // Ghi nhớ mã hội thoại do backend cấp để các lượt sau nối đúng ngữ cảnh.
             setConvServerId(activeConvId, evt.conversation_id);
-            return;
-          }
-          if (evt.type === 'meta') {
-            // Dựng bong bóng nhưng vẫn khoá lượt gửi mới. Chỉ sự kiện
-            // `done` mới xác nhận backend đã lưu xong toàn bộ câu trả lời.
+            // Dựng bong bóng NGAY từ đây (trước cả meta) để các mốc tiến trình
+            // 'status' phát trong lúc máy chủ tìm kho có chỗ hiển thị — máy
+            // chậm mà màn hình im lặng là người dùng tưởng treo.
             addMessageToConv(activeConvId, {
               id: aiMsgId,
               sender: 'ai',
               text: '',
-              sources: evt.sources,
               timestamp: nowLabel(),
               isStreaming: true,
-              grounding_status: evt.grounding_status,
-              answer_mode: evt.answer_mode,
+              statusLabel: 'Đang chuẩn bị…',
             });
             opened = true;
             return;
           }
+          if (evt.type === 'status' && evt.label) {
+            const label = evt.label;
+            updateMessage(aiMsgId, (m) => ({ ...m, statusLabel: label }));
+            return;
+          }
+          if (evt.type === 'meta') {
+            // Nguồn trích dẫn đã biết trước khi model viết chữ nào. Vẫn khoá
+            // lượt gửi mới — chỉ `done` mới xác nhận backend đã lưu xong.
+            updateMessage(aiMsgId, (m) => ({
+              ...m,
+              sources: evt.sources,
+              grounding_status: evt.grounding_status,
+              answer_mode: evt.answer_mode,
+            }));
+            return;
+          }
           if (evt.type === 'delta' && evt.text) {
             const piece = evt.text;
-            updateMessage(aiMsgId, (m) => ({ ...m, text: m.text + piece }));
+            updateMessage(aiMsgId, (m) => ({
+              ...m, text: m.text + piece, statusLabel: undefined,
+            }));
             return;
           }
           if (evt.type === 'replace') {
             updateMessage(aiMsgId, (m) => ({
               ...m,
               text: evt.text ?? m.text,
+              statusLabel: undefined,
               grounding_status: evt.grounding_status ?? m.grounding_status,
               answer_mode: evt.answer_mode ?? m.answer_mode,
             }));
@@ -200,6 +237,7 @@ export const ChatLayout: React.FC = () => {
             updateMessage(aiMsgId, (m) => ({
               ...m,
               isStreaming: false,
+              statusLabel: undefined,
               latency_ms: evt.latency_ms,
               serverMessageId: evt.message_id,
               timings: evt.timings,
@@ -218,10 +256,17 @@ export const ChatLayout: React.FC = () => {
       if (opened) {
         // Đứt giữa chừng: giữ lại phần đã viết, ghi rõ là chưa trọn vẹn — xoá
         // đi thì người dùng mất luôn phần nội dung có thể vẫn dùng được.
+        // Bong bóng giờ mở từ sự kiện 'start' nên có thể CHƯA có chữ nào
+        // (lỗi ngay trong lúc tìm kho) — khi đó hiện hẳn lỗi, đừng ghép chuỗi
+        // vào text rỗng thành một dòng nghiêng khó hiểu.
         updateMessage(aiMsgId, (m) => ({
           ...m,
           isStreaming: false,
-          text: `${m.text}\n\n_(Câu trả lời bị ngắt giữa chừng: ${errMsg})_`,
+          statusLabel: undefined,
+          text: m.text
+            ? `${m.text}\n\n_(Câu trả lời bị ngắt giữa chừng: ${errMsg})_`
+            : errMsg,
+          isError: !m.text,
         }));
       } else {
         addMessageToConv(activeConvId, {
@@ -268,7 +313,7 @@ export const ChatLayout: React.FC = () => {
                   {activeConversation.temp_file.filename}
                 </span>
                 <button
-                  onClick={() => setConvTempFile(activeConvId, undefined)}
+                  onClick={() => void removeTempFile()}
                   className="hover:text-amber-600 ml-0.5 p-0.5"
                   title="Gỡ tài liệu tạm"
                   aria-label="Gỡ tài liệu tạm"

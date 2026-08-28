@@ -237,7 +237,11 @@ export const FeedbackReviewTab: React.FC = () => {
                       onChange={(e) => patch(key, { access_level: e.target.value })}
                       className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 dark:text-slate-100 rounded-xl text-xs font-medium focus:ring-2 focus:ring-hds-blue focus:outline-none"
                     >
-                      {ACCESS_LEVELS.map((a) => (
+                      {/* Chỉ hai mức. Bản ghi hỏi đáp không gắn khách hàng
+                          nào, nên mức 'client' sinh ra tài liệu mồ côi: RLS lọc
+                          theo client_id nên KHÔNG ai đọc được, trong khi giao
+                          diện vẫn báo "đã nạp thành công". Máy chủ cũng chặn. */}
+                      {ACCESS_LEVELS.filter((a) => a.value !== 'client').map((a) => (
                         <option key={a.value} value={a.value}>
                           {a.label}
                         </option>

@@ -22,6 +22,7 @@ import {
   Undo2,
   ExternalLink,
   Download,
+  Eye,
   Quote,
   MapPin,
 } from 'lucide-react';
@@ -209,6 +210,38 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
     }
   };
 
+  const previewSource = async (docId: number) => {
+    try {
+      await api.previewDocument(docId);
+    } catch (err: any) {
+      // 409 = định dạng chưa có bản xem trước — máy chủ đã gợi ý dùng Tải về.
+      showToast(err?.message || 'Không mở được bản xem trước.', 'error');
+    }
+  };
+
+  // File đã tạo từ chat (luồng "Tạo file mẫu" / "Tạo bộ file"): token nằm
+  // trong evidence hệ thống — có thể NHIỀU file một tin nhắn (bộ giấy đề nghị
+  // thanh toán + biên bản nghiệm thu). Đặt ở đây — bộ render tin nhắn dùng
+  // chung — để nút tải hiện cả khi hội thoại được mở lại từ lịch sử ở tab
+  // Hội thoại AI, không chỉ ở tab Kiểm tra pháp lý lúc vừa tạo xong.
+  const fillSources = (message.sources || []).filter(
+    (s) =>
+      typeof s.source_locator === 'string' && s.source_locator.startsWith('template_fill#')
+  );
+  const [fillBusyToken, setFillBusyToken] = useState<string | null>(null);
+  const downloadFill = async (src: (typeof fillSources)[number]) => {
+    const token = (src.source_locator as string).split('#', 2)[1] || '';
+    if (!token || fillBusyToken) return;
+    setFillBusyToken(token);
+    try {
+      await api.downloadTemplateFill(token, (src.quote as string) || 'file-da-tao.docx');
+    } catch (err: any) {
+      showToast(err?.message || 'Không tải được file đã tạo.', 'error');
+    } finally {
+      setFillBusyToken(null);
+    }
+  };
+
   const undoNote = async () => {
     if (notedId == null) return;
     try {
@@ -373,7 +406,9 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
               người dùng biết hệ thống đang chạy chứ không treo. */}
           {message.isStreaming && !message.text ? (
             <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-              <span>Đang đọc tài liệu và soạn câu trả lời</span>
+              {/* Mốc tiến trình do máy chủ phát (sự kiện 'status') — cụ thể hoá
+                  từng chặng: tìm kho, tra luật, đọc file mẫu… */}
+              <span>{message.statusLabel || 'Đang đọc tài liệu và soạn câu trả lời'}</span>
               <span className="flex gap-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-hds-navy dark:bg-blue-400 animate-bounce [animation-delay:-0.3s]" />
                 <span className="w-1.5 h-1.5 rounded-full bg-hds-navy dark:bg-blue-400 animate-bounce [animation-delay:-0.15s]" />
@@ -410,6 +445,43 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                   aria-label="Đang viết"
                 />
               )}
+              {/* Sau khi chữ đã chảy xong vẫn còn bước soát lại — hiện mốc để
+                  người dùng biết vì sao câu trả lời chưa "chốt". */}
+              {message.isStreaming && message.text && message.statusLabel && (
+                <div className="mt-2 flex items-center gap-2 text-xs italic text-slate-500 dark:text-slate-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-hds-gold animate-pulse" />
+                  {message.statusLabel}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Nút tải các file đã tạo từ chat (điền mẫu / tạo bộ file) */}
+          {!isUser && !message.isStreaming && fillSources.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1.5">
+              {fillSources.map((src, i) => {
+                const token = (src.source_locator as string).split('#', 2)[1] || '';
+                const label =
+                  fillSources.length === 1
+                    ? 'Tải file đã điền (.docx)'
+                    : `Tải: ${(src.quote as string) || `file ${i + 1}`}`;
+                return (
+                  <button
+                    key={token || i}
+                    type="button"
+                    onClick={() => void downloadFill(src)}
+                    disabled={fillBusyToken !== null}
+                    className="self-start inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-hds-navy text-hds-gold text-xs font-semibold hover:bg-hds-navy-light disabled:opacity-60 transition-colors max-w-full"
+                  >
+                    {fillBusyToken === token ? (
+                      <span className="w-3.5 h-3.5 shrink-0 rounded-full border-2 border-hds-gold border-t-transparent animate-spin" />
+                    ) : (
+                      <Download className="w-3.5 h-3.5 shrink-0" />
+                    )}
+                    <span className="truncate">{label}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -476,7 +548,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                             )}
                             {/* Mở bản gốc trên Drive + tải về — như kho tài liệu / NotebookLM */}
                             <span className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
-                              {src.drive_file_id && (
+                              {/* Chỉ tài liệu học từ Drive mới có link Drive.
+                                  Từ 27/08/2026 kho nằm trên máy chủ: khoá nguồn
+                                  mang tiền tố "local:" — mở bằng Xem trước /
+                                  Tải về bên cạnh, không dựng URL Drive giả. */}
+                              {src.drive_file_id && !String(src.drive_file_id).startsWith('local:') && (
                                 <a
                                   href={`https://drive.google.com/file/d/${src.drive_file_id}/view`}
                                   target="_blank"
@@ -486,6 +562,17 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                                   <ExternalLink className="w-3 h-3" />
                                   Mở bản gốc
                                 </a>
+                              )}
+                              {typeof src.document_id === 'number' && (
+                                <button
+                                  type="button"
+                                  onClick={() => previewSource(src.document_id!)}
+                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-hds-navy dark:text-blue-300 hover:underline"
+                                  title="Mở bản gốc ngay trong trình duyệt (PDF/ảnh xem thẳng, file Word xem bản PDF)"
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  Xem trước
+                                </button>
                               )}
                               {typeof src.document_id === 'number' && (
                                 <button

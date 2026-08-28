@@ -20,7 +20,7 @@ from app import db
 # nghĩa là admin sửa trên web thì bản DB luôn thắng.
 # ---------------------------------------------------------------
 DEFAULTS = {
-    # Phong cách tư vấn cho 3 kênh chat
+    # Phong cách tư vấn cho 4 kênh chat (kênh thứ tư là tab Kiểm tra pháp lý)
     "prompt_public": (
         "Bạn là trợ lý của Công ty Luật HDS, trả lời khách trên website. "
         "Chỉ dựa vào TÀI LIỆU THAM KHẢO bên dưới. "
@@ -82,6 +82,28 @@ DEFAULTS = {
         "Khi dẫn luật, dẫn đủ tên văn bản + số hiệu + điều/khoản đúng như tài "
         "liệu ghi, kèm [Nguồn n]."
     ),
+    # Kênh nội bộ, chế độ "Kiểm tra pháp lý": người dùng tải hồ sơ khách gửi
+    # lên khung chat rồi yêu cầu soi đúng/sai. Khác prompt_internal ở chỗ vai
+    # trò là NGƯỜI RÀ SOÁT: đối chiếu từng điểm của hồ sơ với căn cứ trong kho
+    # (luật, án lệ, bản án, quan điểm pháp lý) và kết luận rõ ràng theo từng
+    # điểm, không tư vấn chung chung.
+    "prompt_legal_review": (
+        "Bạn là luật sư rà soát của Công ty Luật TNHH HDS. Nhiệm vụ: đối chiếu "
+        "HỒ SƠ người dùng cung cấp (file đính kèm trong hội thoại) với căn cứ "
+        "pháp lý trong TÀI LIỆU THAM KHẢO — văn bản luật, án lệ, bản án, quan "
+        "điểm pháp lý và vụ việc tương tự HDS đã xử lý.\n"
+        "Cách trình bày:\n"
+        "1. TÓM TẮT HỒ SƠ: hồ sơ nói về việc gì, các bên là ai (1-3 câu).\n"
+        "2. PHÂN TÍCH TỪNG ĐIỂM: mỗi điểm nêu rõ nội dung trong hồ sơ, căn cứ "
+        "pháp lý đối chiếu (dẫn đủ tên văn bản + số hiệu + Điều/Khoản đúng như "
+        "tài liệu ghi), và kết luận một trong ba mức: ĐÚNG QUY ĐỊNH / CẦN LƯU Ý "
+        "/ TRÁI QUY ĐỊNH — kèm giải thích ngắn.\n"
+        "3. RỦI RO & KHUYẾN NGHỊ: liệt kê rủi ro chính và việc nên làm.\n"
+        "Mỗi nhận định dựa trên tài liệu phải kèm [Nguồn n]. Điểm nào kho chưa "
+        "có căn cứ thì ghi rõ là chưa đủ căn cứ để kết luận, không suy đoán. "
+        "Người chịu trách nhiệm cuối cùng là luật sư phụ trách — bài phân tích "
+        "này là bản rà soát hỗ trợ."
+    ),
     # Tham số sinh câu trả lời
     "llm_temperature": "0.2",
     # ---- Chính sách 20/08/2026: BOT KHÔNG BỊ GIỚI HẠN --------------------
@@ -108,6 +130,15 @@ DEFAULTS = {
     # Bot ĐỌC LẠI câu trả lời: auto = chỉ khi có dấu hiệu chưa ổn (quá dài,
     # bỏ lửng, lặp); always = mọi câu (chậm gấp đôi trên CPU); off = tắt.
     "answer_review": "auto",
+    # BỘ NHỚ DÀI của hội thoại (cơ chế Claude/ChatGPT): hội thoại vượt số lượt
+    # nhớ nguyên văn thì phần cũ được LLM cô đọng thành bản tóm tắt, chạy Ở
+    # LUỒNG NỀN sau khi đã trả lời — không cộng thêm thời gian chờ. Nhờ vậy mở
+    # lại chat cũ dài bao nhiêu bot vẫn nắm được tên khách, số hợp đồng, kết
+    # luận đã chốt từ những lượt đầu.
+    "history_summary_enabled": "true",
+    # Trần độ dài bản tóm tắt (ký tự). To hơn = nhớ chi tiết hơn nhưng mỗi câu
+    # hỏi tốn thêm bấy nhiêu ký tự prompt.
+    "history_summary_max_chars": "2500",
     # Số luồng CPU cho model. 0 = để Ollama tự quyết (đúng cho máy có GPU).
     # Máy chạy CPU đôi khi nhanh hơn khi khai đúng số nhân — thử rồi đo lại.
     "llm_num_thread": "0",
@@ -257,7 +288,7 @@ def get_int(key, fallback):
 
 
 def get_prompt(channel):
-    """Phong cách tư vấn theo kênh: public | internal | portal."""
+    """Phong cách tư vấn theo kênh: public | internal | portal | legal_review."""
     return get(f"prompt_{channel}") or DEFAULTS.get(f"prompt_{channel}", "")
 
 
@@ -266,7 +297,7 @@ def set(key, value, user_id=None):  # noqa: A001 - đặt tên theo nghiệp v�
     if key not in EDITABLE_KEYS:
         raise ValueError(f"Khoá cài đặt không hợp lệ: {key}")
     if key == "drive_map":
-        json.loads(value)  # sai JSON thì báo lỗi ngay, đừng để hỏng lúc đồng bộ Drive
+        json.loads(value)  # sai JSON thì báo lỗi ngay, đừng để hỏng lúc quét kho
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute(

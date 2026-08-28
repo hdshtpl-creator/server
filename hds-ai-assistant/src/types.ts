@@ -49,6 +49,10 @@ export interface BenchmarkResult {
   write_tok_s?: number | null;
   /** Ước tính thời gian một lượt hỏi điển hình với cài đặt hiện tại (giây). */
   uoc_tinh_giay?: number;
+  /** Con số ước tính dựa trên bao nhiêu token đọc vào / viết ra. */
+  uoc_tinh_dien_giai?: string;
+  /** Mức xấu nhất khi answer_review='auto' và lượt bot đọc lại có chạy. */
+  uoc_tinh_giay_toi_da?: number;
 }
 
 /** Một vụ việc cần chú ý, tính trực tiếp từ view v_matter_alerts. */
@@ -216,6 +220,9 @@ export interface ChatMessage {
   timings?: ChatTimings;
   /** Đang chảy chữ về — hiện con trỏ nhấp nháy, ẩn các nút thao tác. */
   isStreaming?: boolean;
+  /** Mốc tiến trình đang chạy ("Đang tìm trong kho tài liệu…") — chỉ hiện khi
+   *  isStreaming, để máy chậm không giống bị treo (kiểu ChatGPT/NotebookLM). */
+  statusLabel?: string;
   /** Trạng thái kiểm chứng sau khi model viết xong. */
   grounding_status?: GroundingStatus;
   answer_mode?: string;
@@ -234,17 +241,21 @@ export interface Conversation {
   temp_file?: {
     filename: string;
     content: string;
+    /** Id bản ghi temp_files trên máy chủ — để nút × gỡ THẬT, không chỉ ẩn chip. */
+    id?: number;
   };
 }
 
 /** Một sự kiện trên dòng trả lời chảy dần (/chat/stream). */
 export interface ChatStreamEvent {
-  type: 'start' | 'meta' | 'delta' | 'replace' | 'done' | 'error';
+  type: 'start' | 'meta' | 'status' | 'delta' | 'replace' | 'done' | 'error';
   conversation_id?: number;
   sources?: Source[];
   used_method?: string | null;
   /** Mẩu chữ mới, chỉ có ở type 'delta'. */
   text?: string;
+  /** Mốc tiến trình đang chạy, chỉ có ở type 'status'. */
+  label?: string;
   message_id?: number;
   latency_ms?: number;
   timings?: ChatTimings;
@@ -252,6 +263,17 @@ export interface ChatStreamEvent {
   message?: string;
   grounding_status?: GroundingStatus;
   answer_mode?: string;
+}
+
+/** Một file trong kệ mẫu (HỢP ĐỒNG MẪU / THƯ MẪU - BIỂU MẪU) — GET /templates/files. */
+export interface TemplateFile {
+  id: number;
+  title: string;
+  doc_type: 'mau_hd' | 'thu_mau' | string;
+  /** Tên thư mục cha trong kho tài liệu trên máy chủ. */
+  folder: string;
+  /** Chỉ file .docx còn tệp gốc mới điền tự động được. */
+  fillable: boolean;
 }
 
 export type DraftStatus =
@@ -506,6 +528,11 @@ export interface DriveSyncItem {
   access_level?: string;
   reason?: string;
   error?: string;
+  /** 'unsupported_format' = đuôi file chưa hỗ trợ (khác hẳn với chưa xác định
+   *  được nhãn: file đúng chỗ nhưng bot không đọc nổi định dạng). */
+  code?: string;
+  /** Chỉ có ở danh sách "không còn tệp" — để IT tra đúng bản ghi. */
+  document_id?: number;
 }
 
 export interface DriveSyncCounts {
@@ -516,6 +543,12 @@ export interface DriveSyncCounts {
   unmapped: number;
   bad_format: number;
   errors: number;
+  /** Chỉ có ở chế độ quét thư mục: file đổi tên / chuyển thư mục. */
+  moved?: number;
+  /** Tài liệu còn trong kho tri thức nhưng không còn tệp trong thư mục. */
+  missing?: number;
+  /** Tài liệu đang phục vụ vừa rơi lại hàng chờ duyệt. */
+  unapproved?: number;
 }
 
 export interface DriveSyncRun {
@@ -528,6 +561,9 @@ export interface DriveSyncRun {
   updated_items: DriveSyncItem[];
   skipped_items: DriveSyncItem[];
   error_items: DriveSyncItem[];
+  /** Bộ quét Drive không phát ra hai mục này — để tuỳ chọn. */
+  missing_items?: DriveSyncItem[];
+  unapproved_items?: DriveSyncItem[];
 }
 
 /** Một tài liệu có trong Drive nhưng chưa học được, còn tồn qua nhiều lần quét. */
@@ -546,6 +582,10 @@ export interface IngestFailure {
 
 export interface DriveSyncStatus {
   configured: boolean;
+  /** 'local' = quét thư mục trên máy chủ (mặc định từ 27/08/2026); 'drive' = Google Drive. */
+  source?: 'local' | 'drive' | string;
+  /** Đường dẫn thư mục kho, chỉ có ở chế độ local. */
+  library_root?: string | null;
   last_run: DriveSyncRun | null;
   /** Lỗi tích luỹ, KHÁC last_run.error_items vốn chỉ là ảnh chụp lần quét cuối. */
   failures: IngestFailure[];

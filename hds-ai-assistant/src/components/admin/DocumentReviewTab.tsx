@@ -4,7 +4,7 @@ import * as api from '../../api';
 import type { PendingReviewDoc, Client } from '../../types';
 import { DOC_TYPES, ACCESS_LEVELS } from '../../constants';
 import {
-  FileText, CheckCircle2, AlertCircle, RefreshCw, Loader2, PencilLine, Save,
+  FileText, CheckCircle2, AlertCircle, RefreshCw, Loader2, PencilLine, Save, Eye,
 } from 'lucide-react';
 
 interface DocForm {
@@ -88,6 +88,15 @@ export const DocumentReviewTab: React.FC = () => {
         ...prev[docId], ...patch,
       },
     }));
+  };
+
+  // Mở bản gốc để đối chiếu với chữ OCR đã trích xuất.
+  const handlePreview = async (docId: number) => {
+    try {
+      await api.previewDocument(docId);
+    } catch (err: any) {
+      showToast(err?.message || 'Không mở được bản xem trước.', 'error');
+    }
   };
 
   const toggleEditor = async (docId: number) => {
@@ -287,15 +296,28 @@ export const DocumentReviewTab: React.FC = () => {
                   const ed = editors[key];
                   return (
                     <div className="space-y-2">
-                      <button
-                        onClick={() => toggleEditor(doc.id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 transition-colors"
-                      >
-                        <PencilLine className="w-3.5 h-3.5" />
-                        <span>
-                          {ed?.open ? 'Đóng khung sửa nội dung' : 'Xem & sửa nội dung trích xuất'}
-                        </span>
-                      </button>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          onClick={() => toggleEditor(doc.id)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 transition-colors"
+                        >
+                          <PencilLine className="w-3.5 h-3.5" />
+                          <span>
+                            {ed?.open ? 'Đóng khung sửa nội dung' : 'Xem & sửa nội dung trích xuất'}
+                          </span>
+                        </button>
+                        {/* Đối chiếu chữ OCR với TRANG SCAN gốc ngay tại đây —
+                            không có nút này người duyệt phải tải file về rồi mở
+                            bằng ứng dụng khác mới soát được. */}
+                        <button
+                          onClick={() => handlePreview(doc.id)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 transition-colors"
+                          title="Mở bản gốc để đối chiếu với nội dung đã trích xuất"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Xem bản gốc</span>
+                        </button>
+                      </div>
                       {ed?.open && (
                         <div className="space-y-2 border border-slate-200 dark:border-slate-700 rounded-xl p-3 bg-slate-50/60 dark:bg-slate-800/40">
                           {ed.loading ? (

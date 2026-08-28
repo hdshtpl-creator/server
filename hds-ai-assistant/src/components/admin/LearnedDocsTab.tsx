@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { LearnedDocument } from '../../types';
 import { DOC_TYPES, DOC_TYPE_LABELS, ACCESS_LEVEL_BADGES, SOURCE_KIND_BADGES } from '../../constants';
-import { BookOpen, Search, Filter, RefreshCw, Building2, Download } from 'lucide-react';
+import { BookOpen, Search, Filter, RefreshCw, Building2, Download, Eye } from 'lucide-react';
 import { DriveSyncStatusCard } from './DriveSyncStatusCard';
 
 export const LearnedDocsTab: React.FC = () => {
@@ -14,6 +14,14 @@ export const LearnedDocsTab: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [docTypeFilter, setDocTypeFilter] = useState('');
+
+  const handlePreview = async (docId: number) => {
+    try {
+      await api.previewDocument(docId);
+    } catch (err: any) {
+      showToast(err?.message || 'Không mở được bản xem trước.', 'error');
+    }
+  };
 
   const handleDownload = async (docId: number, title: string) => {
     setDownloadingId(docId);
@@ -139,7 +147,7 @@ export const LearnedDocsTab: React.FC = () => {
                   <th scope="col" className="p-4">Mức truy cập</th>
                   <th scope="col" className="p-4 text-center">Số đoạn</th>
                   <th scope="col" className="p-4">Ngày nạp</th>
-                  <th scope="col" className="p-4 text-right">Tải về</th>
+                  <th scope="col" className="p-4 text-right">Bản gốc</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -209,7 +217,15 @@ export const LearnedDocsTab: React.FC = () => {
                         {doc.created_at}
                       </td>
 
-                      <td className="p-4 text-right">
+                      <td className="p-4 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => handlePreview(doc.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 mr-1.5 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg border border-blue-200 dark:border-slate-700 text-[11px] transition-colors"
+                          title="Mở bản gốc ngay trong trình duyệt"
+                        >
+                          <Eye className="w-3 h-3" />
+                          <span>Xem</span>
+                        </button>
                         <button
                           onClick={() => handleDownload(doc.id, doc.title)}
                           disabled={downloadingId === doc.id}

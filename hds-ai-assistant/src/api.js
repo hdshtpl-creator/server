@@ -240,7 +240,8 @@ export async function chatInternal({
  * Trả về sự kiện 'done' cuối cùng để nơi gọi dùng tiếp.
  */
 export async function chatStream(
-  { question, conversation_id, use_temp, use_method, model, source_document_ids },
+  { question, conversation_id, use_temp, use_method, model, source_document_ids,
+    mode, template_doc_id, make_files },
   onEvent
 ) {
   const payload = {
@@ -252,6 +253,10 @@ export async function chatStream(
     source_document_ids: Array.isArray(source_document_ids) && source_document_ids.length
       ? source_document_ids.map(toIntOrNull).filter((id) => id !== null)
       : undefined,
+    // Tab "Kiểm tra pháp lý & tạo file mẫu" — backend bỏ qua với vai khách.
+    mode: mode || undefined,
+    template_doc_id: toIntOrNull(template_doc_id) ?? undefined,
+    make_files: make_files ? true : undefined,
   };
 
   if (useMockBackend) return mockChatStream(payload, onEvent);
@@ -338,8 +343,10 @@ export async function getChatHistory(conversationId = null, limit = 300) {
 }
 
 // ---------- Nhiều hội thoại (kiểu ChatGPT) ----------
-export async function listConversations(limit = 100) {
-  return request(`/conversations?limit=${Number(limit) || 100}`, { method: 'GET' });
+export async function listConversations(limit = 100, kind = 'chat') {
+  // kind: 'chat' (tab Hoi thoai AI) | 'legal' (tab Kiem tra phap ly) | 'all'.
+  const qs = new URLSearchParams({ limit: String(Number(limit) || 100), kind });
+  return request(`/conversations?${qs.toString()}`, { method: 'GET' });
 }
 
 export async function renameConversation(convId, title) {
@@ -444,13 +451,19 @@ export async function getPendingLearns() {
   return request('/learn/pending', { method: 'GET' });
 }
 
-export async function reviewLearnMessage(message_id, { action, edited_content, edit_reason }) {
+export async function reviewLearnMessage(
+  message_id,
+  { action, edited_content, edit_reason, access_level }
+) {
   return request(`/learn/${message_id}`, {
     method: 'POST',
     body: JSON.stringify({
       action, // 'approve' | 'edit' | 'reject'
       edited_content: edited_content || undefined,
       edit_reason: edit_reason || undefined,
+      // Không gửi thì máy chủ mặc định 'internal' — người duyệt phải chủ động
+      // chọn 'public' nếu muốn câu này trả lời được cả ở kênh người dân.
+      access_level: access_level || undefined,
     }),
   });
 }
@@ -840,18 +853,166 @@ export async function downloadDocument(docId, filename) {
   const blob = await res.blob();
   const cd = res.headers.get('Content-Disposition') || '';
   const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-  triggerDownload(blob, filename || (m ? decodeURIComponent(m[1]) : `tai-lieu-${docId}`));
+  const tuMayChu = m ? decodeURIComponent(m[1]) : null;
+  // Tên các màn hình truyền vào là TIÊU ĐỀ tài liệu, thường KHÔNG có đuôi
+  // ("Thư tư vấn mẫu") — lưu ra máy thành file không đuôi thì Windows không
+  // biết mở bằng gì. Giữ tiêu đề tiếng Việt cho dễ đọc nhưng mượn đuôi của
+  // tên máy chủ trả về.
+  const coDuoi = (n) => /\.[A-Za-z0-9]{1,8}$/.test(n || '');
+  const duoi = tuMayChu && coDuoi(tuMayChu) ? tuMayChu.match(/\.[A-Za-z0-9]{1,8}$/)[0] : '';
+  let ten = filename || tuMayChu || `tai-lieu-${docId}`;
+  if (filename && !coDuoi(filename) && duoi) ten = filename + duoi;
+  triggerDownload(blob, ten);
 }
 
 function triggerDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = filename;
+  // Tiêu đề tài liệu có thể chứa dấu gạch chéo ("HĐ 05/2026") — thay đi để
+  // trình duyệt không cắt tên file thành thư mục.
+  a.download = String(filename || '').replace(/[\\/]+/g, '-');
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+// ==================== 13. KIỂM TRA PHÁP LÝ & TẠO FILE MẪU ====================
+
+// POST /conversations — tạo hội thoại nội bộ TRƯỚC câu hỏi đầu tiên, để tải
+// hồ sơ lên trước rồi mới hỏi (tab Kiểm tra pháp lý).
+export async function createConversation() {
+  if (useMockBackend) {
+    // Tao ban ghi THAT trong mockState (kind 'legal') — khong thi danh sach
+    // "phien truoc" cua tab Kiem tra phap ly trong che do gia lap luon trong.
+    const conv = {
+      id: ++mockState.nextConversationId,
+      title: `Kiểm tra pháp lý ${new Date().toLocaleString('vi-VN', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+      })}`,
+      kind: 'legal',
+      updated_at: new Date().toISOString().replace('T', ' ').slice(0, 16),
+      messages: [],
+    };
+    mockState.conversations.unshift(conv);
+    return { conversation_id: conv.id };
+  }
+  return request('/conversations', { method: 'POST' });
+}
+
+// POST /upload/extract — file 'dùng xong bỏ' mọi định dạng (.pdf/.docx/ảnh…),
+// máy chủ tự trích văn bản + OCR. Không vào kho, tự xoá sau 6 giờ.
+export async function uploadExtract({ conversation_id, file }) {
+  if (useMockBackend) {
+    await new Promise((r) => setTimeout(r, 300));
+    return { ok: true, mode: 'temp', filename: file.name, chunks: 3,
+             temp_file_id: Date.now(), warnings: [], status: 'ok', text_chars: 1234,
+             note: 'File dùng xong bỏ — tự xóa sau 6 giờ, không vào kho.' };
+  }
+  const form = new FormData();
+  form.append('conversation_id', String(toIntOrNull(conversation_id)));
+  form.append('file', file);
+  // KHÔNG tự đặt Content-Type — trình duyệt thêm boundary cho multipart.
+  const res = await fetch(`${apiBaseUrl}/upload/extract`, {
+    method: 'POST',
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(text, res.status));
+  }
+  return res.json();
+}
+
+// GET /templates/files — danh sách file trong kệ mẫu cho menu "Tạo file mẫu".
+export async function listTemplateFiles() {
+  if (useMockBackend) {
+    return { items: [
+      { id: 901, title: 'Hợp đồng lao động mẫu 2026', doc_type: 'mau_hd',
+        folder: '3.3 Lao động', fillable: true },
+      { id: 902, title: 'Hợp đồng dịch vụ pháp lý mẫu', doc_type: 'mau_hd',
+        folder: '3.2 Thương mại', fillable: true },
+      { id: 903, title: 'Thư tư vấn mẫu', doc_type: 'thu_mau',
+        folder: '5.1 Thư tư vấn mẫu', fillable: false },
+    ] };
+  }
+  return request('/templates/files');
+}
+
+// GET /files/{id}/preview — XEM TRƯỚC bản gốc trong tab mới của trình duyệt.
+// Phải fetch bằng token rồi mở blob URL (thẻ <a> trần không mang được token).
+// Tab được MỞ NGAY trong cú bấm (trước fetch): lần đầu xem file Word máy chủ
+// còn phải chạy LibreOffice chuyển PDF, chờ xong mới window.open thì đã ra
+// ngoài "user activation" và trình popup-blocker chặn mất.
+export async function previewDocument(docId) {
+  if (useMockBackend) {
+    const blob = new Blob(
+      [`Bản demo — bản xem trước của tài liệu #${docId} sẽ mở từ máy chủ thật.`],
+      { type: 'text/plain' }
+    );
+    window.open(URL.createObjectURL(blob), '_blank');
+    return;
+  }
+  const win = window.open('', '_blank');
+  try {
+    const res = await fetch(`${apiBaseUrl}/files/${docId}/preview`, {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(parseErrorBody(text, res.status));
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    if (win) {
+      win.opener = null;
+      win.location = url;
+    } else {
+      // Popup vẫn bị chặn — mở tại chỗ còn hơn nuốt cú bấm.
+      window.location.assign(url);
+    }
+    // Thu hồi sau khi tab mới kịp nạp — thu ngay là tab trắng.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    if (win) win.close(); // đừng bỏ lại tab trắng khi máy chủ báo lỗi
+    throw err;
+  }
+}
+
+// DELETE /temp-files/{id} — gỡ file 'dùng xong bỏ' THẬT trên máy chủ.
+// File 'dung xong bo' con han cua mot hoi thoai — de tab Kiem tra phap ly
+// mo lai phien cu dung lai dung cac chip dinh kem con dung duoc.
+export async function getConversationTempFiles(convId) {
+  if (useMockBackend) return { items: [] };
+  return request(`/conversations/${convId}/temp-files`, { method: 'GET' });
+}
+
+export async function deleteTempFile(tempFileId) {
+  if (useMockBackend) return { ok: true };
+  return request(`/temp-files/${toIntOrNull(tempFileId)}`, { method: 'DELETE' });
+}
+
+// GET /template-fills/{token}/download — tải file mẫu ĐÃ ĐIỀN chủ thể.
+export async function downloadTemplateFill(token, filename) {
+  if (useMockBackend) {
+    const blob = new Blob(['Bản demo — file đã điền sẽ tải về từ máy chủ thật.'],
+                          { type: 'text/plain' });
+    triggerDownload(blob, filename || 'file-da-dien.txt');
+    return;
+  }
+  const res = await fetch(`${apiBaseUrl}/template-fills/${encodeURIComponent(token)}/download`, {
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(text, res.status));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  triggerDownload(blob, filename || (m ? decodeURIComponent(m[1]) : 'file-da-dien.docx'));
 }
 
 // ==================== CHẾ ĐỘ GIẢ LẬP (MOCK) ====================
@@ -1292,6 +1453,7 @@ async function mockChatStream(payload, onEvent) {
     convObj = {
       id: ++mockState.nextConversationId,
       title: (payload.question || 'Cuộc trò chuyện mới').slice(0, 60),
+      kind: 'chat',
       updated_at: new Date().toISOString().replace('T', ' ').slice(0, 16),
       messages: [],
     };
@@ -1418,12 +1580,16 @@ async function handleMockRequest(endpoint, options, headers) {
   if (endpoint.startsWith('/conversations')) {
     const convId = toIntOrNull(endpoint.split('/')[2]);
     if (method === 'GET') {
-      return mockState.conversations.map((c) => ({
-        id: c.id,
-        title: c.title,
-        updated_at: c.updated_at,
-        message_count: c.messages.length,
-      }));
+      const params = new URLSearchParams(endpoint.split('?')[1] || '');
+      const kind = params.get('kind') || 'chat';
+      return mockState.conversations
+        .filter((c) => kind === 'all' || (c.kind || 'chat') === kind)
+        .map((c) => ({
+          id: c.id,
+          title: c.title,
+          updated_at: c.updated_at,
+          message_count: c.messages.length,
+        }));
     }
     if (method === 'PATCH') {
       const c = mockState.conversations.find((x) => x.id === convId);

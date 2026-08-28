@@ -79,9 +79,56 @@ export const chatStream = ApiJs.chatStream as (
     use_method?: boolean;
     model?: string;
     source_document_ids?: number[];
+    /** Tab "Kiểm tra pháp lý": 'legal_review' — chỉ vai nội bộ. */
+    mode?: 'legal_review' | null;
+    /** Điền chủ thể vào file mẫu này (kệ HỢP ĐỒNG MẪU / THƯ MẪU). */
+    template_doc_id?: number | null;
+    /** "Tạo bộ file": AI tự lên danh sách văn bản cần soạn từ hồ sơ đính kèm. */
+    make_files?: boolean;
   },
   onEvent: (evt: ChatStreamEvent) => void
 ) => Promise<ChatStreamEvent | null>;
+
+export const createConversation = ApiJs.createConversation as () => Promise<{
+  conversation_id: number;
+}>;
+
+export const uploadExtract = ApiJs.uploadExtract as (params: {
+  conversation_id: number;
+  file: File;
+}) => Promise<{
+  ok?: boolean;
+  mode?: string;
+  filename?: string;
+  chunks?: number;
+  /** Id bản ghi file tạm — để gỡ thật qua DELETE /temp-files/{id}. */
+  temp_file_id?: number;
+  warnings?: string[];
+  status?: 'ok' | 'warning' | string;
+  text_chars?: number;
+  note?: string;
+}>;
+
+export const getConversationTempFiles = ApiJs.getConversationTempFiles as (
+  convId: number
+) => Promise<{ items: Array<{ id: number; filename: string; chunks: number }> }>;
+
+export const deleteTempFile = ApiJs.deleteTempFile as (
+  tempFileId: number
+) => Promise<{ ok?: boolean; note?: string }>;
+
+export const listTemplateFiles = ApiJs.listTemplateFiles as () => Promise<{
+  items: import('./types').TemplateFile[];
+}>;
+
+export const previewDocument = ApiJs.previewDocument as (
+  docId: number
+) => Promise<void>;
+
+export const downloadTemplateFill = ApiJs.downloadTemplateFill as (
+  token: string,
+  filename?: string
+) => Promise<void>;
 
 export const chatPortal = ApiJs.chatPortal as (params: {
   question: string;
@@ -94,7 +141,8 @@ export const getChatHistory = ApiJs.getChatHistory as (
 ) => Promise<{ conversation_id: number | null; messages: ChatSearchHit[] }>;
 
 export const listConversations = ApiJs.listConversations as (
-  limit?: number
+  limit?: number,
+  kind?: 'chat' | 'legal' | 'all'
 ) => Promise<ConversationSummary[]>;
 
 export const renameConversation = ApiJs.renameConversation as (
@@ -127,7 +175,7 @@ export const uploadFile = ApiJs.uploadFile as (params: {
   filename: string;
   content: string;
   mode: 'temp' | 'save';
-}) => Promise<{ ok?: boolean; mode?: string; chunks?: number; note?: string }>;
+}) => Promise<{ ok?: boolean; mode?: string; chunks?: number; note?: string; temp_file_id?: number }>;
 
 export const getStats = ApiJs.getStats as () => Promise<Stats>;
 
@@ -162,7 +210,12 @@ export const getPendingLearns = ApiJs.getPendingLearns as () => Promise<PendingL
 
 export const reviewLearnMessage = ApiJs.reviewLearnMessage as (
   message_id: number,
-  data: { action: 'approve' | 'edit' | 'reject'; edited_content?: string; edit_reason?: string }
+  data: {
+    action: 'approve' | 'edit' | 'reject';
+    edited_content?: string;
+    edit_reason?: string;
+    access_level?: 'internal' | 'public';
+  }
 ) => Promise<{ ok?: boolean; action?: string; document_id?: number }>;
 
 export const getMethods = ApiJs.getMethods as () => Promise<MethodTemplate[]>;

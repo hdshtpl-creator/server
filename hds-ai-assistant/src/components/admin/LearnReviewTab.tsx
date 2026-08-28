@@ -11,11 +11,16 @@ import {
   Save,
   HelpCircle,
   Flag,
+  Globe,
 } from 'lucide-react';
 
 interface ItemState {
   edited_content: string;
   edit_reason: string;
+  /** Phạm vi của bản ghi sẽ nạp vào kho. Mặc định 'internal' — chỉ khi người
+   *  duyệt chủ động đổi sang 'public' thì câu này mới trả lời cả ở kênh dành
+   *  cho người dân. */
+  access_level: 'internal' | 'public';
   isSubmitting: boolean;
 }
 
@@ -34,7 +39,12 @@ export const LearnReviewTab: React.FC = () => {
         Object.fromEntries(
           data.map((item) => [
             String(item.message_id),
-            { edited_content: item.answer, edit_reason: '', isSubmitting: false },
+            {
+              edited_content: item.answer,
+              edit_reason: '',
+              access_level: 'internal' as const,
+              isSubmitting: false,
+            },
           ])
         )
       );
@@ -50,8 +60,18 @@ export const LearnReviewTab: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Giá trị nền cho một dòng chưa có state — thiếu nó thì spread của một key
+   *  vắng mặt sinh ra ItemState khuyết `access_level` và ô chọn phạm vi thành
+   *  ô trống (uncontrolled). */
+  const EMPTY: ItemState = {
+    edited_content: '',
+    edit_reason: '',
+    access_level: 'internal',
+    isSubmitting: false,
+  };
+
   const patchState = (msgId: string, patch: Partial<ItemState>) => {
-    setItemStates((prev) => ({ ...prev, [msgId]: { ...prev[msgId], ...patch } }));
+    setItemStates((prev) => ({ ...prev, [msgId]: { ...EMPTY, ...prev[msgId], ...patch } }));
   };
 
   const handleAction = async (msgId: number, action: 'approve' | 'edit' | 'reject') => {
@@ -71,11 +91,13 @@ export const LearnReviewTab: React.FC = () => {
         action,
         edited_content: action === 'edit' ? state.edited_content : undefined,
         edit_reason: action === 'edit' ? state.edit_reason : undefined,
+        access_level: state.access_level,
       });
 
+      const scope = state.access_level === 'public' ? ' (công khai)' : ' (nội bộ)';
       const labels = {
-        approve: 'Đã chấp thuận và nạp câu trả lời vào kho tri thức.',
-        edit: 'Đã lưu bản hiệu chỉnh và nạp vào kho tri thức.',
+        approve: `Đã chấp thuận và nạp câu trả lời vào kho tri thức${scope}.`,
+        edit: `Đã lưu bản hiệu chỉnh và nạp vào kho tri thức${scope}.`,
         reject: 'Đã loại bỏ câu trả lời khỏi hàng chờ học.',
       } as const;
 
@@ -136,6 +158,7 @@ export const LearnReviewTab: React.FC = () => {
             const state = itemStates[key] || {
               edited_content: msg.answer,
               edit_reason: '',
+              access_level: 'internal' as const,
               isSubmitting: false,
             };
             const isEdited = state.edited_content !== msg.answer;
@@ -220,6 +243,35 @@ export const LearnReviewTab: React.FC = () => {
                   aria-label="Lý do hiệu chỉnh"
                   className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-lg text-xs placeholder-slate-400 focus:ring-2 focus:ring-hds-blue focus:outline-none transition-colors"
                 />
+
+                {/* Phạm vi bản ghi sẽ nạp — trước đây luôn là 'nội bộ' vì màn
+                    hình không hỏi, nên câu trả lời hay mấy cũng không dùng được
+                    cho kênh người dân. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <label
+                    htmlFor={`scope-${msg.message_id}`}
+                    className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5"
+                  >
+                    <Globe className="w-3.5 h-3.5 text-hds-blue" />
+                    <span>Ai được dùng câu này</span>
+                  </label>
+                  <select
+                    id={`scope-${msg.message_id}`}
+                    value={state.access_level}
+                    onChange={(e) =>
+                      patchState(key, { access_level: e.target.value as 'internal' | 'public' })
+                    }
+                    className="px-3 py-1.5 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-lg text-xs font-medium focus:ring-2 focus:ring-hds-blue focus:outline-none"
+                  >
+                    <option value="internal">Nội bộ — chỉ nhân viên</option>
+                    <option value="public">Công khai — cả kênh hỏi đáp người dân</option>
+                  </select>
+                  {state.access_level === 'public' && (
+                    <span className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 px-2 py-0.5 rounded-lg">
+                      Người ngoài công ty sẽ đọc được nội dung này
+                    </span>
+                  )}
+                </div>
 
                 {/* Ba hành động */}
                 <div className="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">

@@ -34,6 +34,12 @@ HDS. CƠ SỞ DỮ LIỆU/                        ← DRIVE_FOLDER_ID trỏ vào
 │   ├── 3.3 Lao động/
 │   ├── 3.4 Đất đai - Xây dựng/
 │   └── 3.5 Sở hữu trí tuệ/
+│       ▸ File .docx trong kệ này (và kệ 5) hiện được ở menu "Tạo file mẫu" của
+│         tab Kiểm tra pháp lý trên web — AI thay thông tin chủ thể vào ĐÚNG
+│         file gốc, giữ nguyên định dạng. Muốn điền chính xác tuyệt đối, đặt
+│         chỗ trống dạng {{ten_ben_a}}, {{mst_ben_a}}, {{dia_chi_ben_a}}…
+│         ngay trong file mẫu; không đặt thì AI tự tìm chuỗi cần thay và luôn
+│         trả bảng đối chiếu để luật sư kiểm tra.
 │
 ├── 4. QUAN ĐIỂM PHÁP LÝ/                  → advisory · NỘI BỘ
 │   ├── 4.1 Nghiên cứu - Trao đổi/           (moj.gov.vn, danchuphapluat.vn)

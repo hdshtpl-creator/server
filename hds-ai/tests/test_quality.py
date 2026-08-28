@@ -358,6 +358,22 @@ class OcrGarbageTests(unittest.TestCase):
         # Dòng bảng đầy dấu | vẫn là nội dung thật — không được nhầm là rác.
         self.assertFalse(rag.looks_like_ocr_garbage(self.CLEAN_TABLE))
 
+    def test_danh_muc_trich_dan_luat_khong_bi_coi_la_rac(self):
+        """Rà soát 26/08/2026: hai tín hiệu YẾU (ít từ sạch + mẩu lẫn chữ-số)
+        cùng bật trên văn bản đầy số hiệu văn bản luật — nếu không đòi kèm một
+        tín hiệu MẠNH thì căn cứ pháp lý thật bị thay bằng 'chưa đọc được'."""
+        citations = ("Căn cứ pháp lý áp dụng: 1. Luật Doanh nghiệp 59/2020/QH14 "
+                     "2. Nghị định 01/2021/NĐ-CP 3. Thông tư 01/2021/TT-BKHĐT "
+                     "4. Nghị định 47/2021/NĐ-CP 5. Luật Đầu tư 61/2020/QH14 "
+                     "6. Nghị quyết 02/NQ-CP 7. Thông tư 03/2022/TT-BKHĐT")
+        self.assertFalse(rag.looks_like_ocr_garbage(citations))
+
+    def test_dong_ma_ho_so_khong_bi_coi_la_rac(self):
+        ma_ho_so = ("Mã hồ sơ: M-2026-001 HS-1729 QĐ-388/2025 CV-102/HDS "
+                    "TT-2024-88 BB-07/2026 HĐ-28/HĐLĐ-HDS PL-01 QD-55/QĐ-UBND "
+                    "GP-4102/GP-STTTT VB-2201/BTP KH-1593 DN-0101234567")
+        self.assertFalse(rag.looks_like_ocr_garbage(ma_ho_so))
+
     def test_doan_ngan_khong_du_mau_thi_giu_nguyen(self):
         self.assertFalse(rag.looks_like_ocr_garbage("CÔNG CHỨNG VIÊN"))
         self.assertFalse(rag.looks_like_ocr_garbage(""))
@@ -384,6 +400,59 @@ class OcrGarbageTests(unittest.TestCase):
             [{"chunk_id": 2, "content": self.CLEAN_CONTRACT, "title": "HĐLĐ",
               "score": 0.9}])
         self.assertIn("28/10/1996", sources[0]["quote"])
+
+
+class OriginalDocumentHintTests(unittest.TestCase):
+    """Yeu cau 21/08/2026: nguon doc khong tron thi phai CHI DUNG BAN GOC can mo.
+
+    Ca that: "3. Ban sao ho chieu" trong ho so khach hang doc ra ky tu vun. Ten
+    file va thu muc luu da noi ro do la giay to gi, cua ai — bot phai dua thong
+    tin do ra thay vi chi noi khong co du lieu.
+    """
+
+    # Chep nguyen tu man hinh nguoi dung: OCR ban sao ho chieu.
+    GARBAGE = ("[Trang 2] \?4È^ R34»: 2] %4tiR # 11 : #k ‡UU3* #}4‡ Nõ. "
+               "AT\" V387 8100 % \"....._ nn Sàn The Mimistry. %Ƒ '#otciiN: "
+               "Aair- gF _ sàn 2d: 'People's. _Republic- ,9f¬ China - SÀNG "
+               "Sa Côn _.. 8H12 /01ME Lộ NNUÊ:: G119; và, TIẾP sục 0m84. "
+               "+ ÅISIÈFìLH PEOPLE'S REPUBLIC ORCEH\"NA")
+
+    def _chunk(self, **kw):
+        base = {"chunk_id": 1, "content": self.GARBAGE, "score": 0.6,
+                "title": "3. Bản sao hộ chiếu", "doc_type": "ho_so_kh",
+                "client_name": "Công ty TNHH Học viện Ngôn ngữ Hoa Hạ",
+                "client_id": 9, "extraction_status": "warning"}
+        base.update(kw)
+        return base
+
+    def test_prompt_liet_ke_tai_lieu_goc_nen_mo(self):
+        prompt = rag.build_prompt("hộ chiếu của khách ghi số bao nhiêu",
+                                  [self._chunk()], chunk_chars=0, budget=0)
+        self.assertIn("TÀI LIỆU GỐC NGƯỜI HỎI NÊN MỞ", prompt)
+        self.assertIn("3. Bản sao hộ chiếu", prompt)
+        self.assertIn("Công ty TNHH Học viện Ngôn ngữ Hoa Hạ", prompt)
+        self.assertIn("chưa đọc được nội dung", prompt)
+        self.assertIn("Nguồn trích dẫn", prompt)
+        # Cam doan noi dung ben trong.
+        self.assertIn("không đoán số liệu", prompt)
+
+    def test_file_co_canh_bao_cung_duoc_nhac(self):
+        prompt = rag.build_prompt(
+            "ngày cấp hộ chiếu",
+            [self._chunk(content="Nội dung đọc được tạm ổn nhưng là bản scan mờ, "
+                                 "có thể sai vài ký tự trong số giấy tờ.")],
+            chunk_chars=0, budget=0)
+        self.assertIn("TÀI LIỆU GỐC NGƯỜI HỎI NÊN MỞ", prompt)
+        self.assertIn("có cảnh báo", prompt)
+
+    def test_nguon_sach_khong_sinh_muc_thua(self):
+        prompt = rag.build_prompt(
+            "thời hiệu khởi kiện",
+            [{"chunk_id": 2, "content": "Điều 429 Bộ luật Dân sự quy định thời "
+                                        "hiệu khởi kiện về hợp đồng là 03 năm.",
+              "title": "Bộ luật Dân sự", "doc_type": "law", "score": 0.9}],
+            chunk_chars=0, budget=0)
+        self.assertNotIn("TÀI LIỆU GỐC NGƯỜI HỎI NÊN MỞ", prompt)
 
 
 class PersonFolderLabelTests(unittest.TestCase):
