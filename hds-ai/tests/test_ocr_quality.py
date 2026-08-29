@@ -37,6 +37,101 @@ class ChonBoDocTests(unittest.TestCase):
         self.assertEqual(ingest._choose_ocr_engine("TESSERACT", True), "tesseract")
 
 
+class BocKetQuaPaddleTests(unittest.TestCase):
+    """_paddle_lines: PaddleOCR 3.x đổi hẳn dạng kết quả so với 2.x.
+
+    Bản 3.x trả mỗi trang là một đối tượng tra bằng khoá ('rec_texts'); bản
+    2.x trả danh sách [toạ_độ, (chữ, độ_tin_cậy)]. Đọc sai dạng thì OCR chạy
+    xong mà ra rỗng — tài liệu vào kho không có chữ nào, không ai biết.
+    """
+
+    def test_dang_3x(self):
+        trang = {"rec_texts": ["Điều 47", "Luật Doanh nghiệp"]}
+        self.assertEqual(ingest._paddle_lines([trang]),
+                         ["Điều 47", "Luật Doanh nghiệp"])
+
+    def test_dang_2x(self):
+        trang = [[[[0, 0], [9, 0]], ("Điều 47", 0.98)],
+                 [[[0, 9], [9, 9]], ("Luật Doanh nghiệp", 0.95)]]
+        self.assertEqual(ingest._paddle_lines([trang]),
+                         ["Điều 47", "Luật Doanh nghiệp"])
+
+    def test_ket_qua_rong(self):
+        self.assertEqual(ingest._paddle_lines(None), [])
+        self.assertEqual(ingest._paddle_lines([]), [])
+        self.assertEqual(ingest._paddle_lines([None, []]), [])
+
+    def test_bo_dong_trang(self):
+        self.assertEqual(ingest._paddle_lines([{"rec_texts": ["  ", "Điều 5"]}]),
+                         ["Điều 5"])
+
+    def test_nhieu_trang_noi_lien(self):
+        self.assertEqual(
+            ingest._paddle_lines([{"rec_texts": ["trang 1"]},
+                                  {"rec_texts": ["trang 2"]}]),
+            ["trang 1", "trang 2"])
+
+
+class DungBanDocPaddleTests(unittest.TestCase):
+    """_new_paddle_reader: dựng được bản đọc trên MỌI dòng PaddleOCR.
+
+    Ca thật 29/08/2026 trên máy chủ (paddleocr 3.7.0): tham số của dòng 2.x
+    làm 3.x ném ValueError("Unknown argument: show_log"). Mã chỉ bắt TypeError
+    nên lỗi lọt ra ngoài, bộ tham số tối giản không bao giờ được thử tới, và
+    hệ thống lùi về tesseract — cài Paddle xong vẫn chạy tesseract.
+    """
+
+    def setUp(self):
+        import sys
+        import types
+        self.sys = sys
+        self.cu = sys.modules.get("paddleocr")
+        self.da_thu = []
+
+    def tearDown(self):
+        if self.cu is None:
+            self.sys.modules.pop("paddleocr", None)
+        else:
+            self.sys.modules["paddleocr"] = self.cu
+
+    def _gia_lap(self, chap_nhan):
+        """Cài một module paddleocr giả chỉ nhận đúng bộ tham số cho trước."""
+        import types
+        da_thu = self.da_thu
+
+        class BanDocGia:
+            def __init__(self, **kwargs):
+                da_thu.append(set(kwargs))
+                la = set(kwargs) - set(chap_nhan)
+                if la:
+                    # 3.x báo lỗi kiểu này chứ không phải TypeError.
+                    raise ValueError(f"Unknown argument: {sorted(la)[0]}")
+
+        mod = types.ModuleType("paddleocr")
+        mod.PaddleOCR = BanDocGia
+        self.sys.modules["paddleocr"] = mod
+
+    def test_ban_3x_chi_nhan_use_textline_orientation(self):
+        self._gia_lap({"lang", "use_textline_orientation"})
+        self.assertIsNotNone(ingest._new_paddle_reader())
+
+    def test_ban_2x_chi_nhan_use_angle_cls(self):
+        self._gia_lap({"lang", "use_angle_cls", "show_log"})
+        self.assertIsNotNone(ingest._new_paddle_reader())
+
+    def test_ban_la_chi_nhan_moi_lang(self):
+        # Bộ tham số tối giản PHẢI được thử tới — đây chính là ca đã hỏng.
+        self._gia_lap({"lang"})
+        self.assertIsNotNone(ingest._new_paddle_reader())
+        self.assertGreaterEqual(len(self.da_thu), 2,
+                                "phải thử tiếp sau khi bộ đầu bị từ chối")
+
+    def test_khong_bo_nao_chay_thi_bao_loi(self):
+        self._gia_lap(set())          # từ chối cả 'lang'
+        with self.assertRaises(Exception):
+            ingest._new_paddle_reader()
+
+
 class PhuongSaiTests(unittest.TestCase):
     """_variance: điểm số để chấm từng góc nghiêng."""
 

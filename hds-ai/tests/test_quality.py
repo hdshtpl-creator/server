@@ -543,6 +543,32 @@ class AnswerPolicyTests(unittest.TestCase):
         self.assertTrue(decide_approval(".xlsx", True, True, False))   # kế thừa
         self.assertFalse(decide_approval(".docx", False, True, True))  # có cảnh báo
 
+    def test_loi_mo_tu_duyet_pdf_mot_luot(self):
+        from app.auto_learn import decide_approval
+        # AUTO_LEARN_APPROVE_PDF=1: nạp lô văn bản CÔNG KHAI lớn, chủ dự án
+        # chấp nhận rủi ro OCR để khỏi bấm duyệt hàng trăm lần.
+        self.assertTrue(decide_approval(".pdf", True, False, True, True))
+        # Kể cả bản OCR có cảnh báo — đó chính là ca cần lối mở này, vì mọi
+        # PDF scan đều mang cảnh báo "đã dùng OCR".
+        self.assertTrue(decide_approval(".pdf", False, False, True, True))
+
+    def test_loi_mo_doi_ca_hai_cong_tac(self):
+        from app.auto_learn import decide_approval
+        # Bật nhầm MỘT biến không được mở toang: phải có cả tự-duyệt.
+        self.assertFalse(decide_approval(".pdf", True, True, False, True))
+
+    def test_khong_bat_loi_mo_thi_giu_nguyen_chinh_sach(self):
+        from app.auto_learn import decide_approval
+        # Mặc định (không truyền, hoặc truyền False) — PDF vẫn luôn chờ người.
+        self.assertFalse(decide_approval(".pdf", True, True, True))
+        self.assertFalse(decide_approval(".pdf", True, True, True, False))
+
+    def test_loi_mo_khong_dung_cho_dinh_dang_khac(self):
+        from app.auto_learn import decide_approval
+        # .docx có cảnh báo trích xuất vẫn phải qua người — lối mở chỉ nới
+        # đúng luật PDF, không nới luật "trích xuất sạch".
+        self.assertFalse(decide_approval(".docx", False, False, True, True))
+
     def test_needs_review_on_truncated_answer(self):
         from app import rag
         cut = "Theo Điều 35 Bộ luật Lao động, người lao động phải báo trước bốn mươi"

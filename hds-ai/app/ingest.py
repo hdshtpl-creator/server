@@ -1033,24 +1033,88 @@ def _paddle_available():
         return False
 
 
-def _paddle_text(image):
-    """Đọc một ảnh bằng PaddleOCR. Giữ một bản đọc dùng lại cho mọi trang —
-    nạp mô hình mất vài giây, nạp lại từng trang thì OCR cả tập tài liệu
-    chậm gấp nhiều lần."""
-    global _paddle_reader
-    import numpy
+def _new_paddle_reader():
+    """Dựng bản đọc PaddleOCR, chịu được cả dòng 2.x lẫn 3.x.
+
+    PaddleOCR 3.x đổi tên `use_angle_cls` thành `use_textline_orientation` và
+    BỎ HẲN `show_log`. Truyền tham số của bản kia vào là TypeError ngay lúc
+    dựng — rơi vào nhánh lùi về tesseract, nên máy chủ cài Paddle xong vẫn
+    chạy tesseract mà không ai biết. Thử lần lượt, bản mới trước.
+    """
     from paddleocr import PaddleOCR
-    if _paddle_reader is None:
-        # use_angle_cls: tự nhận trang bị quay 90/180 độ, hay gặp ở bản scan.
-        _paddle_reader = PaddleOCR(use_angle_cls=True, lang="vi", show_log=False)
-    result = _paddle_reader.ocr(numpy.array(image.convert("RGB")), cls=True)
+    thu = (
+        {"lang": "vi", "use_textline_orientation": True},   # 3.x
+        {"lang": "vi", "use_angle_cls": True, "show_log": False},  # 2.x
+        {"lang": "vi"},                                     # tối giản
+    )
+    loi = None
+    for kwargs in thu:
+        try:
+            return PaddleOCR(**kwargs)
+        except Exception as exc:
+            # KHÔNG bắt hẹp một loại lỗi: 3.x ném ValueError("Unknown argument")
+            # cho tham số lạ, 2.x ném TypeError, bản khác có thể ném kiểu khác
+            # nữa. Bắt hẹp là bộ tham số cuối (chỉ lang, luôn hợp lệ) không bao
+            # giờ được thử tới — máy chủ cài Paddle xong vẫn chạy tesseract.
+            loi = exc
+            continue
+    raise loi if loi else RuntimeError("Không dựng được PaddleOCR")
+
+
+def _paddle_lines(result):
+    """Bóc chữ ra khỏi kết quả PaddleOCR. Logic thuần — test được không cần
+    cài thư viện.
+
+    Hai dạng kết quả:
+      · 3.x: mỗi trang là một đối tượng tra được bằng khoá, chữ nằm ở
+        'rec_texts' (danh sách chuỗi).
+      · 2.x: mỗi trang là danh sách [toa_do, (chu, do_tin_cay)].
+    """
     lines = []
     for page in (result or []):
-        for entry in (page or []):
-            # [toa_do, (chu, do_tin_cay)]
-            if len(entry) >= 2 and entry[1]:
-                lines.append(str(entry[1][0]))
-    return "\n".join(lines)
+        if not page:
+            continue
+        texts = None
+        try:
+            texts = page["rec_texts"]          # 3.x
+        except Exception:
+            texts = getattr(page, "rec_texts", None)
+        if texts:
+            lines.extend(str(t) for t in texts if str(t).strip())
+            continue
+        try:
+            for entry in page:                  # 2.x
+                if entry and len(entry) >= 2 and entry[1]:
+                    chu = str(entry[1][0])
+                    if chu.strip():
+                        lines.append(chu)
+        except TypeError:
+            continue
+    return lines
+
+
+def _paddle_text(image):
+    """Đọc một ảnh bằng PaddleOCR. Giữ MỘT bản đọc dùng lại cho mọi trang —
+    nạp mô hình mất vài giây, nạp lại từng trang thì OCR cả tập tài liệu chậm
+    gấp nhiều lần."""
+    global _paddle_reader
+    import numpy
+    if _paddle_reader is None:
+        _paddle_reader = _new_paddle_reader()
+    arr = numpy.array(image.convert("RGB"))
+    # 3.x dùng predict(); 2.x chỉ có ocr(cls=True). Gọi cái nào chạy được.
+    loi = None
+    for ten in ("predict", "ocr"):
+        fn = getattr(_paddle_reader, ten, None)
+        if fn is None:
+            continue
+        for args, kwargs in ((( arr,), {}), ((arr,), {"cls": True})):
+            try:
+                return chr(10).join(_paddle_lines(fn(*args, **kwargs)))
+            except TypeError as exc:
+                loi = exc
+                continue
+    raise loi if loi else RuntimeError("PaddleOCR không có lối gọi nào dùng được")
 
 
 def _tesseract_text(image):

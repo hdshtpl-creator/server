@@ -539,6 +539,27 @@ cd hds-ai && .venv/bin/python -m tests.test_security
 
 ---
 
+### Nạp một lô lớn mà không muốn duyệt tay
+
+Mặc định **mọi PDF đều chờ người duyệt** (chính sách 20/08/2026) — OCR đọc sai
+một con số là sai căn cứ. Khi nạp một lô văn bản **công khai** lớn (hàng trăm
+nghị định, án lệ tải từ chinhphu.vn / toaan.gov.vn) mà chấp nhận rủi ro đó để
+khỏi bấm duyệt hàng trăm lần:
+
+```bash
+cd /opt/hds-ai-full
+AUTO_LEARN_AUTO_APPROVE=1 AUTO_LEARN_APPROVE_PDF=1 bash deploy/hoc-tu-thu-muc.sh
+```
+
+Đặt biến **ngay trước lệnh**, KHÔNG ghi vào `.env`: nó phải là quyết định của
+một lượt chạy cụ thể chứ không lặng lẽ thành mặc định của hệ thống. Lượt chạy
+sẽ in `TỰ DUYỆT — KỂ CẢ PDF` ở đầu để không ai chạy nhầm mà không biết.
+
+Đòi **cả hai** biến: bật nhầm một cái không mở toang được.
+
+> Đừng dùng cho hồ sơ khách hàng hay hồ sơ nhân sự — đó đúng là loại tài liệu
+> mà bước duyệt tay sinh ra để bảo vệ.
+
 ### Chất lượng OCR bản scan
 
 PDF scan và ảnh đi qua OCR trước khi vào kho. Với văn bản luật thì OCR sai một

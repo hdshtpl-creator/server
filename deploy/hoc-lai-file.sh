@@ -28,6 +28,8 @@ c_head() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 PG_CONTAINER="${PG_CONTAINER:-hds-postgres}"
 if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$PG_CONTAINER"; then
   q()       { docker exec -i "$PG_CONTAINER" psql -U hds -d hdsai -tAX -F'|' -c "$1" 2>/dev/null; }
+  # Bản KHÔNG nuốt lỗi: dùng để phân biệt "câu lọc sai" với "không có dòng nào".
+  q_err()   { docker exec -i "$PG_CONTAINER" psql -U hds -d hdsai -tAX -F'|' -c "$1" 2>&1; }
   psql_in() { docker exec -i "$PG_CONTAINER" psql -U hds -d hdsai -v ON_ERROR_STOP=1; }
   dump_docs() { docker exec -i "$PG_CONTAINER" pg_dump -U hds -d hdsai -t documents -t chunks 2>/dev/null; }
 else
@@ -75,7 +77,13 @@ case "$MODE" in
   pdf)  WHERE="d.source_path ~* '\\.pdf$'" ;;
   bo)   [ -n "$PERSON" ] || { c_bad "Thiếu tên bộ hồ sơ sau --bo."; exit 1; }
         WHERE="d.doc_type='ho_so_ns' AND lower(d.person_folder)=lower('$PERSON')" ;;
-  ids)  WHERE="d.id = ANY(ARRAY[${IDS// /,}]::int[])" ;;
+  ids)  # Vòng đọc tham số ghép kiểu IDS="$IDS $1" nên LUÔN dư một khoảng
+        # trắng ở đầu; đổi thẳng sang dấu phẩy ra ARRAY[,738,...] — SQL sai cú
+        # pháp, mà q() nuốt stderr nên hiện ra y như "không có tài liệu nào
+        # khớp". Gọt hai đầu trước (ca thật 29/08/2026).
+        IDS="$(echo $IDS)"
+        [ -n "$IDS" ] || { c_bad "Thiếu mã tài liệu."; exit 1; }
+        WHERE="d.id = ANY(ARRAY[${IDS// /,}]::int[])" ;;
 esac
 
 # --- Chọn bộ học TRƯỚC khi lọc ----------------------------------------
@@ -107,6 +115,13 @@ fi
 
 # --- Xem trước ---------------------------------------------------------
 c_head "Tài liệu sẽ được đọc lại (bộ học: $SRC)"
+# Chạy thử câu lọc CÓ hiện lỗi trước: câu sai cú pháp mà im lặng thì người
+# vận hành đọc thành "kho không có tài liệu đó" và đi tìm nhầm chỗ.
+DEM="$(q_err "SELECT count(*) FROM documents d WHERE $WHERE")"
+case "$DEM" in
+  ''|*[!0-9]*) c_bad "Câu lọc tài liệu không chạy được:"; echo "     $DEM"; exit 1 ;;
+esac
+
 LIST="$(q "SELECT d.id || '|' || d.title || '|' ||
                   coalesce(d.extraction_status,'ready') || '|' ||
                   coalesce(d.drive_file_id,'')

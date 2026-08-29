@@ -91,6 +91,10 @@ def auto_approve_from_env(env=None):
 # Biến mới diễn đạt trực tiếp. Tương thích cũ: AUTO_LEARN_REVIEW=0 vẫn tự duyệt,
 # AUTO_LEARN_REVIEW=1 vẫn đưa vào hàng chờ. Khi không đặt biến nào, luôn chờ duyệt.
 AUTO_APPROVE = auto_approve_from_env()
+# Lối mở cho lô văn bản công khai lớn: tự duyệt CẢ PDF. Chỉ đặt trước lệnh
+# chạy (AUTO_LEARN_APPROVE_PDF=1 bash deploy/hoc-tu-thu-muc.sh), đừng ghi vào
+# .env — xem decide_approval.
+APPROVE_PDF = _env_bool(os.getenv("AUTO_LEARN_APPROVE_PDF"), default=False)
 try:
     MAX_DOWNLOAD_BYTES = int(os.getenv("DRIVE_MAX_DOWNLOAD_BYTES", str(MAX_SOURCE_BYTES)))
     if MAX_DOWNLOAD_BYTES <= 0:
@@ -405,7 +409,7 @@ def download(service, f, parts):
 
 
 def decide_approval(suffix: str, extraction_ok: bool, prev_approved: bool,
-                    auto_approve: bool) -> bool:
+                    auto_approve: bool, approve_pdf: bool = False) -> bool:
     """Bản mới có được TỰ duyệt không.
 
     Chính sách 20/08/2026: **PDF luôn chờ người duyệt** — kể cả bật tự duyệt,
@@ -413,9 +417,16 @@ def decide_approval(suffix: str, extraction_ok: bool, prev_approved: bool,
     bản án); OCR đọc sai một con số là sai cả căn cứ pháp lý, nên bắt buộc
     mắt người soát (và sửa nội dung nếu cần) trước khi bot được dùng. Các định
     dạng khác giữ nguyên nếp cũ: sạch + (tự duyệt bật hoặc kế thừa duyệt).
+
+    approve_pdf: LỐI MỞ CÓ CHỦ Ý cho từng lượt chạy (AUTO_LEARN_APPROVE_PDF=1),
+    dùng khi nạp một lô văn bản CÔNG KHAI lớn mà chủ dự án chấp nhận rủi ro OCR
+    để khỏi phải bấm duyệt hàng trăm lần. Cố tình KHÔNG đặt được trong .env
+    thường trực: nó phải là quyết định của một lượt chạy cụ thể, không được
+    lặng lẽ thành mặc định của hệ thống. Vẫn đòi auto_approve bật cùng, để
+    không ai bật nhầm một biến mà mở toang cả hai lớp.
     """
     if (suffix or "").lower() == ".pdf":
-        return False
+        return bool(approve_pdf and auto_approve)
     return (auto_approve or prev_approved) and extraction_ok
 
 
@@ -475,7 +486,7 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
     # decide_approval. Caller sẽ báo to "tài liệu đang dùng bị gỡ" khi một bản
     # đã duyệt rơi lại hàng chờ, thay vì im lặng.
     should_approve = decide_approval(path.suffix, extraction.status == "ok",
-                                     prev_approved, AUTO_APPROVE)
+                                     prev_approved, AUTO_APPROVE, APPROVE_PDF)
     diagnostics["approved"] = should_approve
     diagnostics["was_live"] = bool(prev_approved)
     diagnostics["forced_review"] = (path.suffix.lower() == ".pdf")
@@ -618,6 +629,8 @@ def run(dry_run=False):
     started_at = datetime.now(timezone.utc)
     service = get_service()
     review_mode = "TỰ DUYỆT" if AUTO_APPROVE else "CHỜ NGƯỜI DUYỆT (mặc định an toàn)"
+    if AUTO_APPROVE and APPROVE_PDF:
+        review_mode = "TỰ DUYỆT — KỂ CẢ PDF (lối mở một lượt, OCR không qua mắt người)"
     print(f">> Chế độ nhập: {review_mode}")
     print(f">> Duyệt cây thư mục Drive {FOLDER_ID}...")
     items = walk(service, FOLDER_ID)
