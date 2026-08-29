@@ -882,6 +882,9 @@ OCR_CONFIG = os.getenv("INGEST_OCR_CONFIG", "--oem 1 --psm 3")
 # Bo doc chu: 'auto' (mac dinh) dung PaddleOCR neu may chu da cai, khong thi
 # tesseract. Dat 'tesseract' de ep dung ban cu, 'paddle' de ep dung ban moi.
 OCR_ENGINE = os.getenv("INGEST_OCR_ENGINE", "auto")
+# Tắt oneDNN của PaddlePaddle: backend này gục trên CPU với bộ thực thi PIR.
+# Để bật lại (máy khác, bản paddle khác) thì đặt INGEST_PADDLE_MKLDNN=1.
+PADDLE_NO_MKLDNN = not _bool_env("INGEST_PADDLE_MKLDNN", False)
 # Nan trang nghieng truoc khi OCR. Ban scan dat tay thuong lech 1-3 do.
 OCR_DESKEW = _bool_env("INGEST_OCR_DESKEW", True)
 OCR_DESKEW_MAX_DEG = float(os.getenv("INGEST_OCR_DESKEW_MAX_DEG", "3") or 3)
@@ -1041,9 +1044,20 @@ def _new_paddle_reader():
     dựng — rơi vào nhánh lùi về tesseract, nên máy chủ cài Paddle xong vẫn
     chạy tesseract mà không ai biết. Thử lần lượt, bản mới trước.
     """
+    # oneDNN (MKL-DNN) của PaddlePaddle trên CPU gục giữa chừng với bộ thực thi
+    # PIR mới: "ConvertPirAttribute2RuntimeAttribute not support ...
+    # onednn_instruction.cc". Mô hình nạp xong, nhưng trang đầu tiên đã ném
+    # NotImplementedError rồi cả lượt lùi về tesseract mà nhìn log không ai
+    # nghĩ là do đây. Tắt oneDNN TRƯỚC khi nạp paddle — đặt sau khi thư viện
+    # đã nạp thì cờ không còn tác dụng.
+    if PADDLE_NO_MKLDNN:
+        os.environ.setdefault("FLAGS_use_mkldnn", "0")
     from paddleocr import PaddleOCR
     thu = (
+        # 3.x, tắt luôn oneDNN ở tầng tham số cho chắc.
+        {"lang": "vi", "use_textline_orientation": True, "enable_mkldnn": False},
         {"lang": "vi", "use_textline_orientation": True},   # 3.x
+        {"lang": "vi", "enable_mkldnn": False},
         {"lang": "vi", "use_angle_cls": True, "show_log": False},  # 2.x
         {"lang": "vi"},                                     # tối giản
     )
