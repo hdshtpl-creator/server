@@ -1046,23 +1046,69 @@ def conversation_temp_paths(conversation_id):
             return [r[0] for r in cur.fetchall()]
 
 
-def get_temp_context(conversation_id, question, top_k=5, query_vector=None):
-    """Lấy các đoạn liên quan nhất từ file tạm của cuộc chat này."""
-    qvec = query_vector if query_vector is not None else embed(question)
+# File đính kèm trong chat: đưa TRỌN nội dung vào ngữ cảnh khi còn vừa ngân
+# sách này (~20 nghìn token). Người dùng đính kèm là để bot ĐỌC CẢ FILE.
+TEMP_FULL_CHARS = 60_000
+
+
+def get_temp_context(conversation_id, question, top_k=None, query_vector=None,
+                     full_chars=None):
+    """Nội dung file đính kèm của cuộc chat này.
+
+    KHÁC HẲN tra cứu kho. Kho có hàng nghìn tài liệu nên bắt buộc phải lọc;
+    file đính kèm thì người dùng CỐ Ý đưa cho bot đọc, nên mặc định đưa TRỌN
+    vào ngữ cảnh theo đúng thứ tự trang.
+
+    Bản cũ lấy 5 đoạn giống câu hỏi nhất. Với câu "tóm tắt" — một từ không
+    mang nội dung gì để so vector — 5 đoạn chọn ra gần như ngẫu nhiên và phần
+    lớn file không bao giờ tới tay model, nên bot trả lời như chưa từng thấy
+    file (ca thật 29/08/2026).
+
+    Chỉ khi file quá lớn mới phải chọn lọc; khi đó xếp theo độ liên quan, lấy
+    tới khi đầy ngân sách, rồi TRẢ VỀ THEO THỨ TỰ GỐC — tóm tắt một hợp đồng
+    mà các điều khoản đảo lộn thì đọc ra nghĩa khác.
+    """
+    budget = TEMP_FULL_CHARS if full_chars is None else full_chars
     with db.session(role="internal") as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT filename, embedding_json FROM temp_files
                             WHERE conversation_id=%s AND expires_at > now()""", (conversation_id,))
             rows = cur.fetchall()
-    scored = []
-    import math
+
+    items = []
     for fname, ej in rows:
         for item in (ej or []):
-            v = item["vec"]
-            dot = sum(a * b for a, b in zip(qvec, v))
-            scored.append({"title": f"[File: {fname}]", "content": item["content"], "score": dot})
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:top_k]
+            items.append((fname, item.get("content") or "", item.get("vec")))
+    if not items:
+        return []
+
+    def _lam_nguon(i):
+        fname, content, _ = items[i]
+        return {"title": f"[File: {fname}]", "content": content, "score": 1.0}
+
+    tong = sum(len(c) for _, c, _ in items)
+    if tong <= budget and not top_k:
+        return [_lam_nguon(i) for i in range(len(items))]
+
+    # Quá lớn: chấm điểm theo độ liên quan để CHỌN, nhưng vẫn ghép theo thứ tự.
+    qvec = query_vector if query_vector is not None else embed(question)
+    diem = []
+    for i, (_f, _c, v) in enumerate(items):
+        d = sum(a * b for a, b in zip(qvec, v)) if v else 0.0
+        diem.append((d, i))
+    diem.sort(reverse=True)
+
+    chon, dung = [], 0
+    for d, i in diem:
+        if top_k and len(chon) >= top_k:
+            break
+        do_dai = len(items[i][1])
+        if chon and dung + do_dai > budget:
+            continue
+        chon.append(i)
+        dung += do_dai
+    chon.sort()
+    return [_lam_nguon(i) for i in chon]
 
 
 def resolve_model(model_choice, question, configured_model=None, quality_required=False):
@@ -1636,6 +1682,21 @@ def prepare(question, channel, client_id=None, conversation_id=None,
             "grounding_status": "insufficient", "evidence": [],
             "state": state_update, "strict_grounding": True,
         }
+
+    # File đính kèm là nguồn HẠNG NHẤT, không phải phụ lục.
+    #
+    # Trước đây prompt đánh số nguồn trên (kho + file), nhưng `evidence` và
+    # `validate_grounding` chỉ nhận `chunks` (kho). Mọi trích dẫn trỏ vào file
+    # vì thế mang số VƯỢT TRẦN, bị coi là bịa rồi xoá; đoạn văn mất citation
+    # nên bị lược nốt theo luật chặn-không-căn-cứ. Người dùng thấy đúng cảnh
+    # "tải file lên xong hỏi thì bot không đọc file" (ca thật 29/08/2026).
+    #
+    # Gộp làm một danh sách, ĐẶT FILE LÊN ĐẦU: số nguồn nhỏ, và khi ngân sách
+    # ngữ cảnh chật thì fit_context cắt từ đuôi — cắt tài liệu kho trước, giữ
+    # lại đúng thứ người dùng vừa đưa cho bot đọc.
+    if temp_chunks:
+        chunks = list(temp_chunks) + list(chunks)
+        temp_chunks = None
 
     # Truyền thẳng ngân sách đã đọc từ `cfg` — để build_prompt tự đọc lại thì
     # mỗi câu hỏi phải mở thêm hai kết nối CSDL cho hai con số.

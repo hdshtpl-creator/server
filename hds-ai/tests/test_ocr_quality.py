@@ -158,6 +158,34 @@ class NhiPhanHoaTheoBoDocTests(unittest.TestCase):
         self.assertFalse(ingest._should_binarize("paddle"))
 
 
+class SoNhanOcrTests(unittest.TestCase):
+    """_ocr_worker_count: OCR song song nhưng phải chừa nhân cho model chat.
+
+    Đo thật 29/08/2026: hợp đồng scan 107 nghìn ký tự mất 125 giây vì OCR
+    tuần tự từng trang. Ăn hết nhân thì nhanh hơn, nhưng câu hỏi của người
+    khác đứng hình vì model 14b không còn chỗ chạy.
+    """
+
+    def test_chua_lai_mot_nhan(self):
+        self.assertEqual(ingest._ocr_worker_count(cpu=4), 3)
+        self.assertEqual(ingest._ocr_worker_count(cpu=8), 4)   # trần 4
+
+    def test_may_yeu_van_chay_duoc(self):
+        self.assertEqual(ingest._ocr_worker_count(cpu=1), 1)
+        self.assertEqual(ingest._ocr_worker_count(cpu=2), 1)
+
+    def test_dat_tay_thi_theo_y_nguoi_van_hanh(self):
+        self.assertEqual(ingest._ocr_worker_count(cpu=2, setting=6), 6)
+
+    def test_dat_0_la_de_he_thong_tu_quyet(self):
+        # 0 nghĩa là "không đặt" — phải rơi về cách tính theo số nhân.
+        self.assertEqual(ingest._ocr_worker_count(cpu=4, setting=0), 3)
+
+    def test_gia_tri_hien_hanh_hop_ly(self):
+        self.assertGreaterEqual(ingest.OCR_WORKERS, 1)
+        self.assertLessEqual(ingest.OCR_WORKERS, 8)
+
+
 class PhuongSaiTests(unittest.TestCase):
     """_variance: điểm số để chấm từng góc nghiêng."""
 

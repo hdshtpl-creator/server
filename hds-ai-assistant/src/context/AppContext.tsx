@@ -484,6 +484,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (cancelled) return;
         const msgs = mapServerMessages(res.messages as any);
         if (res.conversation_id) {
+          // File đính kèm còn hạn phải dựng lại Ở ĐÂY NỮA, không chỉ ở
+          // selectConversation. Tải lại trang (hoặc backend vừa khởi động
+          // lại) là chip biến mất trong khi temp_files vẫn sống 6 giờ trên
+          // máy chủ — người dùng thấy "tự nhiên mất file vừa tải lên", và tệ
+          // hơn: use_temp tính theo số chip nên lượt hỏi sau KHÔNG đọc file
+          // đó nữa dù nó vẫn nằm đấy (ca thật 29/08/2026).
+          const tf = await api
+            .getConversationTempFiles(res.conversation_id)
+            .catch(() => ({ items: [] }));
+          if (cancelled) return;
           const summary = list.find((c) => c.id === res.conversation_id);
           setConversation({
             id: `srv-${res.conversation_id}`,
@@ -491,6 +501,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             title: summary?.title || 'Cuộc trò chuyện',
             created_at: new Date().toISOString(),
             messages: msgs.length ? msgs : [welcomeMessage()],
+            attachments: (tf.items || []).map((f) => ({
+              id: f.id,
+              filename: f.filename,
+              chunks: f.chunks,
+              status: 'ok',
+              warnings: [],
+              textChars: 0,
+            })),
           });
         } else {
           setConversation(freshConversation());

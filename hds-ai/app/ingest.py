@@ -895,6 +895,27 @@ OCR_BINARIZE_RADIUS = _positive_int_env("INGEST_OCR_BINARIZE_RADIUS", 15)
 OCR_BINARIZE_BIAS = _positive_int_env("INGEST_OCR_BINARIZE_BIAS", 10)
 
 
+def _ocr_worker_count(cpu=None, setting=None):
+    """Bao nhiêu trang OCR cùng lúc. Logic thuần để test.
+
+    pytesseract chạy tiến trình `tesseract` riêng nên luồng Python NHẢ GIL
+    trong lúc chờ — dùng luồng là có song song thật. Đo thật 29/08/2026: một
+    hợp đồng scan 107 nghìn ký tự mất 125 giây khi OCR tuần tự từng trang,
+    trong khi các nhân khác của máy ngồi không.
+
+    Chừa lại ít nhất một nhân và không vượt 4: máy chủ còn phải nuôi model
+    14b trả lời chat, ăn hết nhân là câu hỏi của người khác đứng hình.
+    """
+    if setting:
+        return max(1, int(setting))
+    n = cpu if cpu is not None else (os.cpu_count() or 2)
+    return max(1, min(4, n - 1))
+
+
+OCR_WORKERS = _ocr_worker_count(
+    setting=_positive_int_env("INGEST_OCR_WORKERS", 0, minimum=0))
+
+
 def _variance(values):
     """Phương sai của một dãy số — dùng để chấm điểm từng góc nghiêng thử."""
     n = len(values)
@@ -1247,9 +1268,13 @@ def _ocr_pdf_strict(path: Path) -> str:
                 last_page = min(page_count, first_page + 9)
                 images = convert_from_path(str(path), dpi=OCR_DPI,
                                            first_page=first_page, last_page=last_page)
-                for offset, image in enumerate(images):
+                # Song song trong lô, nhưng ghép lại THEO ĐÚNG THỨ TỰ
+                # TRANG: văn bản luật đảo trang là sai mạch điều khoản.
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=OCR_WORKERS) as pool:
+                    ket_qua = list(pool.map(_ocr_image_text, images))
+                for offset, value in enumerate(ket_qua):
                     page_number = first_page + offset
-                    value = _ocr_image_text(image)
                     if value.strip():
                         parts.append(f"[Trang {page_number}]\n{value}")
         else:
