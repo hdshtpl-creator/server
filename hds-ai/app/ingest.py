@@ -970,7 +970,20 @@ def _adaptive_threshold(image, radius, bias):
     return diff.point(lambda v: 255 if v > cut else 0)
 
 
-def _prep_for_ocr(image):
+def _should_binarize(engine, setting=None):
+    """Có nhị phân hoá ảnh trước khi đưa vào bộ đọc không. Logic thuần.
+
+    CHỈ tesseract. Ngưỡng cứng biến ảnh thành hai màu đen/trắng — tesseract
+    thích thế, nhưng mô hình mạng nơ-ron (PaddleOCR) được huấn luyện trên ảnh
+    thường và bị ngưỡng cứng làm MẢNH ĐI các dấu thanh: đo thật 29/08/2026 cho
+    ra "Đc lp - T do - Hnh phúc" thay vì "Độc lập - Tự do - Hạnh phúc".
+    """
+    if setting is None:
+        setting = OCR_BINARIZE
+    return bool(setting) and engine == "tesseract"
+
+
+def _prep_for_ocr(image, binarize=None):
     """Chuẩn bị ảnh trước khi OCR: xám hoá, kéo giãn tương phản, nắn nghiêng,
     nhị phân hoá theo vùng.
 
@@ -1000,7 +1013,9 @@ def _prep_for_ocr(image):
         except Exception:
             pass
 
-    if OCR_BINARIZE:
+    # binarize=None nghĩa là "theo cài đặt chung"; nơi gọi biết bộ đọc nào sẽ
+    # chạy thì truyền thẳng True/False (xem _should_binarize).
+    if OCR_BINARIZE if binarize is None else binarize:
         try:
             image = _adaptive_threshold(image, OCR_BINARIZE_RADIUS,
                                         OCR_BINARIZE_BIAS)
@@ -1146,17 +1161,18 @@ def _ocr_image_text(image):
     không đọc được gì.
     """
     global _paddle_warned
-    prepared = _prep_for_ocr(image)
+    # Chọn bộ đọc TRƯỚC khi tiền xử lý: mỗi bộ cần một kiểu ảnh khác nhau.
     engine = _choose_ocr_engine(OCR_ENGINE, _paddle_available())
     if engine == "paddle":
         try:
-            return _paddle_text(prepared)
+            return _paddle_text(_prep_for_ocr(image, binarize=False))
         except Exception as exc:
             if not _paddle_warned:
                 _paddle_warned = True
                 print(f"   [OCR] PaddleOCR lỗi ({type(exc).__name__}: {exc}) "
                       "— lùi về tesseract cho các trang còn lại.")
-    return _tesseract_text(prepared)
+    return _tesseract_text(
+        _prep_for_ocr(image, binarize=_should_binarize("tesseract")))
 
 
 def _extract_image(path: Path):

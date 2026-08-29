@@ -317,7 +317,10 @@ server {
     index index.html;
 
     # Nội dung tải lên gửi trong thân JSON; giao diện giới hạn 2MB.
-    client_max_body_size 5m;
+    # Phải KHỚP với MAX_UPLOAD_MB của backend (mặc định 50). Để 5m như trước
+    # thì bản scan chục MB bị chính nginx chặn bằng trang 413 thô, người dùng
+    # thấy lỗi lạ chứ không phải câu báo tử tế của ứng dụng.
+    client_max_body_size 50m;
 
     # Chuyển /api/* sang FastAPI, cắt bỏ tiền tố /api (nhờ dấu '/' cuối proxy_pass).
     location /api/ {

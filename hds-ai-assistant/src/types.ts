@@ -252,6 +252,9 @@ export interface Conversation {
  * tab chỉ để hiện một cái chip là thừa và rủi ro.
  */
 export interface TempAttachment {
+  /** Mốc bắt đầu đọc (Date.now()). Chip đếm giây từ đây — OCR một bản scan
+   *  mất hàng phút, chip đứng im nhìn y hệt bị treo. */
+  startedAt?: number;
   /** Id bản ghi temp_files trên máy chủ — để nút × gỡ THẬT, không chỉ ẩn chip.
    *  null khi file còn đang tải lên (chip tạm). */
   id: number | null;

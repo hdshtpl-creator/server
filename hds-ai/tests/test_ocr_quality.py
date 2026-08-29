@@ -132,6 +132,32 @@ class DungBanDocPaddleTests(unittest.TestCase):
             ingest._new_paddle_reader()
 
 
+class NhiPhanHoaTheoBoDocTests(unittest.TestCase):
+    """_should_binarize: mỗi bộ đọc cần một kiểu ảnh khác nhau.
+
+    Đo thật 29/08/2026 trên cùng một trang nghị định: đưa ảnh đã nhị phân hoá
+    cứng vào PaddleOCR cho ra "Đc lp - T do - Hnh phúc" — ngưỡng cứng làm
+    mảnh đi dấu thanh, đúng thứ mô hình mạng nơ-ron cần thấy. Tesseract thì
+    ngược lại, ăn ảnh hai màu tốt hơn.
+    """
+
+    def test_tesseract_thi_nhi_phan_hoa(self):
+        self.assertTrue(ingest._should_binarize("tesseract", True))
+
+    def test_paddle_thi_khong(self):
+        self.assertFalse(ingest._should_binarize("paddle", True))
+
+    def test_tat_toan_cuc_thi_khong_bo_doc_nao_bi(self):
+        self.assertFalse(ingest._should_binarize("tesseract", False))
+        self.assertFalse(ingest._should_binarize("paddle", False))
+
+    def test_khong_truyen_thi_theo_cai_dat_chung(self):
+        # None = lấy OCR_BINARIZE hiện hành (mặc định bật).
+        self.assertEqual(ingest._should_binarize("tesseract"),
+                         bool(ingest.OCR_BINARIZE))
+        self.assertFalse(ingest._should_binarize("paddle"))
+
+
 class PhuongSaiTests(unittest.TestCase):
     """_variance: điểm số để chấm từng góc nghiêng."""
 

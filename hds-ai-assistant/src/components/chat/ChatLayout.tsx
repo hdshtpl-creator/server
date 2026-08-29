@@ -61,6 +61,9 @@ export const ChatLayout: React.FC = () => {
   // '' = mặc định máy chủ; hoặc tên model cụ thể
   const [selectedModel, setSelectedModel] = useState('auto');
   const [uploading, setUploading] = useState(false);
+  // Nhịp đập mỗi giây trong lúc đọc file, chỉ để chip đếm giây hiện ra là còn
+  // sống. Không chạy khi rảnh nên không tốn gì.
+  const [nhip, setNhip] = useState(0);
   const [isDragging, setDragging] = useState(false);
   // Danh sách đuôi file lấy TỪ MÁY CHỦ (GET /upload/formats). Chép tay vào
   // giao diện là có ngày hộp thoại chặn đúng file mà máy chủ đọc được.
@@ -220,6 +223,7 @@ export const ChatLayout: React.FC = () => {
           status: 'uploading',
           warnings: [],
           textChars: 0,
+          startedAt: Date.now(),
         };
         setConvAttachments(conv, (prev) => [...prev, pending]);
         try {
@@ -297,6 +301,12 @@ export const ChatLayout: React.FC = () => {
   };
 
   /** Dán ảnh chụp màn hình / file từ clipboard thẳng vào ô hỏi. */
+  useEffect(() => {
+    if (!uploading) return;
+    const t = window.setInterval(() => setNhip((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [uploading]);
+
   const handlePaste = (e: React.ClipboardEvent) => {
     const files = Array.from(e.clipboardData?.files || []);
     if (!files.length || !canUpload) return; // dán chữ bình thường thì không đụng vào
@@ -308,6 +318,15 @@ export const ChatLayout: React.FC = () => {
     if (e) e.preventDefault();
     const questionText = inputQuestion.trim();
     if (!questionText || isChatStreaming || !activeConversation) return;
+    // File còn đang đọc thì CHẶN, đừng gửi câu hỏi đi tay không. Bản trước chỉ
+    // loại chip 'uploading' ra khỏi danh sách tên file rồi vẫn gửi: người dùng
+    // thả hợp đồng vào, gõ "tóm tắt", và nhận về một câu trả lời soạn từ hư
+    // không vì máy chủ chưa có chữ nào của file đó (ca thật 29/08/2026 — bot
+    // đáp lại chính câu nhắn hệ thống thay vì tài liệu).
+    if (uploading) {
+      showToast('Đang đọc file đính kèm — chờ đọc xong rồi hỏi, không thì bot trả lời khi chưa có nội dung file.', 'info');
+      return;
+    }
 
     setInputQuestion('');
     setErrorMessage(null);
@@ -693,7 +712,10 @@ export const ChatLayout: React.FC = () => {
                     <span className="truncate">{a.filename}</span>
                     {a.status === 'uploading' && (
                       <span className="text-blue-500/80 dark:text-blue-300/70 shrink-0">
-                        đang đọc…
+                        đang đọc…{' '}
+                        {a.startedAt
+                          ? `${Math.max(0, Math.round((Date.now() - a.startedAt) / 1000))}s`
+                          : ''}
                       </span>
                     )}
                     {a.status === 'warning' && (
@@ -801,7 +823,7 @@ export const ChatLayout: React.FC = () => {
                   <button
                     id="send-chat-btn"
                     type="submit"
-                    disabled={!inputQuestion.trim()}
+                    disabled={!inputQuestion.trim() || uploading}
                     className="p-2.5 rounded-xl transition-colors bg-hds-navy text-hds-gold hover:bg-hds-navy-light disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 disabled:cursor-not-allowed"
                     title="Gửi câu hỏi"
                     aria-label="Gửi câu hỏi"
