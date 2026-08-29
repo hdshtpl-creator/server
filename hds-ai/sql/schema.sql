@@ -480,6 +480,12 @@ CREATE TABLE IF NOT EXISTS temp_files (
   created_at      TIMESTAMPTZ DEFAULT now()
 );
 ALTER TABLE temp_files ADD COLUMN IF NOT EXISTS source_path TEXT;
+-- Bản tóm tắt của TỪNG file đính kèm, LLM sinh ở luồng nền sau khi tải lên.
+-- Đây là cách đọc "10 file cùng lúc": cửa sổ model chỉ ~85 nghìn ký tự nên
+-- không nhét trọn 10 file vào một lượt được — thay vào đó mỗi file được đọc
+-- riêng thành một bản tóm tắt, và câu hỏi khái quát ("tóm tắt", "so sánh")
+-- nhận đủ 10 bản tóm tắt + các đoạn chi tiết liên quan nhất.
+ALTER TABLE temp_files ADD COLUMN IF NOT EXISTS summary TEXT;
 CREATE INDEX IF NOT EXISTS idx_temp_expire ON temp_files(expires_at);
 
 CREATE TABLE IF NOT EXISTS leads (
@@ -749,6 +755,13 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE INDEX IF NOT EXISTS idx_notes_user ON notes(user_id, created_at DESC);
 GRANT SELECT, INSERT, UPDATE, DELETE ON notes TO hds_app;
 GRANT USAGE, SELECT ON SEQUENCE notes_id_seq TO hds_app;
+
+-- temp_files: file "dùng xong bỏ" phải XOÁ THẬT được bằng tài khoản ứng dụng —
+-- nút × trong chat (DELETE /temp-files/{id}) và lượt dọn quá hạn 6 giờ đều
+-- chạy trên kết nối hds_app. GRANT chung ở trên KHÔNG có DELETE, nên trước
+-- bản vá này nút × trả 500 "Internal Server Error", còn lượt dọn quá hạn chết
+-- im lặng trong try/except — hồ sơ khách nằm lại vô hạn (ca thật 29/08/2026).
+GRANT SELECT, INSERT, UPDATE, DELETE ON temp_files TO hds_app;
 
 -- ============================================================
 -- TÀI LIỆU CÓ TRONG DRIVE NHƯNG KHÔNG HỌC ĐƯỢC

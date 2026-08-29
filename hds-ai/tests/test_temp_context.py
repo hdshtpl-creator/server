@@ -57,8 +57,9 @@ class TempContextTests(unittest.TestCase):
     def tearDown(self):
         rag.db.session = self.goc
 
-    def _cai(self, doan, fname="hop dong.docx"):
-        rows = [(fname, [{"content": c, "vec": [0.0] * 4} for c in doan])]
+    def _cai(self, doan, fname="hop dong.docx", summary=None):
+        # Khuôn 3 cột đúng như SELECT thật: filename, embedding_json, summary.
+        rows = [(fname, [{"content": c, "vec": [0.0] * 4} for c in doan], summary)]
         rag.db.session = lambda *a, **kw: _FakeConn(rows)
 
     def test_dua_tron_file_theo_dung_thu_tu(self):
@@ -76,13 +77,24 @@ class TempContextTests(unittest.TestCase):
 
     def test_file_qua_lon_thi_loc_nhung_van_dung_thu_tu(self):
         doan = [f"doan {i} " + "x" * 500 for i in range(20)]
-        self._cai(doan)
+        self._cai(doan, summary="Bản tóm tắt toàn văn của hợp đồng.")
         out = rag.get_temp_context(7, "hỏi gì đó", query_vector=[0.0] * 4,
                                    full_chars=2000)
         self.assertGreater(len(out), 0)
         self.assertLess(len(out), 20, "quá ngân sách thì phải lọc bớt")
-        thu_tu = [o["content"] for o in out]
-        self.assertEqual(thu_tu, sorted(thu_tu, key=lambda c: doan.index(c)))
+        # Nguồn ĐẦU là bản tóm tắt toàn văn — cách đọc file vượt cửa sổ.
+        self.assertIn("Tóm tắt file", out[0]["title"])
+        self.assertIn("toàn văn", out[0]["content"])
+        chi_tiet = [o["content"] for o in out[1:]]
+        self.assertEqual(chi_tiet, sorted(chi_tiet, key=lambda c: doan.index(c)))
+
+    def test_qua_lon_ma_chua_kip_tom_tat_thi_noi_that(self):
+        doan = [f"doan {i} " + "x" * 500 for i in range(20)]
+        self._cai(doan, summary=None)
+        out = rag.get_temp_context(7, "tóm tắt", query_vector=[0.0] * 4,
+                                   full_chars=2000)
+        # Không được im lặng bỏ file: phải có nguồn báo tóm tắt đang chuẩn bị.
+        self.assertIn("đang được", out[0]["content"])
 
     def test_tieu_de_mang_ten_file(self):
         self._cai(["nội dung"], fname="011_2023 HĐM 77.docx")
@@ -119,6 +131,63 @@ class DanhSoNguonTests(unittest.TestCase):
             "Một khẳng định dài đủ để bị soi [Nguồn 9].", gop,
             answer_mode="grounded", strict=True)
         self.assertNotIn("[Nguồn 9]", text)
+
+
+class ChiaKhucTests(unittest.TestCase):
+    """_chia_khuc: nền tảng của tóm tắt map-reduce cho file dài."""
+
+    def test_van_ban_ngan_giu_nguyen(self):
+        self.assertEqual(rag._chia_khuc("ngắn thôi", 100), ["ngắn thôi"])
+
+    def test_rong_thi_khong_co_khuc_nao(self):
+        self.assertEqual(rag._chia_khuc("", 100), [])
+        self.assertEqual(rag._chia_khuc(None, 100), [])
+
+    def test_ghep_lai_du_noi_dung(self):
+        text = "Điều 1. Nội dung A. " * 500     # ~10.000 ký tự
+        khuc = rag._chia_khuc(text, 3000)
+        self.assertGreater(len(khuc), 2)
+        self.assertEqual("".join(khuc), text, "chia xong ghép lại phải đủ chữ")
+        for k in khuc:
+            self.assertLessEqual(len(k), 3000)
+
+    def test_uu_tien_cat_o_ranh_cau(self):
+        text = ("Câu một dài dài. " * 100) + "Câu chốt."
+        khuc = rag._chia_khuc(text, 1000)
+        # Mọi khúc (trừ khúc cuối) kết thúc ở ranh giới câu, không cắt giữa từ.
+        for k in khuc[:-1]:
+            self.assertTrue(k.rstrip().endswith("."), repr(k[-30:]))
+
+
+class TranNguCanhTests(unittest.TestCase):
+    """_context_char_cap: 'đọc trọn' vẫn phải nằm trong cửa sổ ngữ cảnh.
+
+    Ca thật 29/08/2026: 3 file đính kèm ≈ 235 nghìn ký tự đẩy 72 nguồn vào
+    prompt, vượt num_ctx, Ollama cắt PHẦN ĐẦU — model mù toàn bộ tài liệu và
+    trả lời "Mình sẽ tuân thủ đúng các hướng dẫn bạn đưa ra...".
+    """
+
+    def test_cau_hinh_0_thi_lay_tran_vat_ly(self):
+        # num_ctx 32768 → ~60 nghìn ký tự cho tài liệu, không phải vô hạn.
+        cap = rag._context_char_cap(32768, 0)
+        self.assertGreater(cap, 20_000)
+        self.assertLess(cap, 32768 * 3)
+
+    def test_cau_hinh_lon_hon_tran_thi_bi_kep(self):
+        self.assertEqual(rag._context_char_cap(32768, 10_000_000),
+                         rag._context_char_cap(32768, 0))
+
+    def test_cau_hinh_nho_hon_tran_thi_ton_trong(self):
+        # Admin đặt 6000 để cứu máy yếu — không được lặng lẽ nới ra.
+        self.assertEqual(rag._context_char_cap(32768, 6000), 6000)
+
+    def test_may_ctx_nho_van_co_san_toi_thieu(self):
+        # num_ctx 8192 → công thức âm, phải chặn sàn chứ không trả số âm.
+        self.assertEqual(rag._context_char_cap(8192, 0), 20_000)
+
+    def test_ca_that_235k_bi_kep_xuong_duoi_tran(self):
+        cap = rag._context_char_cap(32768, 0)
+        self.assertLess(cap, 235_000)
 
 
 if __name__ == "__main__":

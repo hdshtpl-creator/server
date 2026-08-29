@@ -744,6 +744,25 @@ def _source_owner_tag(chunk) -> str:
     return f"({label}) " if label and doc_type != "other" else ""
 
 
+def _context_char_cap(num_ctx: int, budget_cfg: int) -> int:
+    """Ngân sách ký tự THẬT cho phần tài liệu của prompt. Logic thuần để test.
+
+    budget_cfg <= 0 nghĩa là "đọc trọn" (chính sách 20/08/2026) — nhưng trọn
+    tới đâu vẫn bị num_ctx chặn: prompt dài hơn cửa sổ là Ollama lặng lẽ cắt
+    PHẦN ĐẦU, đúng chỗ đặt dữ liệu công ty và tài liệu, model chỉ còn thấy
+    đuôi hướng dẫn và trả lời như chưa từng thấy tài liệu nào (ca thật
+    29/08/2026: 3 file đính kèm ≈ 235 nghìn ký tự, 72 nguồn, bot mù hoàn
+    toàn). Cắt từ đuôi CÓ KIỂM SOÁT luôn tốt hơn bị cắt đầu ngoài tầm tay.
+
+    ~2.6 ký tự tiếng Việt một token (đo trên kho); chừa 25 nghìn ký tự cho
+    hướng dẫn + dữ liệu công ty + lịch sử + phần model sinh ra.
+    """
+    tran_vat_ly = max(20_000, int(num_ctx * 2.6) - 25_000)
+    if budget_cfg <= 0 or budget_cfg > tran_vat_ly:
+        return tran_vat_ly
+    return budget_cfg
+
+
 def build_prompt(question, chunks, temp_chunks=None, method=None,
                  company="", history=None, chunk_chars=None, budget=None,
                  summary=None):
@@ -963,6 +982,113 @@ def list_temp_files(conversation_id):
             for r in rows]
 
 
+# Tóm tắt mỗi file đính kèm gói trong bấy nhiêu ký tự — 10 file là ~25 nghìn
+# ký tự tóm tắt, vẫn lọt trần ngữ cảnh cùng chỗ cho đoạn chi tiết.
+TEMP_SUMMARY_CHARS = 2500
+# File dài hơn mức này thì tóm theo từng khúc rồi gộp (map-reduce): một khúc
+# phải tự lọt cửa sổ model kèm chỗ cho phần sinh ra.
+TEMP_MAP_CHARS = 35_000
+
+
+def _chia_khuc(text: str, size: int) -> list:
+    """Chia văn bản thành các khúc ≤ size, ưu tiên cắt ở ranh giới đoạn/câu.
+
+    Cắt giữa câu là mất nghĩa đúng chỗ cắt; lùi về dấu ngắt gần nhất chỉ tốn
+    vài trăm ký tự chồng lấn. Logic thuần để test không cần LLM.
+    """
+    text = text or ""
+    if len(text) <= size:
+        return [text] if text else []
+    out, start = [], 0
+    while start < len(text):
+        end = min(len(text), start + size)
+        if end < len(text):
+            khuc = text[start:end]
+            cat = max(khuc.rfind(chr(10)*2), khuc.rfind(". "), khuc.rfind(chr(10)))
+            if cat > size // 2:
+                end = start + cat + 1
+        out.append(text[start:end])
+        start = end
+    return out
+
+
+def _tom_tat_van_ban_dai(text: str, filename: str,
+                         max_chars: int = TEMP_SUMMARY_CHARS) -> str:
+    """Tóm tắt MỘT file đính kèm, dài bao nhiêu cũng được (map-reduce).
+
+    File ngắn: một lượt LLM. File dài hơn cửa sổ model: tóm từng khúc rồi gộp
+    các bản tóm tắt khúc thành một bản cuối — cùng cách NotebookLM đọc tài
+    liệu trăm trang. Chạy ở luồng nền sau khi tải lên, không bắt ai chờ.
+    """
+    yeu_cau = (f"Giữ CHÍNH XÁC: tên người, tên công ty, số hiệu văn bản/hợp "
+               f"đồng, số tiền, mốc thời gian, các điều khoản và nghĩa vụ "
+               f"chính. Không suy đoán, không thêm chi tiết không có trong "
+               f"văn bản. Chỉ in bản tóm tắt, không giải thích.")
+    khuc = _chia_khuc(text, TEMP_MAP_CHARS)
+    if not khuc:
+        return ""
+    cap = max(400, max_chars // 2)
+    if len(khuc) == 1:
+        prompt = (f"TÀI LIỆU «{filename}»:{chr(10)}{khuc[0]}{chr(10)}{chr(10)}"
+                  f"Tóm tắt tài liệu trên bằng tiếng Việt, tối đa {max_chars} "
+                  f"ký tự. {yeu_cau}")
+        ban, _ = llm(prompt, temperature=0.0, num_predict=cap)
+        return (ban or "").strip()[: max_chars * 2]
+    tom_khuc = []
+    for i, k in enumerate(khuc, 1):
+        prompt = (f"PHẦN {i}/{len(khuc)} CỦA TÀI LIỆU «{filename}»:{chr(10)}{k}{chr(10)}{chr(10)}"
+                  f"Tóm tắt phần này bằng tiếng Việt, tối đa "
+                  f"{max_chars} ký tự. {yeu_cau}")
+        ban, _ = llm(prompt, temperature=0.0, num_predict=cap)
+        if (ban or "").strip():
+            tom_khuc.append(f"[Phần {i}] {ban.strip()}")
+    if not tom_khuc:
+        return ""
+    ghep = (chr(10)*2).join(tom_khuc)
+    prompt = (f"CÁC BẢN TÓM TẮT TỪNG PHẦN CỦA TÀI LIỆU «{filename}»:{chr(10)}{ghep}{chr(10)}{chr(10)}"
+              f"Gộp thành MỘT bản tóm tắt duy nhất bằng tiếng Việt, tối đa "
+              f"{max_chars} ký tự, theo đúng trình tự các phần. {yeu_cau}")
+    ban, _ = llm(prompt, temperature=0.0, num_predict=cap)
+    return (ban or "").strip()[: max_chars * 2] or ghep[: max_chars * 2]
+
+
+def maybe_summarize_temp_file(temp_id):
+    """Tóm tắt một file đính kèm ở LUỒNG NỀN, xếp hàng qua _summary_gate.
+
+    Khác maybe_summarize (hội thoại) ở chỗ CHỜ khoá thay vì bỏ qua: tóm tắt
+    hội thoại bỏ lỡ thì lượt sau gộp bù, còn bản tóm tắt file mà không có thì
+    câu hỏi khái quát trên nhiều file lớn không bao giờ trả lời được.
+    """
+    def _run():
+        _summary_gate.acquire()
+        try:
+            with db.session(role="internal") as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""SELECT filename, content, summary FROM temp_files
+                                    WHERE id=%s AND expires_at > now()""", (temp_id,))
+                    row = cur.fetchone()
+            if not row or (row[2] or "").strip():
+                return          # đã xoá / hết hạn / đã có tóm tắt
+            fname, content = row[0] or "tài liệu", row[1] or ""
+            # File nhỏ khỏi tóm: get_temp_context đưa trọn nội dung được rồi.
+            if len(content) <= TEMP_SUMMARY_CHARS * 2:
+                return
+            ban = _tom_tat_van_ban_dai(content, fname)
+            if not ban:
+                return
+            with db.session(role="internal") as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE temp_files SET summary=%s WHERE id=%s",
+                                (ban, temp_id))
+        except Exception:  # noqa: BLE001 — nền hỏng thì thiếu tóm tắt, không rớt gì
+            pass
+        finally:
+            _summary_gate.release()
+
+    threading.Thread(target=_run, name=f"temp-summary-{temp_id}",
+                     daemon=True).start()
+
+
 def add_temp_file(conversation_id, user_id, filename, content, source_path=None):
     """Nạp file 'dùng xong bỏ' — cắt đoạn, tạo vector, lưu tạm (tự xóa sau 6h).
 
@@ -986,6 +1112,13 @@ def add_temp_file(conversation_id, user_id, filename, content, source_path=None)
                          json.dumps([{"content": p, "vec": v} for p, v in zip(pieces, vecs)]),
                          source_path))
             temp_id = cur.fetchone()[0]
+    # Tóm tắt nền NGAY từ lúc tải lên — đến lúc người dùng hỏi "tóm tắt cả
+    # 10 file" thì các bản tóm tắt đã sẵn, không phải đọc 10 file trong một
+    # lượt (vượt cửa sổ model).
+    try:
+        maybe_summarize_temp_file(temp_id)
+    except Exception:  # noqa: BLE001
+        pass
     return len(pieces), temp_id
 
 
@@ -1048,7 +1181,7 @@ def conversation_temp_paths(conversation_id):
 
 # File đính kèm trong chat: đưa TRỌN nội dung vào ngữ cảnh khi còn vừa ngân
 # sách này (~20 nghìn token). Người dùng đính kèm là để bot ĐỌC CẢ FILE.
-TEMP_FULL_CHARS = 60_000
+TEMP_FULL_CHARS = 45_000
 
 
 def get_temp_context(conversation_id, question, top_k=None, query_vector=None,
@@ -1071,12 +1204,13 @@ def get_temp_context(conversation_id, question, top_k=None, query_vector=None,
     budget = TEMP_FULL_CHARS if full_chars is None else full_chars
     with db.session(role="internal") as conn:
         with conn.cursor() as cur:
-            cur.execute("""SELECT filename, embedding_json FROM temp_files
-                            WHERE conversation_id=%s AND expires_at > now()""", (conversation_id,))
+            cur.execute("""SELECT filename, embedding_json, summary FROM temp_files
+                            WHERE conversation_id=%s AND expires_at > now()
+                            ORDER BY id""", (conversation_id,))
             rows = cur.fetchall()
 
     items = []
-    for fname, ej in rows:
+    for fname, ej, _sm in rows:
         for item in (ej or []):
             items.append((fname, item.get("content") or "", item.get("vec")))
     if not items:
@@ -1090,7 +1224,27 @@ def get_temp_context(conversation_id, question, top_k=None, query_vector=None,
     if tong <= budget and not top_k:
         return [_lam_nguon(i) for i in range(len(items))]
 
-    # Quá lớn: chấm điểm theo độ liên quan để CHỌN, nhưng vẫn ghép theo thứ tự.
+    # QUÁ LỚN — cách "đọc 10 file cùng lúc": mỗi file góp một BẢN TÓM TẮT
+    # (LLM sinh ở luồng nền từ lúc tải lên, xem maybe_summarize_temp_file)
+    # đứng đầu ngữ cảnh, phần ngân sách còn lại đổ các đoạn CHI TIẾT liên
+    # quan nhất câu hỏi. Model vì thế thấy toàn cảnh cả 10 file lẫn đoạn gốc
+    # để trích dẫn — thay vì mù những file không lọt cửa sổ.
+    out = []
+    for fname, _ej, sm in rows:
+        if (sm or "").strip():
+            out.append({"title": f"[Tóm tắt file: {fname}]",
+                        "content": sm.strip(), "score": 1.0})
+        else:
+            # Chưa kịp tóm tắt (file vừa tải, hàng nền còn xếp) — nói thật để
+            # model chuyển lời cho người dùng, đừng im lặng bỏ qua cả file.
+            out.append({"title": f"[File: {fname}]",
+                        "content": "(File dài, bản tóm tắt toàn văn đang được "
+                                   "chuẩn bị ở nền — chờ một lát rồi hỏi lại, "
+                                   "hoặc hỏi cụ thể vào một nội dung để lấy "
+                                   "đúng đoạn liên quan.)", "score": 1.0})
+    con_lai = max(0, budget - sum(len(o["content"]) for o in out))
+
+    # Chấm điểm theo độ liên quan để CHỌN đoạn chi tiết, nhưng ghép theo thứ tự.
     qvec = query_vector if query_vector is not None else embed(question)
     diem = []
     for i, (_f, _c, v) in enumerate(items):
@@ -1103,12 +1257,14 @@ def get_temp_context(conversation_id, question, top_k=None, query_vector=None,
         if top_k and len(chon) >= top_k:
             break
         do_dai = len(items[i][1])
-        if chon and dung + do_dai > budget:
+        if chon and dung + do_dai > con_lai:
             continue
+        if not chon and do_dai > con_lai:
+            break               # tóm tắt đã choán gần hết — thôi phần chi tiết
         chon.append(i)
         dung += do_dai
     chon.sort()
-    return [_lam_nguon(i) for i in chon]
+    return out + [_lam_nguon(i) for i in chon]
 
 
 def resolve_model(model_choice, question, configured_model=None, quality_required=False):
@@ -1700,10 +1856,22 @@ def prepare(question, channel, client_id=None, conversation_id=None,
 
     # Truyền thẳng ngân sách đã đọc từ `cfg` — để build_prompt tự đọc lại thì
     # mỗi câu hỏi phải mở thêm hai kết nối CSDL cho hai con số.
+    #
+    # NGÂN SÁCH 0 KHÔNG PHẢI LÀ VÔ HẠN. num_ctx là trần VẬT LÝ: prompt dài hơn
+    # là Ollama lặng lẽ cắt PHẦN ĐẦU — đúng chỗ đặt dữ liệu công ty và tài
+    # liệu — model chỉ còn thấy đuôi (hướng dẫn) và trả lời "Mình sẽ tuân thủ
+    # đúng các hướng dẫn bạn đưa ra..." như chưa từng thấy tài liệu nào. Ca
+    # thật 29/08/2026: đính kèm 3 file ≈ 235 nghìn ký tự, 72 nguồn vào prompt,
+    # bot mù hoàn toàn. Vậy khi cấu hình là 0 (chính sách "đọc trọn"), trần
+    # thật vẫn phải là num_ctx quy ra ký tự, trừ chỗ cho hướng dẫn + dữ liệu
+    # công ty + lịch sử + phần model sinh ra. fit_context cắt từ ĐUÔI danh
+    # sách nên file người dùng đính kèm (đứng đầu) được giữ tới cùng.
+    budget_eff = _context_char_cap(_num("llm_num_ctx", 32768, int),
+                                   _num("context_char_budget", CONTEXT_CHARS, int))
     prompt = build_prompt(question, chunks, temp_chunks, method,
                           company=company, history=history, summary=summary,
                           chunk_chars=_num("chunk_char_limit", CHUNK_CHARS, int),
-                          budget=_num("context_char_budget", CONTEXT_CHARS, int))
+                          budget=budget_eff)
     timings["so_doan"] = len(chunks)
     note(f"Đã chọn {len(chunks)} nguồn — model đang đọc và soạn câu trả lời…")
     answer_mode = "mixed" if company and chunks else ("grounded" if chunks else "operational")

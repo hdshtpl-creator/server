@@ -539,6 +539,24 @@ cd hds-ai && .venv/bin/python -m tests.test_security
 
 ---
 
+### GPU 16GB: kiểm model có đang nằm trọn trên card không
+
+Có GPU không có nghĩa Ollama đang dùng trọn nó. Ca kinh điển: `llm_num_ctx`
+đặt to làm (trọng số + bộ nhớ ngữ cảnh KV) vượt VRAM → Ollama **lặng lẽ chẻ
+model CPU/GPU**, tốc độ rơi từ vài chục token/giây xuống một chữ số — nhìn hệt
+như máy không có GPU.
+
+```bash
+bash deploy/kiem-tra-gpu.sh
+```
+
+Đọc kết quả: mục 2 (`ollama ps`) cột PROCESSOR phải là **100% GPU**; mục 3 tốc
+độ sinh ≥25 token/giây là mức GPU. Số liệu tham chiếu của qwen3:14b trên card
+16GB: `num_ctx=32768` cần ~9.3GB trọng số + ~10GB KV f16 = **vượt VRAM**; bật
+nén KV (`OLLAMA_KV_CACHE_TYPE=q8_0` + `OLLAMA_FLASH_ATTENTION=1`, lệnh in sẵn
+trong script) kéo về ~15.5GB — vừa khít; vẫn chẻ thì hạ *Cửa sổ ngữ cảnh* trên
+web xuống 24576, trần ký tự tài liệu tự co theo.
+
 ### Nạp một lô lớn mà không muốn duyệt tay
 
 Mặc định **mọi PDF đều chờ người duyệt** (chính sách 20/08/2026) — OCR đọc sai
