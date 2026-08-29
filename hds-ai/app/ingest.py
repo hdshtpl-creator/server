@@ -25,9 +25,51 @@ CHUNK_WORDS = 320
 # Số CÂU chồng lấn giữa hai đoạn liền nhau (không phải số từ): câu đầu đoạn sau
 # nhắc lại ý cuối đoạn trước để đọc rời từng đoạn vẫn không đứt mạch.
 CHUNK_OVERLAP_UNITS = 1
+# ---------------------------------------------------------------------------
+# HAI danh sách định dạng, khác nhau CÓ CHỦ ĐÍCH — đừng gộp làm một:
+#
+#   SUPPORTED_EXTENSIONS  = quét thư mục kho để HỌC vào tri thức lâu dài.
+#       Giữ hẹp. Nới ở đây là mọi file .json/.log/.html nằm lẫn trong thư mục
+#       hồ sơ cũng bị nạp thành tri thức và trả lời sai cho người khác.
+#
+#   ATTACHMENT_EXTENSIONS = file người dùng ĐÍNH KÈM vào một hội thoại để bot
+#       đọc rồi trả lời. Rộng hết mức bộ đọc kham nổi: kéo gì vào chat thì bot
+#       đọc nấy, không bắt người dùng đi đổi định dạng trước. File này KHÔNG
+#       vào kho và tự xoá sau 6 giờ, nên nới ở đây không làm bẩn tri thức.
+# ---------------------------------------------------------------------------
 SUPPORTED_EXTENSIONS = frozenset({".txt", ".md", ".docx", ".doc", ".pdf", ".xlsx", ".csv",
                                   ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"})
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"})
+
+# Đọc thẳng như văn bản thuần — không có cấu trúc gì phải bóc, chỉ cần đúng bảng mã.
+TEXTLIKE_EXTENSIONS = frozenset({".json", ".xml", ".yaml", ".yml", ".ini", ".cfg",
+                                 ".conf", ".log", ".rst", ".tex", ".srt", ".vtt",
+                                 ".sql", ".py", ".js", ".ts", ".sh", ".bat"})
+HTML_EXTENSIONS = frozenset({".html", ".htm", ".xhtml"})
+EMAIL_EXTENSIONS = frozenset({".eml"})
+# Bảng tính / bảng phân tách khác đi chung bộ đọc với .xlsx và .csv.
+SPREADSHEET_EXTENSIONS = frozenset({".xlsx", ".xlsm"})
+DELIMITED_EXTENSIONS = frozenset({".csv", ".tsv"})
+
+# LibreOffice làm CẦU: định dạng cũ/khác hệ được chuyển sang một định dạng ĐÃ
+# có bộ đọc riêng, thay vì viết thêm một bộ bóc chữ cho từng loại. Cần gói hệ
+# thống 'libreoffice' (deploy/setup.sh đã cài) — thiếu thì báo lỗi có mã rõ
+# ràng chứ không im lặng trả về rỗng.
+LIBREOFFICE_BRIDGE = {
+    ".doc": "docx", ".rtf": "docx", ".odt": "docx", ".wps": "docx",
+    ".xls": "xlsx", ".ods": "xlsx",
+    ".ppt": "pdf", ".pptx": "pdf", ".odp": "pdf",
+}
+
+ATTACHMENT_EXTENSIONS = frozenset(
+    SUPPORTED_EXTENSIONS
+    | TEXTLIKE_EXTENSIONS
+    | HTML_EXTENSIONS
+    | EMAIL_EXTENSIONS
+    | SPREADSHEET_EXTENSIONS
+    | DELIMITED_EXTENSIONS
+    | set(LIBREOFFICE_BRIDGE)
+)
 
 
 def _positive_int_env(name, default, minimum=1):
@@ -36,6 +78,13 @@ def _positive_int_env(name, default, minimum=1):
     except (TypeError, ValueError):
         return default
     return value if value >= minimum else default
+
+
+def _bool_env(name, default=True):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off", "")
 
 
 # Các giới hạn này bảo vệ worker khỏi file lỗi/zip bomb và bảng tính quá lớn.
@@ -570,8 +619,147 @@ def _extract_pdf(path):
                                     "characters": body_len}
 
 
-def extract_text_with_metadata(path: Path) -> ExtractionResult:
-    """Trích nội dung và trả method/warnings/metadata cho status vận hành."""
+_HTML_DROP_BLOCK = re.compile(r"<(script|style|head)\b.*?</\1>", re.IGNORECASE | re.DOTALL)
+_HTML_LINE_BREAK = re.compile(r"</(?:p|div|tr|li|h[1-6]|table|section)\s*>|<br\s*/?>",
+                              re.IGNORECASE)
+_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def html_to_text(markup: str) -> str:
+    """HTML → chữ đọc được.
+
+    Bỏ script/style trước, đổi các thẻ kết đoạn thành xuống dòng THẬT rồi mới
+    gỡ thẻ. Gỡ thẳng là cả trang dính lại thành một khối liền — model đọc ra
+    không còn ranh giới đoạn nào để bám."""
+    import html as html_module
+
+    text = _HTML_DROP_BLOCK.sub(" ", markup)
+    text = _HTML_LINE_BREAK.sub("\n", text)
+    text = _HTML_TAG.sub(" ", text)
+    text = html_module.unescape(text)
+    # Gộp khoảng trắng TRONG dòng, giữ nguyên ngắt dòng vừa dựng ở trên.
+    lines = [re.sub(r"[ \t\xa0]+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def _extract_html(path):
+    raw = path.read_bytes()
+    decoded, encoding, warnings = _decode_text(raw)
+    return html_to_text(decoded), "html", warnings, {"encoding": encoding}
+
+
+def _extract_eml(path):
+    """Thư .eml khách gửi: giữ đầu thư (Từ/Tới/Ngày/Tiêu đề) rồi tới nội dung.
+
+    Đầu thư KHÔNG phải phần thừa — người gửi và ngày gửi thường chính là dữ
+    kiện quyết định trong một hồ sơ tranh chấp. File đính kèm BÊN TRONG thư chỉ
+    được liệt kê tên kèm cảnh báo: bóc đệ quy là mở đường cho file lồng file,
+    cần nội dung nào thì người dùng đính kèm thẳng file đó vào hội thoại."""
+    from email import policy
+    from email.parser import BytesParser
+
+    with path.open("rb") as fh:
+        msg = BytesParser(policy=policy.default).parse(fh)
+    warnings = []
+    head = []
+    for label, field_name in (("Từ", "From"), ("Tới", "To"), ("CC", "Cc"),
+                              ("Ngày", "Date"), ("Tiêu đề", "Subject")):
+        value = msg.get(field_name)
+        if value:
+            head.append(f"{label}: {value}")
+
+    body = ""
+    try:
+        part = msg.get_body(preferencelist=("plain", "html"))
+    except Exception:  # noqa: BLE001 — thư dựng sai chuẩn vẫn phải đọc được phần còn lại
+        part = None
+    if part is not None:
+        content = part.get_content()
+        body = html_to_text(content) if part.get_content_subtype() == "html" else content
+    if not body:
+        warnings.append("Không đọc được phần thân thư; chỉ giữ được đầu thư.")
+
+    names = [a.get_filename() for a in msg.iter_attachments()]
+    names = [n for n in names if n]
+    if names:
+        head.append("File đính kèm trong thư: " + ", ".join(names))
+        warnings.append("Thư có file đính kèm — nội dung của chúng KHÔNG được đọc; "
+                        "hãy đính kèm thẳng từng file vào hội thoại nếu cần.")
+
+    return "\n".join(head + ["", body or ""]), "eml", warnings, {"attachments": len(names)}
+
+
+def _convert_via_libreoffice(path: Path, target: str, timeout=180) -> Path:
+    """Nhờ LibreOffice chuyển `path` sang định dạng `target` trong một thư mục
+    tạm, trả về đường dẫn file mới.
+
+    Người gọi phải tự dọn thư mục cha của file trả về — nên luôn đi qua
+    `_extract_via_libreoffice` thay vì gọi thẳng hàm này."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    soffice = shutil.which("libreoffice") or shutil.which("soffice")
+    if not soffice:
+        raise ExtractionError("libreoffice_missing",
+                              f"Chưa có LibreOffice để đọc file {path.suffix}.",
+                              f"Cài libreoffice trên máy chủ, hoặc lưu file sang .{target}.")
+    tmp = Path(tempfile.mkdtemp(prefix="hds_conv_"))
+    try:
+        # UserInstallation riêng để nhiều lần gọi liên tiếp không khoá hồ sơ nhau.
+        subprocess.run(
+            [soffice, f"-env:UserInstallation=file://{tmp}/profile",
+             "--headless", "--convert-to", target, "--outdir", str(tmp), str(path)],
+            check=True, timeout=timeout,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as exc:  # noqa: BLE001 — mọi kiểu hỏng đều quy về một mã lỗi có hướng xử lý
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise ExtractionError("office_conversion_failed",
+                              f"Không chuyển được {path.suffix} sang .{target}.",
+                              "File có thể hỏng hoặc đặt mật khẩu; hãy mở và lưu lại.") from exc
+    out = tmp / f"{path.stem}.{target}"
+    if not out.exists():
+        # Tên file có ký tự lạ thì LibreOffice đặt tên khác — lấy đúng file
+        # duy nhất đúng đuôi thay vì bó tay.
+        found = [f for f in tmp.glob(f"*.{target}") if f.is_file()]
+        if not found:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise ExtractionError("office_conversion_failed",
+                                  f"LibreOffice không tạo được file .{target}.",
+                                  "Mở file và lưu lại thủ công sang định dạng thông dụng.")
+        out = found[0]
+    return out
+
+
+def _extract_via_libreoffice(path: Path, target: str):
+    """Đọc định dạng chưa có bộ đọc riêng bằng cách chuyển sang định dạng ĐÃ
+    có bộ đọc (.docx/.xlsx/.pdf) rồi đọc bản chuyển."""
+    import shutil
+
+    out = _convert_via_libreoffice(path, target)
+    try:
+        if target == "docx":
+            text, _method, warnings, metadata = _extract_docx(out)
+        elif target == "xlsx":
+            text, _method, warnings, metadata = _extract_xlsx(out)
+        else:
+            text, _method, warnings, metadata = _extract_pdf(out)
+    finally:
+        shutil.rmtree(out.parent, ignore_errors=True)
+    warnings = list(warnings)
+    warnings.append(f"Đã đọc qua bản chuyển .{target} bằng LibreOffice — "
+                    "bố cục có thể lệch so với bản gốc.")
+    return text, f"libreoffice:{target}", warnings, {**metadata, "converted_to": target}
+
+
+def extract_text_with_metadata(path: Path, allowed=None) -> ExtractionResult:
+    """Trích nội dung và trả method/warnings/metadata cho status vận hành.
+
+    `allowed`: bộ đuôi file được nhận. Mặc định là SUPPORTED_EXTENSIONS (đường
+    HỌC vào kho, cố ý hẹp). File đính kèm hội thoại truyền
+    ATTACHMENT_EXTENSIONS để nhận mọi thứ bộ đọc kham nổi — xem chú thích ở
+    đầu file về lý do hai bộ này phải tách nhau."""
+    allowed = SUPPORTED_EXTENSIONS if allowed is None else allowed
     path = Path(path)
     try:
         size = path.stat().st_size
@@ -587,21 +775,28 @@ def extract_text_with_metadata(path: Path) -> ExtractionResult:
                               "Tách file thành các phần nhỏ hơn hoặc tăng INGEST_MAX_SOURCE_BYTES có kiểm soát.")
 
     ext = path.suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
+    if ext not in allowed:
         raise ExtractionError("unsupported_format", f"Chưa hỗ trợ định dạng '{ext or '(không có đuôi)'}'.",
-                              "Dùng PDF, DOCX, DOC, TXT, MD, XLSX, CSV hoặc ảnh (JPG/PNG/WEBP/TIFF).")
+                              "Nhận: " + ", ".join(sorted(allowed)) + ".")
     try:
-        if ext in (".txt", ".md"):
+        if ext in (".txt", ".md") or ext in TEXTLIKE_EXTENSIONS:
             text, method, warnings, metadata = _extract_txt(path)
-        elif ext == ".csv":
+        elif ext in HTML_EXTENSIONS:
+            text, method, warnings, metadata = _extract_html(path)
+        elif ext in EMAIL_EXTENSIONS:
+            text, method, warnings, metadata = _extract_eml(path)
+        elif ext in DELIMITED_EXTENSIONS:
             text, method, warnings, metadata = _extract_csv(path)
-        elif ext == ".xlsx":
+        elif ext in SPREADSHEET_EXTENSIONS:
             text, method, warnings, metadata = _extract_xlsx(path)
         elif ext == ".docx":
             text, method, warnings, metadata = _extract_docx(path)
         elif ext == ".doc":
             text = _extract_doc_strict(path)
             method, warnings, metadata = "libreoffice", [], {}
+        elif ext in LIBREOFFICE_BRIDGE:
+            text, method, warnings, metadata = _extract_via_libreoffice(
+                path, LIBREOFFICE_BRIDGE[ext])
         elif ext in IMAGE_EXTENSIONS:
             text, method, warnings, metadata = _extract_image(path)
         else:
@@ -617,7 +812,8 @@ def extract_text_with_metadata(path: Path) -> ExtractionResult:
         raise ExtractionError("no_text", "Không tìm thấy nội dung chữ có thể dùng.",
                               "Nếu tài liệu là ảnh/scan, kiểm tra OCR; nếu là DOCX, mở và lưu lại file.")
     if len(text) < 80:
-        warnings.append("Nội dung trích xuất dưới 80 ký tự; cần kiểm tra thủ công trước khi duyệt.")
+        warnings.append("Nội dung trích xuất dưới 80 ký tự — nhiều khả năng file là bản scan mờ "
+                        "hoặc gần như rỗng; hãy đối chiếu bản gốc trước khi dùng.")
     metadata = {**metadata, "source_bytes": size, "characters": len(text)}
     return ExtractionResult(text=text, format=ext.lstrip("."), method=method,
                             warnings=warnings, metadata=metadata)
@@ -683,22 +879,206 @@ OCR_DPI = _positive_int_env("INGEST_OCR_DPI", 400)
 # --oem 1 = chỉ dùng mạng LSTM (chính xác hơn engine cũ với chữ có dấu).
 # --psm 3 = tự phân tích bố cục, hợp với giấy tờ nhiều khối.
 OCR_CONFIG = os.getenv("INGEST_OCR_CONFIG", "--oem 1 --psm 3")
+# Bo doc chu: 'auto' (mac dinh) dung PaddleOCR neu may chu da cai, khong thi
+# tesseract. Dat 'tesseract' de ep dung ban cu, 'paddle' de ep dung ban moi.
+OCR_ENGINE = os.getenv("INGEST_OCR_ENGINE", "auto")
+# Nan trang nghieng truoc khi OCR. Ban scan dat tay thuong lech 1-3 do.
+OCR_DESKEW = _bool_env("INGEST_OCR_DESKEW", True)
+OCR_DESKEW_MAX_DEG = float(os.getenv("INGEST_OCR_DESKEW_MAX_DEG", "3") or 3)
+OCR_DESKEW_STEP = float(os.getenv("INGEST_OCR_DESKEW_STEP", "0.25") or 0.25)
+# Nhi phan hoa theo vung: ban ke ngon cua giay ngang vang / anh sang khong deu.
+OCR_BINARIZE = _bool_env("INGEST_OCR_BINARIZE", True)
+OCR_BINARIZE_RADIUS = _positive_int_env("INGEST_OCR_BINARIZE_RADIUS", 15)
+OCR_BINARIZE_BIAS = _positive_int_env("INGEST_OCR_BINARIZE_BIAS", 10)
+
+
+def _variance(values):
+    """Phương sai của một dãy số — dùng để chấm điểm từng góc nghiêng thử."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    return sum((v - mean) ** 2 for v in values) / n
+
+
+def _skew_angles(max_deg, step):
+    """Danh sách góc sẽ thử, từ âm sang dương, luôn có 0 ở giữa."""
+    if step <= 0 or max_deg <= 0:
+        return [0.0]
+    n = int(round(max_deg / step))
+    return [round(i * step, 3) for i in range(-n, n + 1)]
+
+
+def _row_profile(image):
+    """Độ sáng TRUNG BÌNH của từng dòng ảnh.
+
+    Mẹo rẻ: thu ảnh về đúng 1 pixel chiều ngang — Pillow tự lấy trung bình cả
+    dòng. Không cần numpy, không cần duyệt từng điểm ảnh.
+    """
+    from PIL import Image
+    height = image.height
+    if height < 2:
+        return []
+    return list(image.resize((1, height), Image.BILINEAR).getdata())
+
+
+def _detect_skew(image, max_deg, step):
+    """Đo góc nghiêng của trang scan bằng hình chiếu theo dòng.
+
+    Trang THẲNG: các dòng chữ nằm đúng hàng ngang, nên hình chiếu theo dòng có
+    chỗ tối (dòng chữ) xen chỗ sáng (khoảng trắng) → phương sai LỚN. Trang
+    NGHIÊNG: chữ của nhiều dòng trộn vào cùng một hàng pixel → biểu đồ phẳng
+    ra → phương sai nhỏ. Vậy góc cho phương sai lớn nhất chính là góc cần xoay
+    ngược lại.
+
+    Bản scan giấy tờ Việt Nam thường lệch 1-3 độ do đặt giấy tay; tesseract
+    không tự nắn, và chỉ 2 độ nghiêng là dấu thanh (ê/ề/ệ) bắt đầu dính vào
+    dòng trên. Đo trên ảnh thu nhỏ nên rẻ: vài chục phép resize.
+    """
+    from PIL import Image
+    work = image
+    if work.width > 800:
+        ratio = 800 / float(work.width)
+        work = work.resize((800, max(1, int(work.height * ratio))), Image.BILINEAR)
+
+    best_angle, best_score = 0.0, -1.0
+    for angle in _skew_angles(max_deg, step):
+        probe = work if angle == 0 else work.rotate(
+            angle, resample=Image.BILINEAR, expand=False, fillcolor=255)
+        score = _variance(_row_profile(probe))
+        if score > best_score:
+            best_angle, best_score = angle, score
+    return best_angle
+
+
+def _adaptive_threshold(image, radius, bias):
+    """Nhị phân hoá THEO VÙNG: so mỗi điểm với độ sáng trung bình quanh nó.
+
+    Ngưỡng toàn ảnh (Otsu) vô dụng với bản scan bị bóng đèn hoặc giấy ngả vàng
+    không đều: nửa trang sáng thì mất chữ, nửa tối thì đen kịt. So với trung
+    bình cục bộ thì mỗi vùng tự có ngưỡng riêng. Làm bằng BoxBlur + trừ ảnh,
+    không cần numpy hay OpenCV.
+    """
+    from PIL import ImageChops, ImageFilter
+    blurred = image.filter(ImageFilter.BoxBlur(radius))
+    # (điểm ảnh - trung bình vùng) + 128 → trên 128 nghĩa là sáng hơn nền.
+    diff = ImageChops.subtract(image, blurred, 1.0, 128)
+    cut = 128 - bias
+    return diff.point(lambda v: 255 if v > cut else 0)
 
 
 def _prep_for_ocr(image):
-    """Chuẩn bị ảnh trước khi OCR: xám hoá + kéo giãn tương phản.
+    """Chuẩn bị ảnh trước khi OCR: xám hoá, kéo giãn tương phản, nắn nghiêng,
+    nhị phân hoá theo vùng.
 
-    Bản scan giấy tờ hay bị nền ngả vàng, chữ nhạt, hoặc nền hoa văn (bằng cấp,
-    CCCD). Tesseract đọc chữ trên nền như vậy ra ký tự vụn. Hai phép biến đổi
-    rẻ tiền này thường cứu được phần lớn ca đó; nếu thư viện thiếu thì bỏ qua,
-    OCR vẫn chạy trên ảnh gốc.
+    Bản scan giấy tờ hay bị nền ngả vàng, chữ nhạt, nền hoa văn (bằng cấp,
+    CCCD) và lệch vài độ. Bốn phép biến đổi rẻ tiền này thường cứu được phần
+    lớn ca đó. Từng bước tắt được riêng qua .env (INGEST_OCR_DESKEW,
+    INGEST_OCR_BINARIZE) để khi một bước làm hại ảnh của một lô tài liệu cụ
+    thể thì tắt ngay, không phải chờ sửa mã và deploy.
+
+    Thiếu thư viện hoặc lỗi giữa chừng thì trả lại ảnh đang có — OCR vẫn chạy,
+    chỉ là không được nắn.
     """
     try:
-        from PIL import ImageOps
+        from PIL import Image, ImageOps
         image = image.convert("L")           # thang xám: bỏ nhiễu màu của nền
-        return ImageOps.autocontrast(image)  # kéo giãn tương phản chữ/nền
+        image = ImageOps.autocontrast(image)  # kéo giãn tương phản chữ/nền
     except Exception:
         return image
+
+    if OCR_DESKEW:
+        try:
+            angle = _detect_skew(image, OCR_DESKEW_MAX_DEG, OCR_DESKEW_STEP)
+            # Dưới nửa bước thì xoay chỉ thêm nhiễu nội suy, không lợi gì.
+            if abs(angle) >= OCR_DESKEW_STEP:
+                image = image.rotate(angle, resample=Image.BILINEAR,
+                                     expand=True, fillcolor=255)
+        except Exception:
+            pass
+
+    if OCR_BINARIZE:
+        try:
+            image = _adaptive_threshold(image, OCR_BINARIZE_RADIUS,
+                                        OCR_BINARIZE_BIAS)
+        except Exception:
+            pass
+    return image
+
+
+def _choose_ocr_engine(setting, paddle_available):
+    """Chọn bộ đọc chữ. Trả 'paddle' hoặc 'tesseract'. Logic thuần để test.
+
+    'auto' (mặc định): dùng PaddleOCR nếu máy chủ đã cài, không thì tesseract.
+    Nhờ vậy cài thêm PaddleOCR là tự nâng cấp, gỡ ra là tự lùi về, không phải
+    sửa cấu hình. Đặt tên cụ thể thì ép dùng đúng bộ đó.
+    """
+    value = (setting or "auto").strip().lower()
+    if value in ("paddle", "paddleocr"):
+        return "paddle"
+    if value in ("tesseract", "tess"):
+        return "tesseract"
+    return "paddle" if paddle_available else "tesseract"
+
+
+_paddle_reader = None
+_paddle_warned = False
+
+
+def _paddle_available():
+    try:
+        import paddleocr  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _paddle_text(image):
+    """Đọc một ảnh bằng PaddleOCR. Giữ một bản đọc dùng lại cho mọi trang —
+    nạp mô hình mất vài giây, nạp lại từng trang thì OCR cả tập tài liệu
+    chậm gấp nhiều lần."""
+    global _paddle_reader
+    import numpy
+    from paddleocr import PaddleOCR
+    if _paddle_reader is None:
+        # use_angle_cls: tự nhận trang bị quay 90/180 độ, hay gặp ở bản scan.
+        _paddle_reader = PaddleOCR(use_angle_cls=True, lang="vi", show_log=False)
+    result = _paddle_reader.ocr(numpy.array(image.convert("RGB")), cls=True)
+    lines = []
+    for page in (result or []):
+        for entry in (page or []):
+            # [toa_do, (chu, do_tin_cay)]
+            if len(entry) >= 2 and entry[1]:
+                lines.append(str(entry[1][0]))
+    return "\n".join(lines)
+
+
+def _tesseract_text(image):
+    import pytesseract
+    return pytesseract.image_to_string(image, lang="vie", config=OCR_CONFIG)
+
+
+def _ocr_image_text(image):
+    """Đọc chữ từ MỘT ảnh đã tiền xử lý — lối vào chung của cả PDF scan lẫn
+    ảnh rời.
+
+    PaddleOCR đọc tiếng Việt tốt hơn tesseract rõ rệt, nhưng nó là thư viện
+    nặng và có thể vắng mặt hoặc hỏng giữa chừng. Hỏng thì lùi ngay về
+    tesseract cho lượt đó thay vì để cả tài liệu thành rỗng — đọc kém còn hơn
+    không đọc được gì.
+    """
+    global _paddle_warned
+    prepared = _prep_for_ocr(image)
+    engine = _choose_ocr_engine(OCR_ENGINE, _paddle_available())
+    if engine == "paddle":
+        try:
+            return _paddle_text(prepared)
+        except Exception as exc:
+            if not _paddle_warned:
+                _paddle_warned = True
+                print(f"   [OCR] PaddleOCR lỗi ({type(exc).__name__}: {exc}) "
+                      "— lùi về tesseract cho các trang còn lại.")
+    return _tesseract_text(prepared)
 
 
 def _extract_image(path: Path):
@@ -727,8 +1107,7 @@ def _extract_image(path: Path):
                 image = ImageOps.exif_transpose(image)
             except Exception:
                 pass
-            text = pytesseract.image_to_string(
-                _prep_for_ocr(image), lang="vie", config=OCR_CONFIG)
+            text = _ocr_image_text(image)
     except ExtractionError:
         raise
     except Exception as e:
@@ -740,7 +1119,7 @@ def _extract_image(path: Path):
         raise ExtractionError(
             "image_unreadable", "Không đọc được file ảnh.",
             "Ảnh có thể hỏng hoặc định dạng lạ; chụp/xuất lại rồi tải lên.") from e
-    warnings = ["Ảnh đọc bằng OCR — nội dung có thể sai ký tự, cần người kiểm tra trước khi duyệt."]
+    warnings = ["Ảnh đọc bằng OCR — nội dung có thể sai ký tự, hãy đối chiếu bản gốc."]
     return text, "ocr-image", warnings, {"pages": 1}
 
 
@@ -776,8 +1155,7 @@ def _ocr_pdf_strict(path: Path) -> str:
                                            first_page=first_page, last_page=last_page)
                 for offset, image in enumerate(images):
                     page_number = first_page + offset
-                    value = pytesseract.image_to_string(
-                        _prep_for_ocr(image), lang="vie", config=OCR_CONFIG)
+                    value = _ocr_image_text(image)
                     if value.strip():
                         parts.append(f"[Trang {page_number}]\n{value}")
         else:
@@ -789,8 +1167,7 @@ def _ocr_pdf_strict(path: Path) -> str:
                     f"PDF scan có {len(images)} trang, vượt giới hạn OCR {MAX_OCR_PAGES} trang.",
                     "Tách PDF thành các phần nhỏ hơn hoặc tăng INGEST_MAX_OCR_PAGES có kiểm soát.")
             for page_number, image in enumerate(images, 1):
-                value = pytesseract.image_to_string(
-                    _prep_for_ocr(image), lang="vie", config=OCR_CONFIG)
+                value = _ocr_image_text(image)
                 if value.strip():
                     parts.append(f"[Trang {page_number}]\n{value}")
         return "\n\n".join(parts)

@@ -3,14 +3,16 @@ import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { LearnedDocument } from '../../types';
 import { DOC_TYPES, DOC_TYPE_LABELS, ACCESS_LEVEL_BADGES, SOURCE_KIND_BADGES } from '../../constants';
-import { BookOpen, Search, Filter, RefreshCw, Building2, Download, Eye } from 'lucide-react';
+import { BookOpen, Search, Filter, RefreshCw, Building2, Download, Eye, Upload } from 'lucide-react';
 import { DriveSyncStatusCard } from './DriveSyncStatusCard';
+import { UploadToKnowledgeModal } from './UploadToKnowledgeModal';
 
 export const LearnedDocsTab: React.FC = () => {
   const { showToast } = useApp();
   const [docs, setDocs] = useState<LearnedDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [docTypeFilter, setDocTypeFilter] = useState('');
@@ -68,14 +70,31 @@ export const LearnedDocsTab: React.FC = () => {
             Toàn bộ văn bản đã được duyệt nhãn và nạp vào bộ nhớ trích dẫn của AI
           </p>
         </div>
-        <button
-          onClick={() => fetchLearnedDocs()}
-          className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs rounded-xl transition-colors shrink-0"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>Tải lại dữ liệu</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Đường DUY NHẤT đưa tài liệu vào tri thức lâu dài từ giao diện.
+              Khung chat chỉ đính kèm cho bot đọc, không học gì cả. */}
+          <button
+            onClick={() => setUploadOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-hds-navy hover:bg-hds-navy-light text-white font-semibold text-xs rounded-xl transition-colors shrink-0"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>Nạp tài liệu vào kho</span>
+          </button>
+          <button
+            onClick={() => fetchLearnedDocs()}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs rounded-xl transition-colors shrink-0"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Tải lại dữ liệu</span>
+          </button>
+        </div>
       </div>
+
+      <UploadToKnowledgeModal
+        isOpen={uploadOpen}
+        onClose={() => setUploadOpen(false)}
+        onUploaded={() => fetchLearnedDocs()}
+      />
 
       {/* Trạng thái đồng bộ Drive — file nào đã học, file nào chờ xử lý và vì sao */}
       <DriveSyncStatusCard />

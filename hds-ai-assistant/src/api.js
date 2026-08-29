@@ -453,26 +453,6 @@ export async function deleteNote(noteId) {
   return request(`/notes/${noteId}`, { method: 'DELETE' });
 }
 
-// POST /upload — backend yêu cầu conversation_id kiểu int (bắt buộc)
-export async function uploadFile({ conversation_id, filename, content, mode }) {
-  const convId = toIntOrNull(conversation_id);
-  if (convId === null && !useMockBackend) {
-    throw new Error(
-      'Cần gửi ít nhất một câu hỏi trong cuộc trò chuyện này trước khi tải tài liệu lên, ' +
-        'để hệ thống cấp mã hội thoại.'
-    );
-  }
-  return request('/upload', {
-    method: 'POST',
-    body: JSON.stringify({
-      conversation_id: convId,
-      filename,
-      content,
-      mode, // 'temp' | 'save'
-    }),
-  });
-}
-
 // ==================== 2. THỐNG KÊ ====================
 
 export async function getStats() {
@@ -950,25 +930,42 @@ function triggerDownload(blob, filename) {
 
 // ==================== 13. KIỂM TRA PHÁP LÝ & TẠO FILE MẪU ====================
 
-// POST /conversations — tạo hội thoại nội bộ TRƯỚC câu hỏi đầu tiên, để tải
-// hồ sơ lên trước rồi mới hỏi (tab Kiểm tra pháp lý).
-export async function createConversation() {
+// POST /conversations — tạo hội thoại nội bộ TRƯỚC câu hỏi đầu tiên, để đính
+// kèm file trước rồi mới hỏi. `kind` quyết định hội thoại hiện ở cột lịch sử
+// nào: 'legal' = tab Kiểm tra pháp lý, 'chat' = tab Hội thoại AI.
+export async function createConversation(kind = 'legal') {
+  const safeKind = kind === 'chat' ? 'chat' : 'legal';
   if (useMockBackend) {
-    // Tao ban ghi THAT trong mockState (kind 'legal') — khong thi danh sach
-    // "phien truoc" cua tab Kiem tra phap ly trong che do gia lap luon trong.
+    // Tao ban ghi THAT trong mockState — khong thi danh sach "phien truoc"
+    // cua tab Kiem tra phap ly trong che do gia lap luon trong.
+    const stamp = new Date().toLocaleString('vi-VN', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
     const conv = {
       id: ++mockState.nextConversationId,
-      title: `Kiểm tra pháp lý ${new Date().toLocaleString('vi-VN', {
-        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-      })}`,
-      kind: 'legal',
+      title: `${safeKind === 'legal' ? 'Kiểm tra pháp lý' : 'Cuộc trò chuyện'} ${stamp}`,
+      kind: safeKind,
       updated_at: new Date().toISOString().replace('T', ' ').slice(0, 16),
       messages: [],
     };
     mockState.conversations.unshift(conv);
-    return { conversation_id: conv.id };
+    return { conversation_id: conv.id, kind: safeKind };
   }
-  return request('/conversations', { method: 'POST' });
+  return request(`/conversations?kind=${safeKind}`, { method: 'POST' });
+}
+
+// GET /upload/formats — đuôi file máy chủ đọc được. Lấy từ máy chủ thay vì
+// chép tay vào giao diện: chép tay là có ngày hộp thoại chặn đúng cái file mà
+// máy chủ đọc được (hoặc ngược lại) mà không ai biết vì sao.
+export async function getUploadFormats() {
+  if (useMockBackend) {
+    return {
+      extensions: ['.pdf', '.docx', '.doc', '.txt', '.md', '.csv', '.xlsx', '.jpg',
+                   '.png', '.eml', '.pptx', '.rtf'],
+      max_mb: 50,
+    };
+  }
+  return request('/upload/formats', { method: 'GET' });
 }
 
 // POST /upload/extract — file 'dùng xong bỏ' mọi định dạng (.pdf/.docx/ảnh…),

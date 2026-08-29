@@ -539,6 +539,40 @@ cd hds-ai && .venv/bin/python -m tests.test_security
 
 ---
 
+### Chất lượng OCR bản scan
+
+PDF scan và ảnh đi qua OCR trước khi vào kho. Với văn bản luật thì OCR sai một
+chữ số là **sai căn cứ**, nên phần này đáng chỉnh:
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `INGEST_OCR_ENGINE` | `auto` | `auto` = dùng **PaddleOCR** nếu máy chủ đã cài, không thì tesseract. Đặt `tesseract` để ép về bản cũ, `paddle` để ép bản mới |
+| `INGEST_OCR_DPI` | 400 | Cao hơn mức 300 tesseract khuyến nghị — giấy tờ VN nhiều dấu thanh nhỏ |
+| `INGEST_OCR_DESKEW` | bật | Nắn trang nghiêng. Đặt giấy tay thường lệch 1-3°, chỉ 2° là dấu thanh dính vào dòng trên |
+| `INGEST_OCR_BINARIZE` | bật | Nhị phân hoá **theo vùng** — cứu bản scan giấy ngả vàng / ánh sáng không đều, nơi ngưỡng toàn ảnh làm mất nửa trang |
+| `INGEST_MAX_OCR_PAGES` | 200 | Trần số trang OCR mỗi file; vượt thì báo lỗi thay vì âm thầm cắt |
+
+**Nâng lên PaddleOCR** (đọc tiếng Việt tốt hơn tesseract rõ rệt, chạy được CPU):
+
+```bash
+cd /opt/hds-ai-full/hds-ai
+.venv/bin/pip install paddleocr paddlepaddle
+sudo systemctl restart hds-ai-backend
+```
+
+Cài xong là tự dùng, **không phải sửa cấu hình** (`auto` tự nhận). Gỡ ra thì tự
+lùi về tesseract. Lượt OCR đầu tiên chậm hơn vì phải tải mô hình về.
+
+Nếu PaddleOCR lỗi giữa chừng, hệ thống **tự lùi về tesseract cho các trang còn
+lại** và in một dòng `[OCR] PaddleOCR lỗi … — lùi về tesseract` — đọc kém còn
+hơn không đọc được gì.
+
+> **Cách tốt nhất vẫn là tránh OCR:** cùng một văn bản luật thường có bản chữ
+> thật (`.doc`/`.docx`) trên vbpl.vn hoặc chinhphu.vn. Bản chữ cho nội dung
+> chính xác 100%, không rủi ro OCR nào. Chỉ OCR khi không còn cách khác.
+
+---
+
 ## 10. BỘ CÔNG CỤ CHẨN ĐOÁN
 
 | Script | Dùng khi | Lệnh |

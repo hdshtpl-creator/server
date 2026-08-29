@@ -95,8 +95,14 @@ export const chatStream = ApiJs.chatStream as (
 /** Mã lỗi ném ra khi lượt bị NGƯỜI DÙNG bấm "Dừng" — không phải sự cố. */
 export const DUNG_BOI_NGUOI_DUNG: string = ApiJs.DUNG_BOI_NGUOI_DUNG;
 
-export const createConversation = ApiJs.createConversation as () => Promise<{
-  conversation_id: number;
+export const createConversation = ApiJs.createConversation as (
+  kind?: 'chat' | 'legal'
+) => Promise<{ conversation_id: number; kind?: string }>;
+
+/** Đuôi file máy chủ đọc được cho ô đính kèm — nguồn sự thật là máy chủ. */
+export const getUploadFormats = ApiJs.getUploadFormats as () => Promise<{
+  extensions: string[];
+  max_mb: number;
 }>;
 
 export const uploadExtract = ApiJs.uploadExtract as (params: {
@@ -175,13 +181,6 @@ export const addNote = ApiJs.addNote as (params: {
 export const deleteNote = ApiJs.deleteNote as (
   noteId: number
 ) => Promise<{ ok?: boolean; id?: number }>;
-
-export const uploadFile = ApiJs.uploadFile as (params: {
-  conversation_id?: number | null;
-  filename: string;
-  content: string;
-  mode: 'temp' | 'save';
-}) => Promise<{ ok?: boolean; mode?: string; chunks?: number; note?: string; temp_file_id?: number }>;
 
 export const getStats = ApiJs.getStats as () => Promise<Stats>;
 

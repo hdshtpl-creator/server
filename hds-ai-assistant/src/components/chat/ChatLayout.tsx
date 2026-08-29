@@ -2,20 +2,20 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ConversationSidebar } from './ConversationSidebar';
 import { ChatMessageItem } from './ChatMessageItem';
-import { FileUploadModal } from './FileUploadModal';
 import * as api from '../../api';
-import type { BrowseDocument, MethodTemplate } from '../../types';
-import { isClientRole } from '../../constants';
+import type { BrowseDocument, MethodTemplate, TempAttachment } from '../../types';
+import { isClientRole, ATTACH_ACCEPT_FALLBACK } from '../../constants';
 import {
   Send,
   Square,
-  Upload,
+  Paperclip,
   Sliders,
   FileText,
   X,
   Loader2,
   Sparkles,
   AlertCircle,
+  AlertTriangle,
   Bot,
   Cpu,
   BookOpen,
@@ -45,33 +45,12 @@ export const ChatLayout: React.FC = () => {
     addMessageToConv,
     updateMessage,
     setConvServerId,
-    setConvTempFile,
+    setConvAttachments,
     currentUser,
     isChatStreaming,
     setChatStreaming,
     showToast,
   } = useApp();
-
-  /**
-   * Gỡ tài liệu tạm — xoá THẬT trên máy chủ, không chỉ ẩn chip.
-   *
-   * Bản trước chỉ xoá state cục bộ: bản ghi temp_files vẫn còn, nên lượt hỏi
-   * sau (hoặc khi đính kèm file thứ hai) bot vẫn đọc lại đúng tài liệu người
-   * dùng tưởng đã gỡ. Hồ sơ khách gỡ nhầm rồi vẫn nằm trong ngữ cảnh là chuyện
-   * không chấp nhận được ở một hãng luật.
-   */
-  const removeTempFile = async () => {
-    const id = activeConversation?.temp_file?.id;
-    if (id != null) {
-      try {
-        await api.deleteTempFile(id);
-      } catch (err: any) {
-        showToast(err?.message || 'Không gỡ được tài liệu tạm trên máy chủ.', 'error');
-        return; // giữ chip để người dùng biết file vẫn còn
-      }
-    }
-    setConvTempFile(activeConvId, undefined);
-  };
 
   const [inputQuestion, setInputQuestion] = useState('');
   const [useMethod, setUseMethod] = useState(false);
@@ -81,7 +60,11 @@ export const ChatLayout: React.FC = () => {
   // 'auto' = fast-path cho câu xác định, model chất lượng mặc định cho RAG;
   // '' = mặc định máy chủ; hoặc tên model cụ thể
   const [selectedModel, setSelectedModel] = useState('auto');
-  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [isDragging, setDragging] = useState(false);
+  // Danh sách đuôi file lấy TỪ MÁY CHỦ (GET /upload/formats). Chép tay vào
+  // giao diện là có ngày hộp thoại chặn đúng file mà máy chủ đọc được.
+  const [acceptExts, setAcceptExts] = useState<string>(ATTACH_ACCEPT_FALLBACK);
   const [showSourcePicker, setShowSourcePicker] = useState(false);
   const [sourceDocs, setSourceDocs] = useState<BrowseDocument[]>([]);
   const [sourceQuery, setSourceQuery] = useState('');
@@ -92,16 +75,48 @@ export const ChatLayout: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Hội thoại đang được tạo — giữ Ở REF để hai file thả cùng lúc dùng CHUNG
+  // một mã hội thoại thay vì đẻ ra hai cuộc trò chuyện rỗng.
+  const convPromiseRef = useRef<Promise<number> | null>(null);
+  // Mã hội thoại đang mở, đọc được từ trong hàm bất đồng bộ (state trong
+  // closure là bản cũ). Dùng để biết người dùng đã chuyển sang cuộc khác
+  // giữa lúc file còn đang tải.
+  const openConvRef = useRef<number | null>(null);
+  // Bộ đếm sự kiện dragenter/dragleave: kéo qua các phần tử con cũng bắn
+  // dragleave, đếm mới biết chuột đã thật sự rời khung hay chưa.
+  const dragDepthRef = useRef(0);
 
   const isClient = isClientRole(currentUser?.role);
   const serverConvId = activeConversation?.server_id;
-  // Nhân viên nội bộ luôn tải được: chế độ "lưu vào kho" không cần mã hội thoại,
-  // chỉ chế độ "dùng tạm" cần (modal tự báo nếu chưa có).
+  const attachments = activeConversation?.attachments ?? [];
+  // Chỉ nhân viên nội bộ: /upload/extract nằm sau require(INTERNAL_ROLES).
   const canUpload = !isClient;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeConversation?.messages, isChatStreaming]);
+
+  // Mã hội thoại đổi (chọn cuộc khác ở cột trái, hoặc bấm "cuộc mới") → bỏ
+  // lời hứa tạo hội thoại cũ, nếu không file thả vào cuộc mới sẽ chui vào
+  // cuộc trước đó.
+  useEffect(() => {
+    convPromiseRef.current = serverConvId != null ? Promise.resolve(serverConvId) : null;
+    openConvRef.current = serverConvId ?? null;
+  }, [serverConvId, activeConvId]);
+
+  useEffect(() => {
+    if (isClient) return;
+    api
+      .getUploadFormats()
+      .then((res) => {
+        const exts = (res?.extensions || []).filter((e) => typeof e === 'string');
+        if (exts.length) setAcceptExts(exts.join(','));
+      })
+      .catch(() => {
+        /* im lặng — đã có danh sách dự phòng, máy chủ vẫn là chốt cuối */
+      });
+  }, [isClient]);
 
   const openSourcePicker = async () => {
     setShowSourcePicker(true);
@@ -158,6 +173,137 @@ export const ChatLayout: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isClient]);
 
+  /**
+   * Mã hội thoại có thật để gắn file vào — tạo trước nếu chưa có.
+   *
+   * Luồng cũ bắt gửi một câu hỏi trước rồi mới đính kèm được. Ở đây làm như
+   * Claude/ChatGPT: kéo file vào là xong, hội thoại tự sinh. Lời hứa giữ ở ref
+   * nên thả năm file cùng lúc vẫn chỉ tạo MỘT hội thoại.
+   */
+  const ensureConversation = async (): Promise<number> => {
+    if (serverConvId != null) return serverConvId;
+    if (!convPromiseRef.current) {
+      convPromiseRef.current = api
+        .createConversation('chat')
+        .then((res) => {
+          setConvServerId(activeConvId, res.conversation_id);
+          return res.conversation_id;
+        })
+        .catch((err) => {
+          convPromiseRef.current = null; // lần sau thử lại được
+          throw err;
+        });
+    }
+    return convPromiseRef.current;
+  };
+
+  /**
+   * Đính kèm file vào hội thoại: MÁY CHỦ đọc, không phải trình duyệt.
+   *
+   * Nhờ vậy .pdf/.docx/ảnh scan đều dùng được — trình duyệt chỉ đọc nổi văn
+   * bản thuần. File không vào kho tri thức, tự xoá sau 6 giờ.
+   */
+  const handleAttach = async (files: FileList | File[] | null) => {
+    const list = files ? Array.from(files) : [];
+    if (!list.length || !canUpload) return;
+    setUploading(true);
+    setErrorMessage(null);
+    try {
+      const conv = await ensureConversation();
+      for (const file of list) {
+        // Chip "đang đọc" hiện NGAY: OCR một bản scan mất hàng chục giây, im
+        // lặng suốt quãng đó là người dùng tưởng cú thả file rơi vào hư không.
+        const pending: TempAttachment = {
+          id: null,
+          filename: file.name,
+          chunks: 0,
+          status: 'uploading',
+          warnings: [],
+          textChars: 0,
+        };
+        setConvAttachments(conv, (prev) => [...prev, pending]);
+        try {
+          const res = await api.uploadExtract({ conversation_id: conv, file });
+          setConvAttachments(conv, (prev) =>
+            prev.map((a) =>
+              a === pending
+                ? {
+                    id: typeof res.temp_file_id === 'number' ? res.temp_file_id : null,
+                    filename: res.filename || file.name,
+                    chunks: res.chunks || 0,
+                    status: res.status || 'ok',
+                    warnings: Array.isArray(res.warnings) ? res.warnings : [],
+                    textChars: typeof res.text_chars === 'number' ? res.text_chars : 0,
+                  }
+                : a
+            )
+          );
+          // Người dùng đã bấm sang cuộc trò chuyện khác trong lúc máy chủ còn
+          // đang đọc file: chip không mọc ở màn hình đang mở (cố ý — hồ sơ
+          // khách không được lẫn sang cuộc khác), nhưng file ĐÃ nằm trong
+          // cuộc kia. Nói thẳng ra, đừng để nó biến mất không dấu vết.
+          // null = màn hình chưa kịp dựng lại sau khi hội thoại vừa được tạo,
+          // chưa biết gì thì đừng báo — báo nhầm còn khó hiểu hơn im lặng.
+          if (openConvRef.current != null && openConvRef.current !== conv) {
+            showToast(
+              `«${file.name}» đã đính kèm vào cuộc trò chuyện trước đó — ` +
+                'mở lại cuộc đó để hỏi về file này.',
+              'info'
+            );
+          }
+        } catch (err: any) {
+          // Bỏ đúng chip tạm của file hỏng, giữ nguyên các file đọc được.
+          setConvAttachments(conv, (prev) => prev.filter((a) => a !== pending));
+          showToast(err?.message || `Không đọc được «${file.name}».`, 'error');
+        }
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Không mở được hội thoại để đính kèm file.', 'error');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  /**
+   * Gỡ file đính kèm — xoá THẬT trên máy chủ, không chỉ ẩn chip.
+   *
+   * Bản trước chỉ xoá state cục bộ: bản ghi temp_files vẫn còn, nên lượt hỏi
+   * sau bot vẫn đọc lại đúng tài liệu người dùng tưởng đã gỡ. Hồ sơ khách gỡ
+   * nhầm rồi vẫn nằm trong ngữ cảnh là chuyện không chấp nhận được ở một hãng
+   * luật.
+   */
+  const removeAttachment = async (target: TempAttachment) => {
+    if (serverConvId == null) return;
+    if (target.id != null) {
+      try {
+        await api.deleteTempFile(target.id);
+      } catch (err: any) {
+        showToast(err?.message || `Không gỡ được «${target.filename}» trên máy chủ.`, 'error');
+        return; // giữ chip để người dùng biết file vẫn còn
+      }
+    }
+    // Lọc theo CHÍNH đối tượng đó, không theo chỉ số: giữa lúc chờ máy chủ xoá,
+    // một lượt tải khác có thể đã chèn thêm chip và làm lệch chỉ số.
+    setConvAttachments(serverConvId, (prev) => prev.filter((a) => a !== target));
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setDragging(false);
+    if (!canUpload) return;
+    void handleAttach(e.dataTransfer?.files ?? null);
+  };
+
+  /** Dán ảnh chụp màn hình / file từ clipboard thẳng vào ô hỏi. */
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData?.files || []);
+    if (!files.length || !canUpload) return; // dán chữ bình thường thì không đụng vào
+    e.preventDefault();
+    void handleAttach(files);
+  };
+
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const questionText = inputQuestion.trim();
@@ -166,7 +312,11 @@ export const ChatLayout: React.FC = () => {
     setInputQuestion('');
     setErrorMessage(null);
 
-    const tempFileName = activeConversation.temp_file?.filename;
+    // Chỉ tính các file đã đọc xong: chip còn "uploading" chưa có nội dung
+    // trên máy chủ, ghi tên nó vào lượt hỏi là nói dối người dùng.
+    const readyNames = attachments
+      .filter((a) => a.status !== 'uploading')
+      .map((a) => a.filename);
 
     addMessageToConv(activeConvId, {
       id: `msg-${Date.now()}`,
@@ -174,7 +324,7 @@ export const ChatLayout: React.FC = () => {
       text: questionText,
       timestamp: nowLabel(),
       used_method: useMethod && !isClient,
-      used_temp_file: tempFileName,
+      used_temp_files: readyNames.length ? readyNames : undefined,
     });
 
     setChatStreaming(true);
@@ -191,7 +341,7 @@ export const ChatLayout: React.FC = () => {
         {
           question: questionText,
           conversation_id: serverConvId ?? null,
-          use_temp: Boolean(tempFileName),
+          use_temp: readyNames.length > 0,
           use_method: useMethod && !isClient,
           model: isClient ? undefined : selectedModel,
           source_document_ids:
@@ -345,7 +495,32 @@ export const ChatLayout: React.FC = () => {
     <div className="flex w-full h-[calc(100dvh-4rem)] bg-hds-soft dark:bg-slate-950 overflow-hidden">
       <ConversationSidebar />
 
-      <main className="flex-1 flex flex-col h-full bg-white dark:bg-slate-900 min-w-0">
+      <main
+        className="relative flex-1 flex flex-col h-full bg-white dark:bg-slate-900 min-w-0"
+        onDragEnter={(e) => {
+          if (!canUpload || !e.dataTransfer?.types?.includes('Files')) return;
+          dragDepthRef.current += 1;
+          setDragging(true);
+        }}
+        onDragOver={(e) => {
+          // Không chặn dragover thì trình duyệt tự mở file trong tab và cuộc
+          // trò chuyện biến mất — cú thả nào cũng phải bị chặn ở đây.
+          if (canUpload && e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+        }}
+        onDragLeave={() => {
+          dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+          if (dragDepthRef.current === 0) setDragging(false);
+        }}
+        onDrop={handleDrop}
+      >
+        {isDragging && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-hds-navy/10 dark:bg-blue-950/50 border-2 border-dashed border-hds-navy dark:border-blue-400 rounded-xl pointer-events-none">
+            <span className="flex items-center gap-2 bg-white dark:bg-slate-900 text-hds-navy dark:text-blue-200 font-bold text-sm px-4 py-2.5 rounded-xl shadow-lg border border-blue-200 dark:border-blue-900">
+              <Paperclip className="w-4 h-4" />
+              Thả file vào đây để bot đọc
+            </span>
+          </div>
+        )}
         {/* Thanh công cụ trên cùng */}
         <div className="border-b border-slate-200 dark:border-slate-800 px-3 sm:px-4 py-2.5 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -353,20 +528,12 @@ export const ChatLayout: React.FC = () => {
               {activeConversation?.title || 'Cuộc trò chuyện'}
             </h2>
 
-            {activeConversation?.temp_file && (
-              <span className="hidden sm:flex items-center gap-1 bg-amber-50 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-800 text-[11px] px-2.5 py-1 rounded-full shrink-0">
+            {attachments.length > 0 && (
+              <span className="hidden sm:flex items-center gap-1 bg-blue-50 dark:bg-blue-950/60 text-blue-900 dark:text-blue-200 border border-blue-300 dark:border-blue-800 text-[11px] px-2.5 py-1 rounded-full shrink-0">
                 <FileText className="w-3.5 h-3.5 shrink-0" />
-                <span className="font-medium truncate max-w-[150px]">
-                  {activeConversation.temp_file.filename}
+                <span className="font-medium">
+                  {attachments.length} file đính kèm
                 </span>
-                <button
-                  onClick={() => void removeTempFile()}
-                  className="hover:text-amber-600 ml-0.5 p-0.5"
-                  title="Gỡ tài liệu tạm"
-                  aria-label="Gỡ tài liệu tạm"
-                >
-                  <X className="w-3 h-3" />
-                </button>
               </span>
             )}
           </div>
@@ -424,17 +591,18 @@ export const ChatLayout: React.FC = () => {
             {!isClient && (
               <button
                 id="chat-upload-btn"
-                onClick={() => setShowUploadModal(true)}
-                disabled={!canUpload}
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={!canUpload || uploading}
                 className="flex items-center gap-1.5 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 font-semibold text-xs px-3 py-1.5 rounded-xl border border-blue-200 dark:border-slate-700 hover:bg-blue-100 dark:hover:bg-slate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title={
-                  canUpload
-                    ? 'Tải tài liệu lên cuộc trò chuyện'
-                    : 'Hãy gửi câu hỏi đầu tiên để hệ thống cấp mã hội thoại, sau đó mới tải tài liệu lên được'
-                }
+                title="Đính kèm file cho bot đọc — mọi định dạng, không vào kho tri thức"
               >
-                <Upload className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Tải tài liệu</span>
+                {uploading ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Paperclip className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">Đính kèm file</span>
               </button>
             )}
           </div>
@@ -468,8 +636,8 @@ export const ChatLayout: React.FC = () => {
                 Trợ lý AI Pháp lý HDS
               </h3>
               <p className="text-xs max-w-sm mt-1 text-slate-500 dark:text-slate-400">
-                Đặt câu hỏi pháp lý hoặc tải tài liệu lên để tra cứu điều khoản, hợp đồng và tiền lệ
-                tư vấn của HDS.
+                Đặt câu hỏi pháp lý hoặc kéo thả tài liệu vào đây để tra cứu điều khoản, hợp
+                đồng và tiền lệ tư vấn của HDS.
               </p>
             </div>
           )}
@@ -509,6 +677,69 @@ export const ChatLayout: React.FC = () => {
         {/* Ô nhập */}
         <div className="p-3 sm:p-4 border-t border-slate-200 dark:border-slate-800 shrink-0">
           <form onSubmit={handleSendMessage} className="max-w-3xl mx-auto space-y-2">
+            {/* File đang đính kèm — hiện ngay trên ô gõ như Claude/ChatGPT */}
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {attachments.map((a, idx) => (
+                  <span
+                    key={`${a.filename}-${idx}`}
+                    className="inline-flex items-center gap-1.5 bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-900 text-blue-900 dark:text-blue-200 text-[11px] font-medium px-2 py-1 rounded-lg max-w-full"
+                  >
+                    {a.status === 'uploading' ? (
+                      <Loader2 className="w-3 h-3 shrink-0 animate-spin" />
+                    ) : (
+                      <FileText className="w-3 h-3 shrink-0" />
+                    )}
+                    <span className="truncate">{a.filename}</span>
+                    {a.status === 'uploading' && (
+                      <span className="text-blue-500/80 dark:text-blue-300/70 shrink-0">
+                        đang đọc…
+                      </span>
+                    )}
+                    {a.status === 'warning' && (
+                      <AlertTriangle
+                        className="w-3 h-3 text-amber-500 shrink-0"
+                        aria-label="Bản scan — đọc có cảnh báo"
+                      />
+                    )}
+                    {a.textChars > 0 && (
+                      <span className="text-blue-500/80 dark:text-blue-300/70 tabular-nums shrink-0">
+                        {a.textChars.toLocaleString('vi-VN')} ký tự
+                      </span>
+                    )}
+                    {a.status !== 'uploading' && (
+                      <button
+                        type="button"
+                        onClick={() => void removeAttachment(a)}
+                        className="hover:text-red-600"
+                        aria-label={`Bỏ ${a.filename}`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Máy chủ đã nói rõ đọc file gặp vấn đề gì — hiện nguyên văn, đừng
+                nuốt. Người dùng đọc xong mới biết nên tin kết luận của AI tới
+                đâu. */}
+            {attachments.some((a) => a.warnings.length > 0) && (
+              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-2.5 space-y-1.5">
+                {attachments
+                  .filter((a) => a.warnings.length > 0)
+                  .map((a, idx) => (
+                    <div key={`w-${a.filename}-${idx}`} className="flex items-start gap-2">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-px" />
+                      <p className="text-[11px] leading-relaxed text-amber-900 dark:text-amber-200">
+                        <b className="break-all">{a.filename}</b>: {a.warnings.join(' · ')}
+                      </p>
+                    </div>
+                  ))}
+              </div>
+            )}
+
             <div className="flex items-end gap-2 border border-slate-300 dark:border-slate-700 rounded-2xl p-2 shadow-sm bg-slate-50/60 dark:bg-slate-800/50 focus-within:border-hds-blue focus-within:ring-2 focus-within:ring-hds-blue/30 transition-colors">
               <textarea
                 id="chat-input-textarea"
@@ -517,6 +748,7 @@ export const ChatLayout: React.FC = () => {
                 value={inputQuestion}
                 onChange={(e) => setInputQuestion(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 disabled={isChatStreaming}
                 placeholder="Nhập câu hỏi pháp lý… (Enter để gửi, Shift+Enter để xuống dòng)"
                 aria-label="Câu hỏi gửi tới trợ lý AI"
@@ -525,20 +757,30 @@ export const ChatLayout: React.FC = () => {
 
               <div className="flex items-center gap-1 shrink-0 pb-0.5">
                 {!isClient && (
-                  <button
-                    type="button"
-                    onClick={() => setShowUploadModal(true)}
-                    disabled={!canUpload}
-                    className="p-2 text-slate-400 hover:text-hds-navy dark:hover:text-blue-400 hover:bg-slate-200/70 dark:hover:bg-slate-700 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                    title={
-                      canUpload
-                        ? 'Tải tài liệu lên'
-                        : 'Hãy gửi câu hỏi đầu tiên trước khi tải tài liệu'
-                    }
-                    aria-label="Tải tài liệu lên"
-                  >
-                    <Upload className="w-4 h-4" />
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={!canUpload || uploading}
+                      className="p-2 text-slate-400 hover:text-hds-navy dark:hover:text-blue-400 hover:bg-slate-200/70 dark:hover:bg-slate-700 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      title="Đính kèm file cho bot đọc (kéo thả hoặc dán cũng được)"
+                      aria-label="Đính kèm file"
+                    >
+                      {uploading ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Paperclip className="w-4 h-4" />
+                      )}
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept={acceptExts}
+                      className="hidden"
+                      onChange={(e) => void handleAttach(e.target.files)}
+                    />
+                  </>
                 )}
 
                 {/* Đang trả lời thì chính chỗ này là nút DỪNG — không bắt
@@ -597,9 +839,9 @@ export const ChatLayout: React.FC = () => {
                 )}
                 <span className="flex items-center gap-1.5 min-w-0">
                   <span className="shrink-0">Chế độ:</span>
-                  {activeConversation?.temp_file ? (
-                    <span className="text-amber-700 dark:text-amber-300 font-semibold bg-amber-50 dark:bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800 truncate">
-                      Có tài liệu tạm đính kèm
+                  {attachments.length > 0 ? (
+                    <span className="text-blue-700 dark:text-blue-300 font-semibold bg-blue-50 dark:bg-blue-950/60 px-1.5 py-0.5 rounded border border-blue-200 dark:border-blue-800 truncate">
+                      Đọc {attachments.length} file đính kèm + kho nội bộ
                     </span>
                   ) : (
                     <span className="truncate">
@@ -736,13 +978,6 @@ export const ChatLayout: React.FC = () => {
           </div>
         </div>
       )}
-
-      <FileUploadModal
-        isOpen={showUploadModal}
-        onClose={() => setShowUploadModal(false)}
-        conversationId={serverConvId ?? null}
-        localConversationId={activeConvId}
-      />
     </div>
   );
 };

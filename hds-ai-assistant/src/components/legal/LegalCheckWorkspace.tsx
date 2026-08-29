@@ -1,7 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
-import type { ChatMessage, ConversationSummary, TemplateFile } from '../../types';
+import type {
+  ChatMessage,
+  ConversationSummary,
+  TempAttachment,
+  TemplateFile,
+} from '../../types';
+import { ATTACH_ACCEPT_FALLBACK } from '../../constants';
 import { ChatMessageItem } from '../chat/ChatMessageItem';
 import {
   Scale,
@@ -40,18 +46,6 @@ import {
 const nowLabel = () =>
   new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 
-interface Attachment {
-  /** Id bản ghi temp_files trên máy chủ — để gỡ thật khi bấm ×. */
-  id: number | null;
-  filename: string;
-  chunks: number;
-  status: string;
-  /** Máy chủ nói rõ đọc file có vấn đề gì (thiếu trang, phải OCR, ít chữ…).
-   *  Người dùng cần thấy để biết AI đang đọc trên nền dữ liệu nào. */
-  warnings: string[];
-  /** Số ký tự đọc được — con số nhỏ bất thường là dấu hiệu file scan mờ. */
-  textChars: number;
-}
 
 /**
  * Cache mức module: App.tsx render tab theo điều kiện nên chuyển tab là
@@ -68,7 +62,7 @@ const sessionCache: {
   userId: number | string | null;
   messages: ChatMessage[];
   serverConvId: number | null;
-  attachments: Attachment[];
+  attachments: TempAttachment[];
   /** Đang có lượt stream chạy — sống qua unmount để quay lại tab không gửi
    *  chồng lượt thứ hai trong lúc lượt cũ (tạo bộ file dài) còn chạy. */
   busy: boolean;
@@ -110,10 +104,25 @@ export const LegalCheckWorkspace: React.FC = () => {
 
   const [messages, setMessages] = useState<ChatMessage[]>(sessionCache.messages);
   const [serverConvId, setServerConvId] = useState<number | null>(sessionCache.serverConvId);
-  const [attachments, setAttachments] = useState<Attachment[]>(sessionCache.attachments);
+  const [attachments, setAttachments] = useState<TempAttachment[]>(sessionCache.attachments);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(sessionCache.busy);
   const [uploading, setUploading] = useState(false);
+  // Đuôi file lấy TỪ MÁY CHỦ (GET /upload/formats) — chép tay vào giao diện là
+  // có ngày hộp thoại chặn đúng file mà máy chủ đọc được.
+  const [acceptExts, setAcceptExts] = useState<string>(ATTACH_ACCEPT_FALLBACK);
+
+  useEffect(() => {
+    api
+      .getUploadFormats()
+      .then((res) => {
+        const exts = (res?.extensions || []).filter((e) => typeof e === 'string');
+        if (exts.length) setAcceptExts(exts.join(','));
+      })
+      .catch(() => {
+        /* im lặng — đã có danh sách dự phòng, máy chủ vẫn là chốt cuối */
+      });
+  }, []);
 
   // Lịch sử PHIÊN kiểm tra (kind='legal' trên máy chủ): mở lại phiên cũ là
   // bot đọc lại toàn bộ diễn biến (tin nhắn nạp về + bộ nhớ dài phía backend)
@@ -146,7 +155,7 @@ export const LegalCheckWorkspace: React.FC = () => {
   const updateMessage = (id: string, patch: (m: ChatMessage) => ChatMessage) => {
     applyMessages((prev) => prev.map((m) => (m.id === id ? patch(m) : m)));
   };
-  const applyAttachments = (fn: (prev: Attachment[]) => Attachment[]) => {
+  const applyAttachments = (fn: (prev: TempAttachment[]) => TempAttachment[]) => {
     sessionCache.attachments = fn(sessionCache.attachments);
     sessionCache.sync?.();
   };
@@ -213,7 +222,7 @@ export const LegalCheckWorkspace: React.FC = () => {
     if (sessionCache.serverConvId != null) return sessionCache.serverConvId;
     if (!convPromiseRef.current) {
       convPromiseRef.current = api
-        .createConversation()
+        .createConversation('legal')
         .then((res) => {
           rememberConv(res.conversation_id);
           return res.conversation_id;
@@ -384,8 +393,8 @@ export const LegalCheckWorkspace: React.FC = () => {
         sender: 'user',
         text: question,
         timestamp: nowLabel(),
-        used_temp_file: attachments.length
-          ? attachments.map((a) => a.filename).join(', ')
+        used_temp_files: attachments.length
+          ? attachments.map((a) => a.filename)
           : undefined,
       },
     ]);
@@ -744,7 +753,7 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".pdf,.docx,.doc,.txt,.md,.csv,.xlsx,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp"
+            accept={acceptExts}
             className="hidden"
             onChange={(e) => void handleUpload(e.target.files)}
           />

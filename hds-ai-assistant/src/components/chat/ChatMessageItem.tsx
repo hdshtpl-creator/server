@@ -109,6 +109,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
   const { showToast, saveNote, removeNote } = useApp();
   const isUser = message.sender === 'user';
   const isError = Boolean(message.isError);
+  const usedFiles = message.used_temp_files ?? [];
   // Nguồn trích dẫn THU GỌN mặc định — người dùng bung ra khi cần kiểm chứng,
   // để câu trả lời gọn gàng chứ không bị danh sách nguồn đẩy dài màn hình.
   const [showSources, setShowSources] = useState(false);
@@ -306,10 +307,10 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                 </p>
               </div>
               <div className="flex items-center justify-end gap-2 mt-1 pr-1 text-[10px] text-slate-400 dark:text-slate-500">
-                {message.used_temp_file && (
-                  <span className="flex items-center gap-0.5">
-                    <FileText className="w-3 h-3" />
-                    {message.used_temp_file}
+                {usedFiles.length > 0 && (
+                  <span className="flex items-center gap-0.5 truncate">
+                    <FileText className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{usedFiles.join(', ')}</span>
                   </span>
                 )}
                 <span>{message.timestamp}</span>
@@ -364,7 +365,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
 
           {showTiming && message.timings && <TimingPanel t={message.timings} />}
 
-          {(message.used_method || message.used_temp_file) && (
+          {(message.used_method || usedFiles.length > 0) && (
             <div className="flex flex-wrap gap-1.5 text-[10px] font-medium">
               {message.used_method && (
                 <span className="bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-800 px-2 py-0.5 rounded-md flex items-center gap-1">
@@ -372,12 +373,15 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                   Áp dụng mẫu phương pháp
                 </span>
               )}
-              {message.used_temp_file && (
-                <span className="bg-blue-100 dark:bg-blue-950/60 text-blue-900 dark:text-blue-200 border border-blue-300 dark:border-blue-800 px-2 py-0.5 rounded-md flex items-center gap-1 max-w-full">
+              {usedFiles.map((name) => (
+                <span
+                  key={name}
+                  className="bg-blue-100 dark:bg-blue-950/60 text-blue-900 dark:text-blue-200 border border-blue-300 dark:border-blue-800 px-2 py-0.5 rounded-md flex items-center gap-1 max-w-full"
+                >
                   <FileText className="w-3 h-3 shrink-0" />
-                  <span className="truncate">Tài liệu tạm: {message.used_temp_file}</span>
+                  <span className="truncate">{name}</span>
                 </span>
-              )}
+              ))}
             </div>
           )}
 

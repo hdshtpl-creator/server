@@ -1,5 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import type { User, Conversation, ChatMessage, Note, ConversationSummary } from '../types';
+import type {
+  User,
+  Conversation,
+  ChatMessage,
+  Note,
+  ConversationSummary,
+  TempAttachment,
+} from '../types';
 import * as api from '../api';
 
 const MOCK_MODE_ALLOWED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_MOCK_MODE === 'true';
@@ -55,9 +62,19 @@ interface AppContextType {
   addMessageToConv: (convId: string, msg: ChatMessage) => void;
   updateMessage: (msgId: string, patch: (prev: ChatMessage) => ChatMessage) => void;
   setConvServerId: (convId: string, serverId: number) => void;
-  setConvTempFile: (
-    convId: string,
-    tempFile: { filename: string; content: string; id?: number } | undefined
+  /**
+   * Sửa danh sách file đính kèm — dạng hàm cập nhật để nhiều lượt tải lên
+   * chạy song song không đè kết quả của nhau.
+   *
+   * `serverConvId` là mã hội thoại TRÊN MÁY CHỦ, không phải mã cục bộ: một
+   * lượt tải file có thể còn đang chạy khi người dùng đã bấm sang cuộc trò
+   * chuyện khác, và chip của hồ sơ khách mọc nhầm sang cuộc đang mở là chuyện
+   * không chấp nhận được. Mã cục bộ không dùng được cho việc này vì nó tự đổi
+   * (new-… → srv-…) ngay khi máy chủ cấp mã.
+   */
+  setConvAttachments: (
+    serverConvId: number,
+    update: (prev: TempAttachment[]) => TempAttachment[]
   ) => void;
   /** Khoá mọi lượt gửi mới cho tới khi backend phát sự kiện `done`. */
   isChatStreaming: boolean;
@@ -78,7 +95,10 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | null>(null);
 
 const WELCOME_TEXT =
-  'Xin chào! Tôi là Trợ lý AI của HDS Law Firm. Hãy đặt câu hỏi pháp lý hoặc tải tài liệu lên để bắt đầu tra cứu và phân tích.';
+  'Xin chào! Tôi là Trợ lý AI của HDS Law Firm. Hãy đặt câu hỏi pháp lý, hoặc kéo thả tài ' +
+  'liệu vào khung chat (hợp đồng, PDF, ảnh chụp giấy tờ — định dạng nào cũng được) để tôi ' +
+  'đọc rồi trả lời theo yêu cầu. File đính kèm chỉ dùng trong cuộc trò chuyện này, không ' +
+  'vào kho tri thức.';
 
 const welcomeMessage = (): ChatMessage => ({
   id: `welcome-${Date.now()}`,
@@ -304,8 +324,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     async (serverId: number, jumpToMessageId?: number) => {
       setIsHistoryLoading(true);
       try {
-        const res = await api.getChatHistory(serverId);
+        // File đính kèm còn hạn phải dựng lại cùng lúc với tin nhắn: không có
+        // chip thì người dùng tưởng hồ sơ đã rời hội thoại, trong khi máy chủ
+        // vẫn đọc nó ở lượt hỏi sau. Lỗi lấy chip không được chặn việc mở
+        // hội thoại — mất chip còn hơn mất cả cuộc trao đổi.
+        const [res, tf] = await Promise.all([
+          api.getChatHistory(serverId),
+          api.getConversationTempFiles(serverId).catch(() => ({ items: [] })),
+        ]);
         const msgs = mapServerMessages(res.messages as any);
+        const attachments: TempAttachment[] = (tf.items || []).map((f) => ({
+          id: f.id,
+          filename: f.filename,
+          chunks: f.chunks,
+          status: 'ok',
+          warnings: [],
+          textChars: 0,
+        }));
         setConversations((prev) => {
           const summary = prev.find((c) => c.id === serverId);
           setConversation({
@@ -314,6 +349,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             title: summary?.title || 'Cuộc trò chuyện',
             created_at: new Date().toISOString(),
             messages: msgs.length ? msgs : [welcomeMessage()],
+            attachments,
           });
           return prev;
         });
@@ -396,9 +432,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [loadConversations]
   );
 
-  const setConvTempFile = useCallback(
-    (_convId: string, tempFile: { filename: string; content: string } | undefined) => {
-      setConversation((c) => ({ ...c, temp_file: tempFile }));
+  const setConvAttachments = useCallback(
+    (serverConvId: number, update: (prev: TempAttachment[]) => TempAttachment[]) => {
+      setConversation((c) =>
+        c.server_id === serverConvId
+          ? { ...c, attachments: update(c.attachments || []) }
+          : c
+      );
     },
     []
   );
@@ -504,7 +544,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addMessageToConv,
         updateMessage,
         setConvServerId,
-        setConvTempFile,
+        setConvAttachments,
         isChatStreaming,
         setChatStreaming,
         notes,

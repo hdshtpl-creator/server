@@ -211,7 +211,8 @@ export interface ChatMessage {
   sources?: Source[];
   timestamp: string;
   latency_ms?: number;
-  used_temp_file?: string;
+  /** Tên các file đính kèm mà lượt hỏi này đọc được. */
+  used_temp_files?: string[];
   used_method?: boolean;
   isError?: boolean;
   /** Mã tin nhắn do backend cấp — cần để gửi báo cáo chất lượng. */
@@ -238,12 +239,31 @@ export interface Conversation {
    * `id` phía trên là mã cục bộ của trình duyệt, KHÔNG được gửi lên server.
    */
   server_id?: number;
-  temp_file?: {
-    filename: string;
-    content: string;
-    /** Id bản ghi temp_files trên máy chủ — để nút × gỡ THẬT, không chỉ ẩn chip. */
-    id?: number;
-  };
+  /** File đang đính kèm trong hội thoại này (nhiều file, như Claude/ChatGPT). */
+  attachments?: TempAttachment[];
+}
+
+/**
+ * Một file người dùng đính kèm vào hội thoại. Máy chủ đã trích văn bản/OCR
+ * xong; ở đây chỉ giữ phần để hiện chip và gỡ đúng bản ghi.
+ *
+ * KHÔNG giữ nội dung file trong state trình duyệt: nội dung nằm ở máy chủ
+ * (bảng temp_files) và bot đọc thẳng từ đó — kéo cả hồ sơ khách vào bộ nhớ
+ * tab chỉ để hiện một cái chip là thừa và rủi ro.
+ */
+export interface TempAttachment {
+  /** Id bản ghi temp_files trên máy chủ — để nút × gỡ THẬT, không chỉ ẩn chip.
+   *  null khi file còn đang tải lên (chip tạm). */
+  id: number | null;
+  filename: string;
+  /** Số đoạn máy chủ cắt được; 0 khi chip còn đang tải. */
+  chunks: number;
+  /** 'uploading' = đang gửi | 'ok' = đọc sạch | 'warning' = scan/đọc thiếu. */
+  status: string;
+  /** Máy chủ nói rõ đọc file gặp vấn đề gì — hiện nguyên văn cho người dùng. */
+  warnings: string[];
+  /** Số ký tự đọc được — con số nhỏ bất thường là dấu hiệu bản scan mờ. */
+  textChars: number;
 }
 
 /** Một sự kiện trên dòng trả lời chảy dần (/chat/stream). */

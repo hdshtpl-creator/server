@@ -191,3 +191,16 @@ export const isClientRole = (role?: string): boolean =>
 /** Ai được mở khu Quản trị (khớp require_reviewer / require(admin) ở api.py). */
 export const canAccessAdmin = (user?: { role?: string; can_review?: boolean } | null): boolean =>
   Boolean(user && (user.role === 'admin' || user.role === 'ban_qt' || user.can_review));
+
+/**
+ * Danh sách đuôi file cho ô đính kèm khi CHƯA hỏi được máy chủ.
+ *
+ * Nguồn sự thật là GET /upload/formats (ATTACHMENT_EXTENSIONS ở ingest.py);
+ * đây chỉ là bản dự phòng cho khoảnh khắc trang vừa mở hoặc lúc mạng lỗi.
+ * Cố ý để RỘNG: chốt chặn thật nằm ở máy chủ, hộp thoại chọn file mà hẹp hơn
+ * máy chủ thì người dùng không chọn nổi đúng file mà bot đọc được.
+ */
+export const ATTACH_ACCEPT_FALLBACK =
+  '.pdf,.doc,.docx,.rtf,.odt,.txt,.md,.csv,.tsv,.xls,.xlsx,.xlsm,.ods,' +
+  '.ppt,.pptx,.odp,.eml,.html,.htm,.json,.xml,.yaml,.yml,.log,' +
+  '.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp';

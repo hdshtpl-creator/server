@@ -162,8 +162,33 @@ def _resolve_conv(user, body, channel, cid=None):
     hoặc TẠO HỘI THOẠI MỚI kèm tiêu đề nếu chưa có id — mô hình nhiều hội thoại
     như ChatGPT (mỗi 'cuộc trò chuyện mới' là một conversation riêng)."""
     if body.conversation_id:
-        return check_conversation(user, body.conversation_id, channel)
+        conv = check_conversation(user, body.conversation_id, channel)
+        _title_first_question(conv, body.question)
+        return conv
     return rag.start_conversation(user["id"], channel, cid, title=_conv_title(body.question))
+
+
+def _title_first_question(conversation_id, question):
+    """Đặt tiêu đề cho hội thoại RỖNG bằng câu hỏi đầu tiên.
+
+    Cần từ khi giao diện tạo hội thoại TRƯỚC (kéo file vào là có chip ngay,
+    chưa gõ câu nào): hội thoại lúc đó chỉ có tên tạm dạng mốc giờ. Không đặt
+    lại thì cột lịch sử toàn dòng "Cuộc trò chuyện 29/08 14:32" giống hệt
+    nhau, không nhận ra cuộc nào là cuộc nào. Chỉ đụng khi CHƯA có tin nhắn
+    nào — hội thoại đang chạy dở, hoặc người dùng đã tự đổi tên, phải giữ
+    nguyên. Và chỉ với kind='chat': phiên Kiểm tra pháp lý cố ý mang tên theo
+    mốc giờ để phân biệt chục hồ sơ soát trong cùng một ngày."""
+    title = _conv_title(question)
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""UPDATE conversations SET title=%s
+                                WHERE id=%s AND kind='chat'
+                                  AND NOT EXISTS (SELECT 1 FROM messages
+                                                   WHERE conversation_id=%s)""",
+                            (title, conversation_id, conversation_id))
+    except Exception:  # noqa: BLE001 — đặt tên đẹp không đáng để hỏng cả lượt hỏi
+        pass
 
 
 def check_conversation(user, conversation_id, channel):
@@ -764,23 +789,34 @@ def notes_delete(note_id: int, user=Depends(current_user)):
 
 # ---------- 1b. TẠO HỘI THOẠI TRỐNG ----------
 @app.post("/conversations")
-def conversation_create(user=Depends(current_user)):
+def conversation_create(user=Depends(current_user), kind: str = "legal"):
     """Tạo hội thoại nội bộ TRƯỚC câu hỏi đầu tiên.
 
-    Vì sao cần: file 'dùng xong bỏ' phải gắn vào một conversation_id có thật,
-    nên luồng cũ bắt người dùng hỏi một câu trước rồi mới tải file được. Tab
-    "Kiểm tra pháp lý" làm ngược lại — tải hồ sơ lên trước, hỏi sau — nên cho
-    tạo hội thoại rỗng ngay khi cần."""
+    Vì sao cần: file đính kèm phải gắn vào một conversation_id có thật, nên
+    luồng cũ bắt người dùng hỏi một câu trước rồi mới tải file được. Cả hai tab
+    giờ đều làm ngược lại — kéo hồ sơ vào trước, hỏi sau — nên cho tạo hội
+    thoại rỗng ngay khi cần.
+
+    `kind` quyết định hội thoại này hiện ở cột lịch sử NÀO ('chat' = tab Hội
+    thoại AI, 'legal' = tab Kiểm tra pháp lý; GET /conversations lọc theo đúng
+    cột này). Mặc định để 'legal' là CÓ CHỦ ĐÍCH: bản giao diện cũ còn nằm
+    trong cache trình duyệt gọi endpoint này không kèm tham số và chỉ tab Kiểm
+    tra pháp lý dùng nó — mặc định 'chat' sẽ ném phiên kiểm tra hồ sơ của họ
+    sang nhầm cột cho tới khi trình duyệt nạp lại bản mới."""
     require(user, INTERNAL_ROLES)
+    if kind not in ("chat", "legal"):
+        raise HTTPException(400, "kind chỉ nhận 'chat' hoặc 'legal'")
     # Gắn mốc thời gian vào tiêu đề: một người kiểm tra chục hồ sơ một ngày,
-    # danh sách hội thoại toàn dòng "Kiểm tra pháp lý" giống hệt nhau thì
-    # không mở lại đúng phiên nào được.
+    # danh sách hội thoại toàn dòng giống hệt nhau thì không mở lại đúng
+    # phiên nào được. Hội thoại thường sẽ được backend đổi tên theo câu hỏi
+    # đầu tiên, nên mốc này chỉ là tên tạm cho phiên chưa hỏi gì.
     from zoneinfo import ZoneInfo
     stamp = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).strftime("%d/%m %H:%M")
+    prefix = "Kiểm tra pháp lý" if kind == "legal" else "Cuộc trò chuyện"
     conv = rag.start_conversation(user["id"], "internal", None,
-                                  title=f"Kiểm tra pháp lý {stamp}",
-                                  kind="legal")
-    return {"conversation_id": conv}
+                                  title=f"{prefix} {stamp}",
+                                  kind=kind)
+    return {"conversation_id": conv, "kind": kind}
 
 
 # ---------- 2. UPLOAD FILE TRONG CHAT ----------
@@ -823,31 +859,41 @@ def upload_in_chat(body: UploadIn, user=Depends(current_user)):
             "note": "Đã vào hàng chờ duyệt. Duyệt xong mới thành tri thức lâu dài."}
 
 
-_EXTRACT_UPLOAD_EXT = {".pdf", ".docx", ".doc", ".txt", ".md", ".csv", ".xlsx",
-                       ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"}
+@app.get("/upload/formats")
+def upload_formats(user=Depends(current_user)):
+    """Danh sách đuôi file đính kèm được — để giao diện KHÔNG phải chép tay
+    một bản thứ hai rồi lệch với máy chủ (chép tay là cảnh file bị hộp thoại
+    chặn dù máy chủ đọc được, hoặc ngược lại)."""
+    require(user, INTERNAL_ROLES)
+    from app.ingest import ATTACHMENT_EXTENSIONS
+    return {"extensions": sorted(ATTACHMENT_EXTENSIONS), "max_mb": MAX_UPLOAD_MB}
 
 
 @app.post("/upload/extract")
 async def upload_extract(conversation_id: int = Form(...),
                          file: UploadFile = File(...),
                          user=Depends(current_user)):
-    """File 'dùng xong bỏ' cho MỌI định dạng kho đọc được (.pdf, .docx, ảnh…).
+    """Đính kèm file vào hội thoại — MỌI định dạng bộ đọc kham nổi.
 
-    Khác POST /upload (trình duyệt tự đọc text nên chỉ nhận .txt/.md/.csv):
-    ở đây MÁY CHỦ trích văn bản + OCR bằng đúng bộ đọc của kho — đường đưa
-    hồ sơ khách gửi (docx/pdf/scan) vào tab Kiểm tra pháp lý. File chỉ nằm
-    trong thư mục tạm lúc trích, KHÔNG vào kho, không lưu lại."""
+    Đây là đường đính kèm DUY NHẤT của cả hai tab chat: người dùng kéo file
+    vào, MÁY CHỦ trích văn bản + OCR bằng đúng bộ đọc của kho, bot đọc rồi trả
+    lời. File chỉ nằm trong thư mục tạm lúc trích, KHÔNG vào kho tri thức,
+    không cần duyệt, tự xoá sau 6 giờ.
+
+    (POST /upload vẫn còn cho các client cũ tự đọc text ở trình duyệt nên chỉ
+    kham được .txt/.md/.csv — giao diện hiện tại không dùng nữa.)"""
     import tempfile
 
     require(user, INTERNAL_ROLES)
     check_conversation(user, conversation_id, "internal")
-    from app.ingest import ExtractionError, extract_text_with_metadata
+    from app.ingest import (ATTACHMENT_EXTENSIONS, ExtractionError,
+                            extract_text_with_metadata)
 
     safe = _safe_filename(file.filename or "tai_lieu")
     suffix = Path(safe).suffix.lower()
-    if suffix not in _EXTRACT_UPLOAD_EXT:
-        raise HTTPException(400, f"Chưa hỗ trợ định dạng {suffix or '(không rõ)'} "
-                                 "cho file đính kèm hội thoại")
+    if suffix not in ATTACHMENT_EXTENSIONS:
+        raise HTTPException(400, f"Chưa đọc được định dạng {suffix or '(không rõ)'}. "
+                                 "Nhận: " + ", ".join(sorted(ATTACHMENT_EXTENSIONS)))
     limit = MAX_UPLOAD_MB * 1024 * 1024
     size = 0
     tmp_path = None
@@ -864,7 +910,8 @@ async def upload_extract(conversation_id: int = Form(...),
         # nhịp tim SSE đang chống 524).
         from fastapi.concurrency import run_in_threadpool
         try:
-            extraction = await run_in_threadpool(extract_text_with_metadata, tmp_path)
+            extraction = await run_in_threadpool(extract_text_with_metadata, tmp_path,
+                                                 ATTACHMENT_EXTENSIONS)
         except ExtractionError as e:
             raise HTTPException(400, f"Không đọc được nội dung: {e.message} {e.hint}")
         # File .docx: giữ thêm BẢN GỐC (không chỉ text) trong data/work — luồng

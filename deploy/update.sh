@@ -40,12 +40,18 @@ NEED_PKGS=""
 command -v tesseract >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS tesseract-ocr"
 tesseract --list-langs 2>/dev/null | grep -q '^vie$' || NEED_PKGS="$NEED_PKGS tesseract-ocr-vie"
 command -v pdftoppm >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS poppler-utils"
-command -v soffice >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS libreoffice-writer"
+# Ba gói LibreOffice, kiểm TỪNG cái: `soffice` có mặt chỉ chứng minh writer đã
+# cài. Máy nâng cấp từ bản trước chỉ có writer, nên .xls/.ods (calc) và
+# .ppt/.pptx/.odp (impress) sẽ báo "không chuyển được" khi người dùng kéo vào
+# chat — đúng loại lỗi khó đoán vì soffice vẫn chạy.
+dpkg -s libreoffice-writer >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS libreoffice-writer"
+dpkg -s libreoffice-calc >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS libreoffice-calc"
+dpkg -s libreoffice-impress >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS libreoffice-impress"
 if [ -n "$NEED_PKGS" ]; then
   c_info "Cài công cụ đọc tài liệu còn thiếu:$NEED_PKGS"
   apt-get update -qq && apt-get install -y -qq $NEED_PKGS >/dev/null \
     && c_ok "Đã cài$NEED_PKGS" \
-    || c_warn "Không cài được$NEED_PKGS — PDF scan/.doc sẽ không học được"
+    || c_warn "Không cài được$NEED_PKGS — PDF scan / file Office cũ sẽ không đọc được"
 fi
 
 c_info "2/5  Cập nhật schema (bắt buộc chạy trước code mới)"

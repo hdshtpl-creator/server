@@ -80,12 +80,16 @@ apt-get update -qq
 apt-get install -y -qq ca-certificates curl gnupg openssl \
   python3-venv python3-pip postgresql-client nginx \
   tesseract-ocr tesseract-ocr-vie poppler-utils \
-  libreoffice-writer >/dev/null
+  libreoffice-writer libreoffice-calc libreoffice-impress >/dev/null
 # tesseract + poppler: BẮT BUỘC để đọc PDF SCAN (kết quả vụ việc, giấy tờ có dấu).
 #   Thiếu chúng thì pytesseract/pdf2image (đã cài qua pip) vẫn lỗi khi chạy, và
 #   mọi file scan bị bỏ qua. tesseract-ocr-vie là gói tiếng Việt.
-# libreoffice-writer: để đọc file .doc (Word 97-2003) — rất nhiều tài liệu cũ
-#   của HDS ở định dạng này; thiếu nó là bot mất hẳn một mảng dữ liệu lớn.
+# libreoffice-*: cầu chuyển định dạng cho bộ đọc (app/ingest.py LIBREOFFICE_BRIDGE).
+#   writer  → .doc (Word 97-2003), .rtf, .odt — rất nhiều tài liệu cũ của HDS.
+#   calc    → .xls, .ods.
+#   impress → .ppt, .pptx, .odp.
+#   Thiếu gói nào là người dùng kéo đúng loại file đó vào chat và nhận lỗi
+#   "không chuyển được" — writer một mình KHÔNG mở nổi bảng tính/trình chiếu.
 c_ok "python3-venv, nginx, postgresql-client, tesseract(vie), poppler, libreoffice"
 
 # Docker
