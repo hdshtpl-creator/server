@@ -442,12 +442,17 @@ def compose_title(stem: str, title_context=None) -> str:
 
 
 def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=None,
-              prev_approved=False, source_kind="drive"):
+              prev_approved=False, source_kind="drive", force_pending=False):
     """Học một file; ``diagnostics`` nhận method/warnings/lỗi mà không phá API bool cũ.
 
     ``prev_approved``: bản cũ của CHÍNH file này đã được duyệt và đang phục vụ
     trả lời. Truyền vào để bản thay thế kế thừa trạng thái duyệt (xem chú thích
-    tại chỗ tính ``should_approve``)."""
+    tại chỗ tính ``should_approve``).
+
+    ``force_pending``: file này BẮT BUỘC chờ người duyệt, không cãi được bằng
+    cấu hình nào. Dành cho tài liệu bộ quét web tải về (app/web_watch.py) —
+    mọi thứ khác trong kho đều do nhân viên tự tay đặt vào, đây là loại đầu
+    tiên không ai nhìn qua trước khi bot dùng để trả lời."""
     diagnostics = diagnostics if diagnostics is not None else {}
     try:
         extraction = extract_text_with_metadata(path)
@@ -485,8 +490,9 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
     # phục vụ lặng lẽ biến mất). RIÊNG PDF: luôn chờ người duyệt — xem
     # decide_approval. Caller sẽ báo to "tài liệu đang dùng bị gỡ" khi một bản
     # đã duyệt rơi lại hàng chờ, thay vì im lặng.
-    should_approve = decide_approval(path.suffix, extraction.status == "ok",
-                                     prev_approved, AUTO_APPROVE, APPROVE_PDF)
+    should_approve = (False if force_pending
+                      else decide_approval(path.suffix, extraction.status == "ok",
+                                           prev_approved, AUTO_APPROVE, APPROVE_PDF))
     diagnostics["approved"] = should_approve
     diagnostics["was_live"] = bool(prev_approved)
     diagnostics["forced_review"] = (path.suffix.lower() == ".pdf")

@@ -56,6 +56,10 @@ export const ChatLayout: React.FC = () => {
   const [useMethod, setUseMethod] = useState(false);
   const [methodTemplates, setMethodTemplates] = useState<MethodTemplate[]>([]);
   const [genModels, setGenModels] = useState<string[]>([]);
+  // Model gọi qua API ngoài. Chỉ hiện khi admin ĐÃ BẬT nhánh này — chọn một
+  // model cloud lúc nó đang tắt thì máy chủ tự trả về Qwen local, người hỏi
+  // không hiểu vì sao câu trả lời khác hẳn mong đợi.
+  const [cloudModels, setCloudModels] = useState<string[]>([]);
   const [warmModels, setWarmModels] = useState<string[]>([]);
   // 'auto' = fast-path cho câu xác định, model chất lượng mặc định cho RAG;
   // '' = mặc định máy chủ; hoặc tên model cụ thể
@@ -161,6 +165,7 @@ export const ChatLayout: React.FC = () => {
     api.getModels().then((m) => {
       setGenModels(Array.isArray(m?.generation) ? m.generation : []);
       setWarmModels(Array.isArray(m?.loaded) ? m.loaded : []);
+      setCloudModels(m?.cloud_enabled && Array.isArray(m?.cloud) ? m.cloud : []);
     }).catch(() => undefined);
   };
 
@@ -837,7 +842,7 @@ export const ChatLayout: React.FC = () => {
             <div className="flex items-center justify-between gap-3 text-[11px] text-slate-400 dark:text-slate-500 px-1">
               <span className="flex items-center gap-2 min-w-0">
                 {/* Bộ chọn model — chỉ nhân viên nội bộ, khi máy chủ có model */}
-                {!isClient && genModels.length > 0 && (
+                {!isClient && (genModels.length > 0 || cloudModels.length > 0) && (
                   <span className="flex items-center gap-1 shrink-0">
                     <Cpu className="w-3.5 h-3.5 text-hds-navy dark:text-blue-400" />
                     <select
@@ -856,6 +861,19 @@ export const ChatLayout: React.FC = () => {
                           {warmModels.includes(m) ? `● ${m}` : `○ ${m} (phải nạp)`}
                         </option>
                       ))}
+                      {/* Model chạy ở nhà người ta: thông minh hơn nhưng TÍNH
+                          TIỀN theo lượt hỏi, và dữ liệu rời khỏi máy chủ HDS.
+                          Câu hỏi chạm hồ sơ khách/dữ liệu công ty ngoài phạm
+                          vi admin cho phép sẽ tự động quay về model local. */}
+                      {cloudModels.length > 0 && (
+                        <optgroup label="Qua API — tính tiền theo lượt">
+                          {cloudModels.map((m) => (
+                            <option key={m} value={m}>
+                              ☁ {m}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
                   </span>
                 )}

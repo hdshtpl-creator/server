@@ -731,6 +731,25 @@ def _convert_via_libreoffice(path: Path, target: str, timeout=180) -> Path:
     return out
 
 
+def docx_sang_pdf(du_lieu_docx: bytes) -> bytes:
+    """Chuyen mot file .docx trong bo nho sang PDF bang LibreOffice.
+
+    Nhan vien hoi 29/08/2026: "Cac bieu mau co tinh nang Download theo dinh
+    dang word/excel/PDF khong?". May chu da cai libreoffice-writer san cho
+    bo doc file .doc, nen xuat PDF khong them phu thuoc gi moi.
+    """
+    import shutil
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="hds_pdf_"))
+    try:
+        nguon = tmp / "ban_nhap.docx"
+        nguon.write_bytes(du_lieu_docx)
+        ra = _convert_with_libreoffice(nguon, "pdf")
+        return Path(ra).read_bytes()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _extract_via_libreoffice(path: Path, target: str):
     """Đọc định dạng chưa có bộ đọc riêng bằng cách chuyển sang định dạng ĐÃ
     có bộ đọc (.docx/.xlsx/.pdf) rồi đọc bản chuyển."""

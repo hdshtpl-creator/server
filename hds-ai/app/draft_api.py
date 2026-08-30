@@ -729,17 +729,27 @@ def build_router(current_user, require_reviewer) -> APIRouter:
         if not latest:
             raise HTTPException(409, "Bản nháp chưa có nội dung để xuất")
         fmt = (format or "docx").lower()
-        if fmt not in {"docx", "md", "markdown"}:
-            raise HTTPException(422, "format chỉ nhận docx hoặc md")
-        extension = "docx" if fmt == "docx" else "md"
+        if fmt not in {"docx", "md", "markdown", "pdf"}:
+            raise HTTPException(422, "format chỉ nhận docx, pdf hoặc md")
+        extension = {"markdown": "md"}.get(fmt, fmt)
         filename = drafting.safe_export_name(detail["title"], extension)
         fallback = f"draft_{draft_id}.{extension}"
         disposition = f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
-        if fmt == "docx":
+        if fmt in ("docx", "pdf"):
             payload = drafting.render_docx(
                 latest["content_markdown"], detail["title"], latest["evidence"]
             )
             media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if fmt == "pdf":
+                # Dung chinh cau LibreOffice da cai san cho bo doc file .doc —
+                # khong them phu thuoc moi. Thieu LibreOffice thi bao ro thay
+                # vi tra ve mot file PDF hong.
+                from app.ingest import ExtractionError, docx_sang_pdf
+                try:
+                    payload = docx_sang_pdf(payload)
+                except ExtractionError as exc:
+                    raise HTTPException(503, f"{exc.message} {exc.hint}") from exc
+                media_type = "application/pdf"
         else:
             payload = _markdown_with_evidence(
                 latest["content_markdown"], latest["evidence"]

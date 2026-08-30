@@ -71,7 +71,24 @@ DEFAULTS = {
         "CÁCH TRẢ LỜI CÂU HỎI PHÁP LÝ: trả lời thẳng kết luận trước, rồi tới "
         "căn cứ, rồi tới lưu ý/rủi ro thực tiễn nếu có. Khi câu hỏi có nhiều "
         "cách hiểu về mặt pháp lý, nêu cách hiểu chính và nói rõ điểm còn tranh "
-        "luận. Đây là bản nháp tham khảo; luật sư chịu trách nhiệm cuối cùng."
+        "luận. Đây là bản nháp tham khảo; luật sư chịu trách nhiệm cuối cùng.\n"
+        "PHẢN BÁC TIỀN ĐỀ SAI (bắt buộc): câu hỏi có thể chứa căn cứ KHÔNG CÓ "
+        "THẬT — sai số điều, sai tên văn bản, hoặc một văn bản không tồn tại. "
+        "Trước khi trả lời, đối chiếu mốc pháp lý người hỏi nêu với TÀI LIỆU "
+        "THAM KHẢO. Không tìm thấy thì NÓI THẲNG là chưa đối chiếu được và "
+        "KHÔNG diễn giải nội dung cho nó; tuyệt đối không sáng tác quy định "
+        "cho một điều luật chỉ vì người hỏi nhắc tới nó. Nếu biết chắc mốc đó "
+        "sai (vd văn bản chỉ có tới Điều 220 mà người hỏi nêu Điều 500), chỉ "
+        "ra chỗ sai rồi mới trả lời phần đúng của câu hỏi.\n"
+        "NGƯỜI DÙNG SỬA LẠI CĂN CỨ: khi họ dán điều luật vào chat hoặc bảo "
+        "trích dẫn của bạn sai, nguồn [Người dùng cung cấp trong hội thoại] là "
+        "căn cứ ĐÁNG TIN NHẤT của lượt này. Trả lời lại theo nó và nói rõ đã "
+        "sửa chỗ nào — tuyệt đối không lặp lại câu trả lời cũ.\n"
+        "THIẾU DỮ KIỆN: tình huống thiếu dữ kiện để kết luận chắc chắn thì vẫn "
+        "phân tích phần trả lời được, nêu kết luận theo từng khả năng, rồi "
+        "KẾT THÚC bằng mục 'Cần bổ sung để kết luận chắc chắn:' liệt kê 2-4 "
+        "câu hỏi cụ thể. Đừng khẳng định chắc nịch trên dữ liệu chưa đủ, cũng "
+        "đừng từ chối trả lời chỉ vì thiếu vài chi tiết."
     ),
     "prompt_portal": (
         "Bạn là trợ lý của HDS phục vụ khách hàng đã ký hợp đồng. "
@@ -154,6 +171,75 @@ DEFAULTS = {
     # nếu máy không kham nổi. KHÔNG áp cho model tạo vector (bge-m3): mọi đoạn
     # đã lưu đều theo model đó, đổi là hỏng tra cứu.
     "llm_model": "qwen3:14b",
+    # ---- NHÁNH GỌI API NGOÀI (Claude / Qwen qua API) --------------------
+    # Mặc định TẮT. Bật là dữ liệu rời khỏi máy chủ HDS, nên đây phải là một
+    # động tác có chủ ý của admin, không phải trạng thái mặc định.
+    "cloud_enabled": "false",
+    # Model dùng khi người hỏi chọn "Cloud" ở ô chat (giá trị 'cloud'). Tên
+    # mang tiền tố nhà cung cấp: 'claude:<tên>' hoặc 'api:<tên>'.
+    "cloud_model": "claude:claude-sonnet-5",
+    # Kênh được phép gọi API, phân tách bằng dấu phẩy. KHÔNG mở cho 'public':
+    # đó là cửa cho người lạ gõ câu hỏi không giới hạn — mở cloud ở đó là mở
+    # hoá đơn cho người lạ bơm, dù đã có van chống spam theo IP.
+    "cloud_channels": "internal",
+    # Độ sâu suy nghĩ của model cloud: low | medium | high | xhigh | max.
+    # Đây là NÚT CHỈNH CHI PHÍ chính sau khi đã chốt model — 'low' cho tra cứu
+    # thường, 'high' khi rà soát hồ sơ.
+    "cloud_effort": "medium",
+    # Trần token model cloud được sinh ra. Khác llm_num_predict (=-1, không
+    # chặn) vì API tính tiền theo token ra: không có trần là không có trần chi.
+    "cloud_max_tokens": "8000",
+    # API hỏng/hết quota giữa chừng thì tự quay về Ollama. Tắt cái này nghĩa là
+    # chấp nhận mất câu trả lời khi mạng chập.
+    "cloud_fallback_local": "true",
+    # TRẦN KÝ TỰ TÀI LIỆU RIÊNG CHO NHÁNH CLOUD. Bắt buộc phải có: trên Ollama
+    # num_ctx là trần vật lý, còn API thì KHÔNG CÓ trần nào — cửa sổ 1 triệu
+    # token nghĩa là một câu hỏi có thể nuốt 2,6 triệu ký tự và vài đô la.
+    # 60000 ký tự ≈ 23 nghìn token ≈ mức prompt hiện nay. Đặt 0 = theo cửa sổ
+    # của model (ĐẮT, chỉ dùng khi đã hiểu mình đang trả tiền cho cái gì).
+    "cloud_context_char_budget": "60000",
+    # DỮ LIỆU NÀO ĐƯỢC PHÉP RỜI MÁY CHỦ. Câu hỏi chạm dữ liệu ngoài phạm vi
+    # cho phép thì KHÔNG bị cắt xén — nó tự động quay về Qwen local. Nhờ vậy
+    # không có đường nào rò dữ liệu mà cũng không có câu trả lời nào bị thiếu
+    # căn cứ vì bộ lọc.
+    #   law_only        — chỉ văn bản luật/án lệ/quan điểm KHÔNG gắn khách
+    #                     hàng. Hồ sơ khách, dữ liệu công ty, file đính kèm
+    #                     đều ở lại máy nhà. An toàn nhất.
+    #   plus_attachments— thêm file người dùng TỰ đính kèm trong hội thoại
+    #                     (đúng luồng tab Kiểm tra pháp lý). Kho hồ sơ khách
+    #                     và dữ liệu công ty vẫn ở lại.
+    #   all_but_finance — mọi thứ trừ công nợ/tài chính (chặn cứng, không cấu
+    #                     hình gỡ được).
+    "cloud_scope": "law_only",
+    # NGUỒN VĂN BẢN TRÊN MẠNG cho bộ quét định kỳ (app/web_watch.py).
+    # Mỗi nguồn tải file mới về một thư mục trong kho, rồi bộ quét kho học như
+    # file nhân viên thả vào — nghĩa là vẫn qua cổng duyệt, vẫn phân quyền theo
+    # tên thư mục. Mặc định KHÔNG có nguồn nào bật: đây là cửa duy nhất trong
+    # hệ thống nhận dữ liệu từ Internet, phải là quyết định có chủ ý.
+    #   kieu: rss | sitemap | html   (rss và sitemap dùng chung bộ đọc XML)
+    #   mien_cho_phep: BẮT BUỘC — không có thì không tải gì, kể cả link trong
+    #                  chính trang đó trỏ đi nơi khác.
+    #   thu_muc: thư mục con trong kho → quyết định loại tài liệu và quyền xem
+    #            (khớp với drive_map bên dưới).
+    "web_sources": json.dumps(
+        {
+            "nguon": [
+                {
+                    "ten": "(mẫu — sửa url/miền rồi đặt bat=true)",
+                    "bat": False,
+                    "kieu": "rss",
+                    "url": "https://vi-du.gov.vn/rss/van-ban-moi.xml",
+                    "mien_cho_phep": ["vi-du.gov.vn"],
+                    "thu_muc": "1. VĂN BẢN PHÁP LUẬT",
+                    "duoi_file": [".pdf", ".doc", ".docx"],
+                    "mau_lien_ket": "",
+                    "toi_da_moi_lan": 20,
+                }
+            ]
+        },
+        ensure_ascii=False,
+        indent=2,
+    ),
     # Bản đồ thư mục Drive → nhãn tài liệu (app/auto_learn.py dùng).
     # Khoá được so khớp sau khi chuẩn hoá: bỏ số thứ tự đầu, bỏ dấu, viết thường.
     # Nhờ vậy "1. VĂN BẢN PHÁP LUẬT" và "van ban phap luat" là một.
@@ -296,7 +382,7 @@ def set(key, value, user_id=None):  # noqa: A001 - đặt tên theo nghiệp v�
     """Ghi một cài đặt. Kiểm quyền admin ở tầng API trước khi gọi."""
     if key not in EDITABLE_KEYS:
         raise ValueError(f"Khoá cài đặt không hợp lệ: {key}")
-    if key == "drive_map":
+    if key in ("drive_map", "web_sources"):
         json.loads(value)  # sai JSON thì báo lỗi ngay, đừng để hỏng lúc quét kho
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:

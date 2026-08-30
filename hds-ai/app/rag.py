@@ -756,11 +756,82 @@ def _context_char_cap(num_ctx: int, budget_cfg: int) -> int:
 
     ~2.6 ký tự tiếng Việt một token (đo trên kho); chừa 25 nghìn ký tự cho
     hướng dẫn + dữ liệu công ty + lịch sử + phần model sinh ra.
+
+    Sàn KHÔNG được là số cứng: máy chủ thật 29/08/2026 chạy num_ctx=10000
+    (admin hạ trên web cho vừa VRAM) — sàn cứng 20 nghìn ký tự khi đó CAO HƠN
+    cả cửa sổ chứa nổi, prompt tràn và Ollama lại cắt đầu. Sàn theo tỷ lệ:
+    tài liệu luôn được ít nhất ~55%% cửa sổ, phần còn lại đủ cho hướng dẫn +
+    dữ liệu công ty + lịch sử ở mọi cỡ num_ctx.
     """
-    tran_vat_ly = max(20_000, int(num_ctx * 2.6) - 25_000)
+    tran_vat_ly = max(int(num_ctx * 2.6 * 0.55), int(num_ctx * 2.6) - 25_000)
     if budget_cfg <= 0 or budget_cfg > tran_vat_ly:
         return tran_vat_ly
     return budget_cfg
+
+
+# Đoạn chữ người dùng DÁN THẲNG vào khung chat dài từ mức này trở lên thì coi
+# là họ đang đưa căn cứ cho bot đọc, không phải hỏi han thông thường.
+NGUOI_DUNG_DAN_MIN = 220
+# Trích tối đa bấy nhiêu ký tự mỗi đoạn dán — dán cả chương luật thì cắt bớt
+# chứ đừng đẩy prompt vượt cửa sổ.
+NGUOI_DUNG_DAN_MAX = 12_000
+
+_RE_MOC_PHAP_LY = re.compile(
+    r"\b(dieu|khoan|diem)\s+\d+|\bluat\b|\bnghi dinh\b|\bthong tu\b|"
+    r"\bbo luat\b|\bnghi quyet\b|\ban le\b", re.IGNORECASE)
+
+
+def _can_cu_nguoi_dung_dan(question, history):
+    """Văn bản pháp lý người dùng tự dán vào chat → NGUỒN hạng nhất.
+
+    Nhân viên báo 28/08/2026: "Khi người dùng chỉ ra lỗi trích dẫn sai hoặc
+    cung cấp trực tiếp văn bản điều luật đúng ngay trong đoạn chat, AI vẫn lặp
+    lại câu trả lời cũ và tiếp tục dùng căn cứ sai."
+
+    Vì sao hỏng: đoạn dán chỉ nằm ở phần DIỄN BIẾN CUỘC TRAO ĐỔI, KHÔNG phải
+    một [Nguồn n]. Bot không trích dẫn nó được, nên mọi câu dựa vào nó bị bộ
+    kiểm chứng cắt (luật chặn-không-căn-cứ), và phần sống sót lại là câu dựa
+    trên tài liệu kho SAI. Người dùng đưa đúng luật vào tận tay mà vẫn nhận
+    câu trả lời cũ.
+
+    Cách chữa: nhận diện đoạn dài mang mốc pháp lý (Điều/khoản/tên văn bản)
+    trong CÂU HỎI HIỆN TẠI và các lượt người dùng gần đây, rồi đưa vào danh
+    sách nguồn như một tài liệu thật — trích dẫn được, kiểm chứng được, và
+    đứng ĐẦU vì đó là thứ người dùng chủ động đưa.
+    """
+    ung_vien = [question or ""]
+    for role, content in (history or [])[-4:]:
+        if role == "user":
+            ung_vien.append(content or "")
+    out, da_thay = [], set()
+    for raw in ung_vien:
+        text = (raw or "").strip()
+        if len(text) < NGUOI_DUNG_DAN_MIN:
+            continue
+        if not _RE_MOC_PHAP_LY.search(_fold_text(text)):
+            continue
+        khoa = text[:200]
+        if khoa in da_thay:
+            continue
+        da_thay.add(khoa)
+        out.append({
+            "title": "[Người dùng cung cấp trong hội thoại]",
+            "content": text[:NGUOI_DUNG_DAN_MAX],
+            "score": 1.0,
+        })
+    return out
+
+
+# Cau hoi doi chieu hai thu tro len — tra loi bang van xuoi thi lap tu va kho
+# doc, nhan vien phai tu ke bang lai (phan hoi Pham Loan 28/08/2026).
+_RE_SO_SANH = re.compile(
+    r"\bso sanh\b|\bphan biet\b|\bkhac nhau\b|\bkhac biet\b|"
+    r"\bdoi chieu\b|\bgiong va khac\b|\buu nhuoc diem\b")
+
+
+def _yeu_cau_bang(question: str) -> bool:
+    """Cau hoi nay nen tra loi bang BANG doi chieu."""
+    return bool(_RE_SO_SANH.search(_fold_text(question or "")))
 
 
 def build_prompt(question, chunks, temp_chunks=None, method=None,
@@ -886,6 +957,18 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             who = "Người hỏi" if role == "user" else "Trợ lý"
             parts.append(f"{who}: {(content or '')[:HISTORY_CHARS]}")
         parts.append("")
+    if _yeu_cau_bang(question):
+        # Chi chen khi cau hoi that su can — nhet vao moi luot thi model ke
+        # bang ca cho cau hoi mot y, vua ton token vua kho doc.
+        parts.append(
+            "TRÌNH BÀY: câu hỏi này là ĐỐI CHIẾU. Trả lời bằng BẢNG Markdown, "
+            "cột đầu là tiêu chí so sánh, mỗi đối tượng một cột. Chọn 4-8 tiêu "
+            "chí có ý nghĩa pháp lý (căn cứ, điều kiện áp dụng, hệ quả, thời "
+            "hiệu/thời hạn, thẩm quyền…). Mỗi ô ghi gọn kèm [Nguồn n]. Sau "
+            "bảng thêm 2-3 dòng nêu KHÁC BIỆT MẤU CHỐT — đừng để người đọc tự "
+            "rút ra. Nếu hai khái niệm khác nhau mà bạn đang định viết định "
+            "nghĩa gần như nhau cho cả hai, nghĩa là bạn CHƯA phân biệt được: "
+            "hãy nói thẳng điều đó thay vì viết cho có." + chr(10))
     parts.append(f"CÂU HỎI HIỆN TẠI: {question}\n"
                  "Nếu đây là câu nói lại/chỉnh lại câu trước, hiểu theo diễn biến ở "
                  "trên và trả lời luôn. MỖI đoạn có khẳng định lấy từ tài liệu phải kết "
@@ -1271,6 +1354,7 @@ def resolve_model(model_choice, question, configured_model=None, quality_require
     """Từ lựa chọn của người dùng → tên model cụ thể (hoặc None = mặc định).
       ''/None      → None (dùng model mặc định của máy chủ)
       'auto'       → models.auto_pick_model (câu đơn giản chọn model nhanh)
+      'cloud'      → model API đang cấu hình (cloud_model)
       '<tên model>'→ đúng model đó"""
     choice = (model_choice or "").strip()
     if not choice:
@@ -1279,7 +1363,86 @@ def resolve_model(model_choice, question, configured_model=None, quality_require
         from app.models import auto_pick_model
         return auto_pick_model(question, configured_model=configured_model,
                                quality_required=quality_required)
+    if choice.lower() == "cloud":
+        from app import models as _m
+        return _m.cloud_config()["model"]
     return choice
+
+
+# ============ CHỐT AN TOÀN CHO NHÁNH GỌI API NGOÀI ============
+# Nguyên tắc: KHÔNG lọc bớt ngữ cảnh để "gửi cho an toàn". Lọc thì câu trả lời
+# mất căn cứ mà chẳng ai biết. Thay vào đó ĐỔI NƠI XỬ LÝ: câu hỏi nào chạm dữ
+# liệu ngoài phạm vi cho phép thì chạy trọn vẹn bằng Qwen trên máy nhà.
+
+def _model_local_mac_dinh():
+    """Model LOCAL để lui về — dùng chung định nghĩa với luồng soạn thảo."""
+    from app import models as _m
+    return _m.local_default_model()
+
+
+def phan_loai_du_lieu(chunks, temp_chunks=None, company=""):
+    """Ngữ cảnh của lượt này đang chứa những loại dữ liệu nào.
+
+    Gọi TRƯỚC lúc gộp file đính kèm vào `chunks`: sau khi gộp, đoạn từ file
+    không còn doc_type/client_id để phân biệt nữa.
+    """
+    chunks = chunks or []
+    return {
+        "khach": any(c.get("client_id") for c in chunks),
+        "cong_no": any(c.get("doc_type") == "cong_no" for c in chunks),
+        "dinh_kem": bool(temp_chunks),
+        "cong_ty": bool((company or "").strip()),
+    }
+
+
+def ngoai_pham_vi_cloud(payload, scope):
+    """Dữ liệu này có vượt phạm vi được phép gửi ra ngoài không.
+    Trả về lý do (chuỗi ngắn để ghi vào timings) hoặc None nếu được phép."""
+    scope = (scope or "law_only").strip().lower()
+    # Công nợ/tài chính chặn CỨNG ở mọi mức — không có giá trị cấu hình nào gỡ
+    # được. Đây là loại tài liệu đã bị RLS chặn ở tầng CSDL, không có lý do gì
+    # nới ra ở tầng trên.
+    if payload.get("cong_no"):
+        return "cong_no"
+    if scope == "all_but_finance":
+        return None
+    if payload.get("khach"):
+        return "ho_so_khach"
+    if payload.get("cong_ty"):
+        return "du_lieu_cong_ty"
+    if scope == "plus_attachments":
+        return None
+    if payload.get("dinh_kem"):
+        return "file_dinh_kem"
+    return None
+
+
+def gate_cloud(chosen_model, channel, payload):
+    """(model thực dùng, lý do lui về local hoặc None)."""
+    from app import models as _m
+    if not _m.is_cloud(chosen_model or ""):
+        return chosen_model, None
+    if not _m.cloud_enabled_for(channel):
+        return _model_local_mac_dinh(), "kenh_chua_bat"
+    ly_do = ngoai_pham_vi_cloud(payload, _m.cloud_config()["scope"])
+    if ly_do:
+        return _model_local_mac_dinh(), ly_do
+    return chosen_model, None
+
+
+def cloud_char_cap(model, budget_cfg) -> int:
+    """Trần ký tự phần tài liệu cho nhánh cloud — BẮT BUỘC phải có.
+
+    Trên Ollama, num_ctx là trần vật lý: prompt dài quá thì bị cắt, tốn thời
+    gian chứ không tốn tiền. Qua API thì ngược lại — cửa sổ 1 triệu token
+    nghĩa là KHÔNG CÓ trần nào, prompt phình bao nhiêu hoá đơn theo bấy nhiêu.
+    Vậy nên mặc định trần theo TIỀN (cloud_context_char_budget), chỉ khi admin
+    cố ý đặt 0 mới nới tới cửa sổ thật của model.
+    """
+    from app import models as _m
+    if budget_cfg and budget_cfg > 0:
+        return budget_cfg
+    return max(20_000, int(_m.cloud_context_tokens(model) * 2.6) - 25_000)
 
 
 _CITATION_RE = re.compile(r"\[\s*Nguồn\s+(\d+)\s*\]", re.IGNORECASE)
@@ -1343,6 +1506,92 @@ def autocite(text, chunks, min_coverage=AUTOCITE_MIN_COVERAGE):
     return "".join(blocks), attached
 
 
+# Số hiệu văn bản pháp luật: "59/2020/QH14", "13/2023/NĐ-CP", "121/2026/TT-BTC".
+RE_SO_HIEU = re.compile(r"\b\d{1,4}/\d{4}/[A-ZĐ][\w\-]*", re.UNICODE)
+
+# Loại văn bản → đuôi ký hiệu hợp lệ. Quốc hội ban hành LUẬT (QH…), Chính phủ
+# ban hành NGHỊ ĐỊNH (NĐ-CP), bộ ban hành THÔNG TƯ (TT-…). Ghép chéo là bịa.
+_DUOI_HOP_LE = {
+    "nghi dinh": ("ND-CP", "NĐ-CP"),
+    "thong tu": ("TT-", "TTLT"),
+    "luat": ("QH",),
+    "bo luat": ("QH",),
+    "nghi quyet": ("QH", "NQ-", "UBTVQH"),
+    "quyet dinh": ("QD-", "QĐ-"),
+}
+
+
+def _so_hieu_van_ban(text: str) -> list:
+    """Mọi số hiệu văn bản pháp luật xuất hiện trong một đoạn chữ."""
+    return RE_SO_HIEU.findall(text or "")
+
+
+def _so_hieu_vo_ly(text: str) -> bool:
+    """Số hiệu MÂU THUẪN với loại văn bản đứng ngay trước nó.
+
+    Bắt được lỗi mà 5/10 báo cáo rà soát 28-29/08/2026 cùng nêu: model lấy
+    đúng nội dung điều luật từ nguồn nhưng BỊA số hiệu — "Nghị định số
+    63/2025/QH15", "Thông tư số 143/2025/QH15". Nghị định không bao giờ mang
+    đuôi QH15 (ký hiệu của Quốc hội), nên chỉ nhìn chữ là biết sai, không cần
+    tra kho. Với hãng luật, một số hiệu sai là một căn cứ sai.
+    """
+    folded = _fold_text(text)
+    for m in RE_SO_HIEU.finditer(text or ""):
+        truoc = _fold_text((text or "")[max(0, m.start() - 40):m.start()])
+        duoi = m.group(0).split("/")[-1].upper()
+        for loai, hop_le in _DUOI_HOP_LE.items():
+            if truoc.rstrip().endswith(loai) or f"{loai} so" in truoc[-20:]:
+                if not any(duoi.startswith(h.upper().rstrip("-")) for h in hop_le):
+                    return True
+                break
+    return False
+
+
+def _fold_text(s: str) -> str:
+    """Hạ chữ thường + bỏ dấu, dùng để so khớp loại văn bản."""
+    s = unicodedata.normalize("NFD", s or "")
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return s.replace("đ", "d").replace("Đ", "D").lower()
+
+
+def _canh_bao_so_hieu(text: str, chunks) -> str:
+    """Gắn cảnh báo cho SỐ HIỆU văn bản mà nguồn không hề nhắc tới.
+
+    Lỗi 5/10 báo cáo rà soát 28-29/08/2026 cùng nêu: nội dung điều luật lấy
+    đúng từ nguồn nhưng SỐ HIỆU bị model bịa — "Nghị định số 63/2025/QH15",
+    "Luật số 203/2025/QH15", "Luật Doanh nghiệp số 62/2020/QH14" (số thật
+    59/2020). Bộ kiểm chứng cũ chỉ soi ký hiệu [Nguồn n] có trỏ tới đoạn có
+    thật hay không, KHÔNG soi con số viết trong câu — nên một câu bịa số hiệu
+    vẫn được đóng dấu "đã kiểm chứng". Với hãng luật, số hiệu sai là căn cứ
+    sai.
+
+    Không xoá câu (phần nội dung thường vẫn đúng và có ích), chỉ nói thẳng
+    số nào chưa đối chiếu được để người đọc tự kiểm — đúng tinh thần "đối
+    chiếu trước, chặn sau".
+    """
+    text = text or ""
+    trong_nguon = " ".join(
+        f"{c.get('title') or ''} {c.get('content') or ''}" for c in (chunks or []))
+    co_that = set(_so_hieu_van_ban(trong_nguon))
+    nghi_ngo = []
+    for so in dict.fromkeys(_so_hieu_van_ban(text)):
+        if so not in co_that:
+            nghi_ngo.append(so)
+    vo_ly = _so_hieu_vo_ly(text)
+    if not nghi_ngo and not vo_ly:
+        return text
+    dong = []
+    if vo_ly:
+        dong.append("có số hiệu KHÔNG khớp loại văn bản (vd nghị định mà mang "
+                    "đuôi QH của Quốc hội)")
+    if nghi_ngo:
+        dong.append("số hiệu chưa đối chiếu được với nguồn: "
+                    + ", ".join(nghi_ngo[:6]))
+    return (text + chr(10) * 2 + "---" + chr(10)
+            + "*⚠ Kiểm tra lại số hiệu văn bản trước khi dùng làm căn cứ — "
+            + "; ".join(dong) + ".*")
+
+
 def validate_grounding(text, chunks, answer_mode="grounded", strict=True,
                        channel="internal"):
     """Kiểm tra citation có trỏ tới nguồn thật; fail-closed khi hoàn toàn mất nguồn.
@@ -1403,8 +1652,9 @@ def validate_grounding(text, chunks, answer_mode="grounded", strict=True,
                     "được với nguồn — mở **Nguồn trích dẫn** để tự kiểm tra, "
                     "hoặc hỏi cụ thể hơn để mình tìm thêm căn cứ.*")
             cleaned_out = re.sub(r"\n{3,}", "\n\n", "".join(blocks)).strip()
-            return cleaned_out + note, "partial"
-        return cleaned, "partial" if unsupported else "verified"
+            return _canh_bao_so_hieu(cleaned_out + note, chunks), "partial"
+        return (_canh_bao_so_hieu(cleaned, chunks),
+                "partial" if unsupported else "verified")
     if not strict or answer_mode == "mixed":
         return cleaned, "uncited"
     # Tới đây nghĩa là autocite cũng không đối chiếu được đoạn nào với nguồn:
@@ -1825,6 +2075,10 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         if person_block:
             company = f"{company}\n\n{person_block}" if company else person_block
     tick("du_lieu_cong_ty_ms")
+    # Chụp lại "lượt này đụng tới dữ liệu gì" NGAY BÂY GIỜ: mấy dòng dưới sẽ
+    # gộp file đính kèm và đoạn người dùng dán vào chung `chunks`, sau đó
+    # không còn phân biệt được nguồn nào là hồ sơ khách nữa.
+    cloud_payload = phan_loai_du_lieu(chunks, temp_chunks, company)
 
     if not chunks and not temp_chunks and not company:
         direct_text = _insufficient_answer(source_document_ids is not None, channel)
@@ -1850,6 +2104,13 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     # Gộp làm một danh sách, ĐẶT FILE LÊN ĐẦU: số nguồn nhỏ, và khi ngân sách
     # ngữ cảnh chật thì fit_context cắt từ đuôi — cắt tài liệu kho trước, giữ
     # lại đúng thứ người dùng vừa đưa cho bot đọc.
+    # Căn cứ người dùng DÁN THẲNG vào chat đứng đầu tiên — trên cả file đính
+    # kèm và tài liệu kho. Họ đưa tận tay thì đó là thứ đáng tin nhất trong
+    # lượt này, và phải trích dẫn được thì bộ kiểm chứng mới không cắt mất.
+    dan_tay = _can_cu_nguoi_dung_dan(question, history)
+    if dan_tay:
+        chunks = dan_tay + list(chunks)
+        timings["can_cu_nguoi_dung_dan"] = len(dan_tay)
     if temp_chunks:
         chunks = list(temp_chunks) + list(chunks)
         temp_chunks = None
@@ -1866,8 +2127,33 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     # thật vẫn phải là num_ctx quy ra ký tự, trừ chỗ cho hướng dẫn + dữ liệu
     # công ty + lịch sử + phần model sinh ra. fit_context cắt từ ĐUÔI danh
     # sách nên file người dùng đính kèm (đứng đầu) được giữ tới cùng.
-    budget_eff = _context_char_cap(_num("llm_num_ctx", 32768, int),
-                                   _num("context_char_budget", CONTEXT_CHARS, int))
+    # Chọn model TRƯỚC khi dựng prompt: ngân sách ký tự của nhánh cloud khác
+    # hẳn nhánh Ollama (một bên trần theo cửa sổ ngữ cảnh, một bên trần theo
+    # tiền), mà build_prompt cần con số đó ngay.
+    from app import models as _models
+    model_started = time.time()
+    configured_model = (cfg.get("llm_model") or "").strip() or None
+    chosen_model = resolve_model(model, question, configured_model=configured_model,
+                                 quality_required=True)
+    if chosen_model is None:
+        # None nghĩa là "theo mặc định máy chủ" — mà mặc định ĐÓ có thể đang là
+        # một model cloud (admin đặt llm_model = claude:…). Để None thì chốt
+        # phạm vi bên dưới không có gì để soi, còn tên model cloud lại được
+        # lấy muộn ở tầng models lúc sinh chữ: đúng một đường vòng qua chốt.
+        # Nêu đích danh ra để nó chịu kiểm tra như mọi lựa chọn khác.
+        mac_dinh = _models.effective_llm_model()
+        if _models.is_cloud(mac_dinh):
+            chosen_model = mac_dinh
+    chosen_model, ly_do_ve_local = gate_cloud(chosen_model, channel, cloud_payload)
+    if ly_do_ve_local:
+        timings["cloud_ve_local"] = ly_do_ve_local
+    timings["chon_model_ms"] = int((time.time() - model_started) * 1000)
+
+    budget_eff = (cloud_char_cap(chosen_model,
+                                 _num("cloud_context_char_budget", 60_000, int))
+                  if _models.is_cloud(chosen_model or "")
+                  else _context_char_cap(_num("llm_num_ctx", 32768, int),
+                                         _num("context_char_budget", CONTEXT_CHARS, int)))
     prompt = build_prompt(question, chunks, temp_chunks, method,
                           company=company, history=history, summary=summary,
                           chunk_chars=_num("chunk_char_limit", CHUNK_CHARS, int),
@@ -1876,11 +2162,6 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     note(f"Đã chọn {len(chunks)} nguồn — model đang đọc và soạn câu trả lời…")
     answer_mode = "mixed" if company and chunks else ("grounded" if chunks else "operational")
     strict = str(cfg.get("strict_grounding", "true")).lower() not in {"0", "false", "no"}
-    model_started = time.time()
-    configured_model = (cfg.get("llm_model") or "").strip() or None
-    chosen_model = resolve_model(model, question, configured_model=configured_model,
-                                 quality_required=True)
-    timings["chon_model_ms"] = int((time.time() - model_started) * 1000)
     timings["chuan_bi_ms"] = int((time.time() - prepare_started) * 1000)
     # Chế độ kiểm tra pháp lý dùng prompt RÀ SOÁT riêng — vẫn kênh internal,
     # vẫn RLS ấy, chỉ khác vai trò của model.
@@ -2433,7 +2714,12 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
     timings["ai_ms"] = latency
     timings.update({k: v for k, v in llm_stats.items()
                     if k in ("prompt_tokens", "gen_tokens", "load_ms",
-                             "prefill_ms", "gen_ms", "num_ctx", "model")})
+                             "prefill_ms", "gen_ms", "num_ctx", "model",
+                             # nhánh API ngoài: chi phí ước tính, phần prompt
+                             # đọc lại từ bộ đệm, và dấu vết khi API hỏng phải
+                             # lui về Ollama — có ở đây thì đọc log là biết.
+                             "provider", "cost_usd", "cache_read_tokens",
+                             "cloud_error", "fallback")})
 
     # CHỈ giữ nguồn liên quan (được trích dẫn / điểm cao) — cả trong CSDL lẫn
     # sự kiện done để giao diện hiển thị đúng danh sách đã lọc.

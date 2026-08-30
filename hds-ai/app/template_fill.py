@@ -511,7 +511,10 @@ def handle(question, template_doc_id, *, user_id, dept_ids=None, is_banqt=False,
     note("Đang xác định các chỗ cần thay trong mẫu…")
     from app import models
     prompt, system = build_fill_prompt(template_text, party_context, placeholders)
-    chosen_model = (model or "").strip() or models.effective_llm_model()
+    # Bảng thay thế của mẫu chứa nguyên dữ liệu chủ thể (tên, CCCD, MST,
+    # địa chỉ) — chỉ ra ngoài khi admin đã mở phạm vi rộng nhất.
+    chosen_model = models.model_soan_thao(
+        (model or "").strip() or models.effective_llm_model())
     raw_answer, _latency = models.llm(prompt, system=system, temperature=0.0,
                                       model=chosen_model)
     try:

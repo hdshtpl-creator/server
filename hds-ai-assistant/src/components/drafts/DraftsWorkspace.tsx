@@ -292,15 +292,16 @@ export const DraftsWorkspace: React.FC = () => {
     }
   };
 
-  const exportFile = async () => {
+  const exportFile = async (format: 'docx' | 'pdf' = 'docx') => {
     if (!selected || busy) return;
     setBusy('export');
     try {
-      await api.exportDraft(selected.id, `${selected.title}.docx`);
+      await api.exportDraft(selected.id, `${selected.title}.${format}`, format);
+      const ten = format.toUpperCase();
       showToast(
         selected.status === 'approved'
-          ? 'Đã xuất tệp DOCX.'
-          : 'Đã xuất DOCX bản nháp — bản này chưa được phê duyệt.',
+          ? `Đã xuất tệp ${ten}.`
+          : `Đã xuất ${ten} bản nháp — bản này chưa được phê duyệt.`,
         'success'
       );
     } catch (err: any) {
@@ -541,9 +542,15 @@ export const DraftsWorkspace: React.FC = () => {
                       Phê duyệt
                     </button>
                   )}
-                  <button onClick={exportFile} disabled={!canExport || Boolean(busy)} title={canExport ? 'Tải DOCX (bản chưa duyệt vẫn tải được để điền tiếp)' : 'Chưa có nội dung để xuất'} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">
+                  <button onClick={() => void exportFile('docx')} disabled={!canExport || Boolean(busy)} title={canExport ? 'Tải DOCX (bản chưa duyệt vẫn tải được để điền tiếp)' : 'Chưa có nội dung để xuất'} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">
                     {busy === 'export' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                     Tải DOCX
+                  </button>
+                  {/* PDF do LibreOffice trên máy chủ chuyển từ chính bản DOCX
+                      nên bố cục giống hệt — dùng để gửi khách, không sửa được. */}
+                  <button onClick={() => void exportFile('pdf')} disabled={!canExport || Boolean(busy)} title={canExport ? 'Tải PDF (bố cục giống bản DOCX, dùng để gửi đi)' : 'Chưa có nội dung để xuất'} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">
+                    {busy === 'export' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                    Tải PDF
                   </button>
                 </div>
               </div>

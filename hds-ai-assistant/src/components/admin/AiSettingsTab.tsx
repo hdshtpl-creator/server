@@ -79,6 +79,9 @@ const ModelSection: React.FC = () => {
   const genModels = (info?.available || []).filter(
     (m) => m.split(':')[0] !== (info?.embed_model || '').split(':')[0]
   );
+  // Model gọi qua API ngoài — hiện cả khi nhánh này đang tắt, vì đây chính là
+  // trang admin bật nó lên; bên dưới có ô "Gọi model qua API ngoài".
+  const cloudModelList = info?.cloud || [];
   const dirty = selected !== (info?.current || '');
 
   return (
@@ -136,6 +139,15 @@ const ModelSection: React.FC = () => {
                     {m}
                   </option>
                 ))}
+                {cloudModelList.length > 0 && (
+                  <optgroup label="Qua API — tính tiền theo lượt">
+                    {cloudModelList.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
               <button
                 onClick={save}
@@ -269,7 +281,7 @@ interface FieldDef {
   key: string;
   label: string;
   hint: string;
-  kind: 'textarea' | 'range' | 'number' | 'json' | 'select';
+  kind: 'textarea' | 'range' | 'number' | 'json' | 'select' | 'text';
   /** Giới hạn riêng cho ô số — mỗi tham số một thang khác nhau.
    *  QUY TẮC: min/max phải BAO ĐƯỢC giá trị mặc định đang chạy trên máy chủ.
    *  Thang loại trừ chính mặc định thì trình duyệt tự kẹp giá trị khi lưu, và
@@ -434,6 +446,79 @@ const PARAM_FIELDS: FieldDef[] = [
     step: 1024,
   },
   {
+    key: 'cloud_enabled',
+    label: 'API ngoài — bật gọi model qua API (Claude / Qwen cloud)',
+    hint: 'TẮT mặc định. Bật là dữ liệu đưa vào câu hỏi RỜI KHỎI máy chủ HDS và mỗi lượt hỏi tốn tiền. Chỉ bật sau khi đã chốt điều khoản bảo mật với nhà cung cấp và đã đặt khoá API trong .env.',
+    kind: 'select',
+    options: [
+      { value: 'false', label: 'Tắt — chỉ dùng model trên máy chủ (khuyến nghị)' },
+      { value: 'true', label: 'Bật — cho phép gọi API ngoài' },
+    ],
+  },
+  {
+    key: 'cloud_scope',
+    label: 'API ngoài — dữ liệu nào được phép gửi ra',
+    hint: 'Câu hỏi chạm dữ liệu ngoài phạm vi này KHÔNG bị cắt xén — nó tự chạy bằng model trên máy chủ. Công nợ/tài chính bị chặn cứng ở mọi mức.',
+    kind: 'select',
+    options: [
+      { value: 'law_only', label: 'Chỉ văn bản luật, án lệ, quan điểm (an toàn nhất)' },
+      { value: 'plus_attachments', label: 'Thêm file nhân viên tự đính kèm (cho tab Kiểm tra pháp lý)' },
+      { value: 'all_but_finance', label: 'Mọi thứ trừ công nợ/tài chính' },
+    ],
+  },
+  {
+    key: 'cloud_model',
+    label: 'API ngoài — model dùng khi chọn "Cloud"',
+    hint: 'Tên có tiền tố nhà cung cấp: claude:claude-sonnet-5 (cân bằng), claude:claude-haiku-4-5 (rẻ nhất), claude:claude-opus-5 (mạnh nhất, đắt gấp ~2,5 lần Sonnet), hoặc api:<tên> cho endpoint tương thích OpenAI như Qwen/DashScope.',
+    kind: 'text',
+  },
+  {
+    key: 'cloud_channels',
+    label: 'API ngoài — kênh được phép gọi',
+    hint: 'Phân tách bằng dấu phẩy. KHÔNG mở cho "public": đó là cửa cho người lạ gõ câu hỏi không giới hạn, mở cloud ở đó là mở hoá đơn cho người lạ bơm.',
+    kind: 'text',
+  },
+  {
+    key: 'cloud_effort',
+    label: 'API ngoài — độ sâu suy nghĩ',
+    hint: 'Nút chỉnh chi phí chính sau khi đã chốt model. Thấp = rẻ và nhanh, đủ cho tra cứu thường. Cao = đắt hơn, đáng khi rà soát hồ sơ.',
+    kind: 'select',
+    options: [
+      { value: 'low', label: 'Thấp — rẻ nhất, cho tra cứu thường' },
+      { value: 'medium', label: 'Vừa — mặc định' },
+      { value: 'high', label: 'Cao — cho rà soát hồ sơ' },
+      { value: 'xhigh', label: 'Rất cao — việc khó, tốn đáng kể' },
+    ],
+  },
+  {
+    key: 'cloud_context_char_budget',
+    label: 'API ngoài — trần ký tự tài liệu mỗi câu hỏi',
+    hint: 'BẮT BUỘC phải có: qua API không còn cửa sổ ngữ cảnh làm trần vật lý, prompt phình bao nhiêu hoá đơn theo bấy nhiêu. 60000 ký tự ≈ 23 nghìn token. Đặt 0 = nới tới cửa sổ thật của model (RẤT ĐẮT).',
+    kind: 'number',
+    min: 0,
+    max: 400000,
+    step: 5000,
+  },
+  {
+    key: 'cloud_max_tokens',
+    label: 'API ngoài — trần độ dài câu trả lời (token)',
+    hint: 'Khác trần của model local (đang là -1, không chặn) vì API tính tiền theo token sinh ra. 8000 token ≈ 5000 từ, thừa cho một bài rà soát.',
+    kind: 'number',
+    min: 1024,
+    max: 64000,
+    step: 1000,
+  },
+  {
+    key: 'cloud_fallback_local',
+    label: 'API ngoài — hỏng thì tự quay về model trên máy chủ',
+    hint: 'Mất mạng hoặc hết quota mà không có đường lui là mất luôn trợ lý. Chỉ tắt khi đang tìm nguyên nhân lỗi và muốn thấy lỗi thật.',
+    kind: 'select',
+    options: [
+      { value: 'true', label: 'Bật — lỗi API thì chạy tiếp bằng Qwen local (khuyến nghị)' },
+      { value: 'false', label: 'Tắt — báo lỗi thẳng cho người hỏi' },
+    ],
+  },
+  {
     key: 'llm_num_thread',
     label: 'Số luồng CPU cho model',
     hint: 'Chỉ có tác dụng với máy chạy CPU. 0 = để Ollama tự quyết. Đổi xong hãy Đo tốc độ lại để biết có nhanh hơn thật không.',
@@ -443,13 +528,105 @@ const PARAM_FIELDS: FieldDef[] = [
   },
 ];
 
+/**
+ * Một ô sửa cài đặt dạng JSON (bản đồ thư mục kho, danh sách nguồn web).
+ *
+ * Tự giữ lỗi cú pháp của RIÊNG mình: trước đây chỉ có một ô nên biến báo lỗi
+ * nằm ở component cha — thêm ô thứ hai mà dùng chung biến đó thì gõ sai ở ô
+ * này sẽ khoá luôn nút Lưu của ô kia.
+ */
+const JsonSection: React.FC<{
+  settingKey: string;
+  title: string;
+  hint: React.ReactNode;
+  rows?: number;
+  saveLabel: string;
+  values: Record<string, string>;
+  isDirty: boolean;
+  savingKey: string | null;
+  patch: (key: string, v: string) => void;
+  reset: (key: string) => void;
+  save: (keys: string[]) => void;
+}> = ({ settingKey, title, hint, rows = 16, saveLabel, values, isDirty, savingKey,
+        patch, reset, save }) => {
+  const [error, setError] = useState<string | null>(null);
+
+  const validate = (v: string) => {
+    try {
+      JSON.parse(v);
+      setError(null);
+      return true;
+    } catch (e: any) {
+      setError(e?.message || 'JSON không hợp lệ');
+      return false;
+    }
+  };
+
+  return (
+    <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-3">
+      <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+        <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">{title}</h3>
+        {isDirty && (
+          <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 px-1.5 py-0.5 rounded">
+            chưa lưu
+          </span>
+        )}
+      </div>
+      <div className="flex items-start gap-2 text-[11px] text-slate-500 dark:text-slate-400 bg-hds-soft dark:bg-slate-800/60 border border-blue-100 dark:border-slate-700 rounded-lg p-2.5">
+        <Info className="w-3.5 h-3.5 shrink-0 mt-px text-hds-blue" />
+        <span>{hint}</span>
+      </div>
+      <textarea
+        rows={rows}
+        value={values[settingKey] || ''}
+        onChange={(e) => {
+          patch(settingKey, e.target.value);
+          validate(e.target.value);
+        }}
+        spellCheck={false}
+        className={`w-full p-3 border rounded-xl text-[11px] font-mono leading-relaxed focus:ring-2 focus:ring-hds-blue focus:outline-none resize-y dark:bg-slate-800 dark:text-slate-100 ${
+          error
+            ? 'border-red-400 dark:border-red-700'
+            : isDirty
+            ? 'border-amber-400 dark:border-amber-700'
+            : 'border-slate-300 dark:border-slate-700'
+        }`}
+      />
+      {error && (
+        <p className="text-[11px] text-hds-red dark:text-red-400 flex items-center gap-1">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          JSON không hợp lệ: {error}
+        </p>
+      )}
+      <div className="flex justify-between items-center">
+        <button
+          onClick={() => reset(settingKey)}
+          className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 hover:text-hds-navy dark:hover:text-blue-300 transition-colors"
+        >
+          <RotateCcw className="w-3 h-3" />
+          Về mặc định
+        </button>
+        <button
+          onClick={() => {
+            if (validate(values[settingKey] || '')) save([settingKey]);
+          }}
+          disabled={!isDirty || Boolean(error) || savingKey !== null}
+          className="px-4 py-2 rounded-xl font-bold text-xs text-white shadow-sm flex items-center gap-1.5 bg-hds-navy hover:bg-hds-navy-light disabled:bg-slate-300 dark:disabled:bg-slate-700 disabled:cursor-not-allowed transition-colors"
+        >
+          <Save className="w-4 h-4" />
+          <span>{saveLabel}</span>
+        </button>
+      </div>
+    </section>
+  );
+};
+
 export const AiSettingsTab: React.FC = () => {
   const { showToast } = useApp();
   const [values, setValues] = useState<Record<string, string>>({});
   const [original, setOriginal] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
-  const [jsonError, setJsonError] = useState<string | null>(null);
 
   const load = async () => {
     setIsLoading(true);
@@ -502,17 +679,6 @@ export const AiSettingsTab: React.FC = () => {
     }
   };
 
-  const validateJson = (v: string) => {
-    try {
-      JSON.parse(v);
-      setJsonError(null);
-      return true;
-    } catch (e: any) {
-      setJsonError(e?.message || 'JSON không hợp lệ');
-      return false;
-    }
-  };
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center p-12 text-slate-500 dark:text-slate-400 gap-2 text-sm">
@@ -525,6 +691,7 @@ export const AiSettingsTab: React.FC = () => {
   const promptDirty = PROMPT_FIELDS.some((f) => dirty(f.key));
   const paramDirty = PARAM_FIELDS.some((f) => dirty(f.key));
   const driveDirty = dirty('drive_map');
+  const webDirty = dirty('web_sources');
 
   return (
     <div className="space-y-6">
@@ -658,6 +825,14 @@ export const AiSettingsTab: React.FC = () => {
                   </option>
                 ))}
               </select>
+            ) : f.kind === 'text' ? (
+              <input
+                id={`param-${f.key}`}
+                type="text"
+                value={values[f.key] ?? ''}
+                onChange={(e) => patch(f.key, e.target.value)}
+                className="w-full max-w-md px-3 py-2 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl text-xs font-mono focus:ring-2 focus:ring-hds-blue focus:outline-none"
+              />
             ) : f.kind === 'range' ? (
               <div className="flex items-center gap-3">
                 <input
@@ -702,67 +877,49 @@ export const AiSettingsTab: React.FC = () => {
       </section>
 
       {/* Bản đồ thư mục kho tài liệu */}
-      <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-3">
-        <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-          <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-            Bản đồ thư mục kho → nhãn tài liệu
-          </h3>
-          {driveDirty && (
-            <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 px-1.5 py-0.5 rounded">
-              chưa lưu
-            </span>
-          )}
-        </div>
-        <div className="flex items-start gap-2 text-[11px] text-slate-500 dark:text-slate-400 bg-hds-soft dark:bg-slate-800/60 border border-blue-100 dark:border-slate-700 rounded-lg p-2.5">
-          <Info className="w-3.5 h-3.5 shrink-0 mt-px text-hds-blue" />
-          <span>
+      <JsonSection
+        settingKey="drive_map"
+        title="Bản đồ thư mục kho → nhãn tài liệu"
+        hint={
+          <>
             Quy định thư mục trong kho tài liệu tương ứng loại tài liệu và mức truy cập nào. Tên
             thư mục được chuẩn hoá (bỏ số thứ tự, bỏ dấu) trước khi so khớp. Cấu trúc chuẩn xem
             trong tài liệu <code className="font-mono">CAU_TRUC_DRIVE.md</code>.
-          </span>
-        </div>
-        <textarea
-          rows={16}
-          value={values.drive_map || ''}
-          onChange={(e) => {
-            patch('drive_map', e.target.value);
-            validateJson(e.target.value);
-          }}
-          spellCheck={false}
-          className={`w-full p-3 border rounded-xl text-[11px] font-mono leading-relaxed focus:ring-2 focus:ring-hds-blue focus:outline-none resize-y dark:bg-slate-800 dark:text-slate-100 ${
-            jsonError
-              ? 'border-red-400 dark:border-red-700'
-              : driveDirty
-              ? 'border-amber-400 dark:border-amber-700'
-              : 'border-slate-300 dark:border-slate-700'
-          }`}
-        />
-        {jsonError && (
-          <p className="text-[11px] text-hds-red dark:text-red-400 flex items-center gap-1">
-            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-            JSON không hợp lệ: {jsonError}
-          </p>
-        )}
-        <div className="flex justify-between items-center">
-          <button
-            onClick={() => reset('drive_map')}
-            className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 hover:text-hds-navy dark:hover:text-blue-300 transition-colors"
-          >
-            <RotateCcw className="w-3 h-3" />
-            Về mặc định
-          </button>
-          <button
-            onClick={() => {
-              if (validateJson(values.drive_map || '')) save(['drive_map']);
-            }}
-            disabled={!driveDirty || Boolean(jsonError) || savingKey !== null}
-            className="px-4 py-2 rounded-xl font-bold text-xs text-white shadow-sm flex items-center gap-1.5 bg-hds-navy hover:bg-hds-navy-light disabled:bg-slate-300 dark:disabled:bg-slate-700 disabled:cursor-not-allowed transition-colors"
-          >
-            <Save className="w-4 h-4" />
-            <span>Lưu bản đồ thư mục</span>
-          </button>
-        </div>
-      </section>
+          </>
+        }
+        saveLabel="Lưu bản đồ thư mục"
+        values={values}
+        isDirty={driveDirty}
+        savingKey={savingKey}
+        patch={patch}
+        reset={reset}
+        save={save}
+      />
+
+      {/* Nguồn văn bản trên mạng — bộ quét định kỳ tải file mới về kho */}
+      <JsonSection
+        settingKey="web_sources"
+        title="Nguồn văn bản trên mạng (bộ quét định kỳ)"
+        hint={
+          <>
+            Bộ quét <code className="font-mono">hds-ai-nguon-web.timer</code> tải file mới từ
+            những trang này về thư mục <code className="font-mono">thu_muc</code> trong kho; bộ
+            quét kho học chúng sau đó và đưa vào hàng <strong>CHỜ DUYỆT</strong> — không tài liệu
+            nào tự vào tri thức mà không qua mắt người. <strong>mien_cho_phep</strong> là bắt
+            buộc: không có miền thì không tải gì, kể cả link nằm ngay trong trang đó. Thử trước
+            bằng <code className="font-mono">bash deploy/theo-doi-nguon-web.sh --dry-run</code> để
+            xem nó nhặt ra những link nào mà chưa tải gì cả.
+          </>
+        }
+        rows={20}
+        saveLabel="Lưu danh sách nguồn"
+        values={values}
+        isDirty={webDirty}
+        savingKey={savingKey}
+        patch={patch}
+        reset={reset}
+        save={save}
+      />
     </div>
   );
 };

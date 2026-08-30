@@ -976,6 +976,71 @@ def _topic_question(question, history, turns=3):
     return question + " " + " ".join(prev)
 
 
+# Dấu hiệu câu hỏi đang nói về PHÁP LUẬT hoặc một TÌNH HUỐNG giả định, chứ
+# không phải hỏi dữ liệu vận hành của HDS.
+_LEGAL_MARKERS = (
+    "bo luat", "luat doanh nghiep", "luat dau tu", "luat thuong mai",
+    "luat lao dong", "luat so huu tri tue", "luat dat dai", "luat kham benh",
+    "nghi dinh", "thong tu", "nghi quyet", "hien phap", "an le", "ban an",
+    "blds", "bltds", "blld", "nd-cp", "tt-btc", "qh14", "qh15", "qh13",
+    "can cu phap ly", "quy dinh phap luat", "theo quy dinh cua phap luat",
+    "trich dan", "hieu luc cua van ban", "toa an nhan dan", "trong tai thuong mai",
+    "khoi kien", "to tung", "thoi hieu khoi kien",
+)
+# Câu mở đầu một tình huống giả định — bộ đề test và câu hỏi tư vấn đều dạng này.
+_SCENARIO_MARKERS = (
+    "tinh huong", "yeu cau ai", "tieu chi", "gia su", "doanh nghiep a",
+    "cong ty x", "khach hang chuan bi", "hay dua ra", "hay danh gia",
+    "ra soat quy trinh", "phan tich rui ro", "tham dinh",
+)
+# Câu hỏi thật sự về dữ liệu HDS luôn gọi tên công ty mình.
+_NOI_BO_MARKERS = ("hds", "cong ty toi", "cty toi", "cong ty minh", "cty minh",
+                   "cua minh", "ben minh", "noi bo", "dang phu trach",
+                   "trong kho", "kho tai lieu")
+# Câu vận hành thật đều ngắn ("HDS có mấy khách?"). Dài hơn mức này gần như
+# chắc chắn là một tình huống pháp lý được mô tả.
+_SCENARIO_MIN_CHARS = 180
+
+
+def _legal_or_scenario_question(q_folded: str) -> bool:
+    """Câu hỏi này thuộc về PHÁP LUẬT / tình huống, không phải dữ liệu HDS.
+
+    Vì sao cần: bộ nhận diện ý định bên dưới so khớp theo cụm từ, mà nhiều cụm
+    của nó nằm ngay trong câu hỏi pháp lý bình thường —
+      · "nguoi lao dong" ∈ STAFF_WORDS  → "quy định thời giờ làm thêm của
+        NGƯỜI LAO ĐỘNG" bị trả lời bằng danh sách 3 nhân sự HDS;
+      · "canh bao" ∈ ALERT_WORDS → "hãy đưa ra các CẢNH BÁO pháp lý về Nghị
+        định 13/2023" bị trả lời "không có vụ nào quá hạn";
+      · "nhan su" → "doanh nghiệp cắt giảm 10 NHÂN SỰ" ra danh bạ nhân sự.
+    Cả ba đều do nhân viên báo lại trong đợt rà soát 28-29/08/2026 và đều bị
+    chấm KHÔNG ĐẠT.
+
+    Câu trả lời xác định (đếm khách, danh bạ, hạn chót) chỉ dành cho câu hỏi
+    NGẮN về dữ liệu của chính HDS. Nên: nhắc tới văn bản luật, trích dẫn điều
+    khoản, mở đầu một tình huống, hoặc dài như một đề bài → nhường cho luồng
+    tra cứu tài liệu.
+    """
+    co_dieu_khoan = bool(re.search(r"\b(dieu|khoan)\s+\d+", q_folded))
+    # Câu NGẮN có gọi tên công ty mình là đang hỏi dữ liệu HDS, không phải hỏi
+    # luật: "hds đang có mấy tài liệu BẢN ÁN" phải ra bộ đếm kho, đừng vì hai
+    # chữ "bản án" mà đẩy sang luồng tra cứu. Trừ khi nó trích đích danh điều
+    # khoản — lúc đó đúng là câu pháp lý dù có nhắc tên công ty.
+    if (not co_dieu_khoan and len(q_folded) < _SCENARIO_MIN_CHARS
+            and any(m in q_folded for m in _NOI_BO_MARKERS)):
+        return False
+    if any(m in q_folded for m in _LEGAL_MARKERS):
+        return True
+    if co_dieu_khoan:
+        return True
+    if any(m in q_folded for m in _SCENARIO_MARKERS):
+        return True
+    # Dài như một đề bài mà không nhắc tên công ty mình → là tình huống.
+    if (len(q_folded) >= _SCENARIO_MIN_CHARS
+            and not any(m in q_folded for m in _NOI_BO_MARKERS)):
+        return True
+    return False
+
+
 def infer_intent(question, history=None, state=None):
     """Nhận diện nhóm dữ liệu có thể trả lời xác định, không cần LLM.
 
@@ -984,6 +1049,11 @@ def infer_intent(question, history=None, state=None):
     chủ đề cũ sang việc mới.
     """
     folded_current = _fold(question)
+    # Chốt ĐẦU TIÊN, trước cả state: câu hỏi pháp luật/tình huống không bao giờ
+    # được trả lời bằng dữ liệu vận hành — kể cả khi lượt trước đang nói về
+    # nhân sự. Đổi chủ đề sang pháp luật là phải rời hẳn luồng đếm.
+    if _legal_or_scenario_question(folded_current):
+        return None
     if _is_followup(folded_current) and state and state.get("intent"):
         prev = state.get("intent")
         # Hỏi tiếp SAU CÂU ĐẾM mà đòi CHI TIẾT/NỘI DUNG thì đừng lặp lại bảng

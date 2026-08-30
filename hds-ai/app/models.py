@@ -1,6 +1,13 @@
 """
-models.py — Gọi AI: tạo vector (bge-m3) và sinh câu trả lời (Qwen3), đều qua Ollama.
-Không cần PyTorch, không lỗi CUDA trên card Blackwell.
+models.py — Gọi AI: tạo vector và sinh câu trả lời.
+
+TẠO VECTOR luôn chạy bằng bge-m3 trên máy chủ (Ollama) và KHÔNG BAO GIỜ đi ra
+ngoài: mọi đoạn đã lưu trong kho đều theo model đó, đổi là hỏng toàn bộ tra cứu.
+
+SINH CÂU TRẢ LỜI có ba đường, chọn bằng chính tên model (xem provider_of):
+Ollama trên máy chủ (mặc định), API Anthropic, hoặc endpoint tương thích
+OpenAI (Qwen/DashScope, DeepSeek, OpenRouter…). Không cần PyTorch, không lỗi
+CUDA trên card Blackwell.
 """
 import json
 import os
@@ -33,6 +40,164 @@ THINKING_MODELS = ("qwen3", "deepseek-r1", "magistral", "reasoning", "gpt-oss", 
 # Số token bắt model sinh ra khi đo tốc độ. Đo trên vài token thì chi phí cố
 # định (dựng phiên, lấy mẫu token đầu) lấn át và ra tốc độ sai hẳn.
 BENCH_TOKENS = 64
+
+# ================= NHÀ CUNG CẤP MODEL =================
+# Tên model MANG THEO nhà cung cấp, nhờ vậy mọi chỗ đang truyền một chuỗi tên
+# model (cài đặt của admin, bộ chọn ở ô chat, cột model_used trong messages)
+# không phải đổi kiểu dữ liệu:
+#     'qwen3:14b'            → Ollama trên máy chủ (mặc định, không tiền tố)
+#     'claude:claude-sonnet-5' → API Anthropic
+#     'api:qwen-plus'        → endpoint tương thích OpenAI (DashScope/Qwen,
+#                              DeepSeek, OpenRouter, vLLM tự dựng…)
+# Tên trần bắt đầu bằng 'claude-' cũng được hiểu là Anthropic, để admin gõ
+# thẳng 'claude-sonnet-5' vào ô cài đặt mà không cần nhớ tiền tố.
+P_LOCAL, P_CLAUDE, P_COMPAT = "local", "claude", "compat"
+PREFIX_CLAUDE, PREFIX_COMPAT = "claude:", "api:"
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# Danh sách hiện trong bộ chọn model. Không phải mọi model Anthropic — chỉ mấy
+# cái đã cân nhắc giá/chất lượng cho việc của HDS (xem bảng giá bên dưới).
+CLAUDE_MODELS = [m.strip() for m in os.getenv(
+    "CLAUDE_MODELS", "claude-sonnet-5,claude-opus-5,claude-haiku-4-5").split(",") if m.strip()]
+
+# Endpoint tương thích OpenAI. Một adapter dùng chung cho cả nhóm vì họ nói
+# CÙNG một giao thức (POST /chat/completions): Qwen trên DashScope
+# (https://dashscope.aliyuncs.com/compatible-mode/v1), DeepSeek, OpenRouter,
+# Groq, hay chính máy vLLM tự dựng sau này.
+COMPAT_BASE_URL = (os.getenv("COMPAT_BASE_URL", "")
+                   or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
+COMPAT_API_KEY = os.getenv("COMPAT_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
+COMPAT_MODELS = [m.strip() for m in os.getenv(
+    "COMPAT_MODELS", os.getenv("OPENAI_MODEL", "")).split(",") if m.strip()]
+
+# Giá USD trên 1 TRIỆU token (vào, ra) — chỉ để ƯỚC chi phí mỗi lượt rồi ghi
+# vào stats/log. Giá nhà cung cấp đổi thì sửa ở đây; sai số ở đây không ảnh
+# hưởng câu trả lời, chỉ ảnh hưởng con số báo cáo.
+CLAUDE_PRICES = {
+    "claude-opus-5": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+    "claude-fable-5": (10.0, 50.0),
+}
+
+# Cửa sổ ngữ cảnh (token) của model cloud — dùng để quy ra trần ký tự cho
+# phần tài liệu, y như num_ctx làm với Ollama. Không có tên trong bảng thì
+# lấy mức dè dặt nhất.
+CLOUD_CTX_TOKENS = {
+    "claude-haiku-4-5": 200_000,
+    "claude-sonnet-5": 1_000_000,
+    "claude-opus-5": 1_000_000,
+    "claude-opus-4-8": 1_000_000,
+    "claude-fable-5": 1_000_000,
+}
+CLOUD_CTX_DEFAULT = 128_000
+
+
+def provider_of(name: str) -> str:
+    """Nhà cung cấp của một tên model. Không rõ thì là local — mặc định an
+    toàn: chạy trên máy nhà, không gửi gì ra ngoài, không tốn tiền."""
+    n = (name or "").strip().lower()
+    if n.startswith(PREFIX_CLAUDE) or n.startswith("claude-"):
+        return P_CLAUDE
+    if n.startswith(PREFIX_COMPAT):
+        return P_COMPAT
+    return P_LOCAL
+
+
+def is_cloud(name: str) -> bool:
+    return provider_of(name) != P_LOCAL
+
+
+def bare_model(name: str) -> str:
+    """Bỏ tiền tố nhà cung cấp → tên model để gửi lên API."""
+    n = (name or "").strip()
+    for pre in (PREFIX_CLAUDE, PREFIX_COMPAT):
+        if n.lower().startswith(pre):
+            return n[len(pre):].strip()
+    return n
+
+
+def cloud_models() -> list:
+    """Model cloud DÙNG ĐƯỢC lúc này = đã cấu hình khoá API. Chưa có khoá thì
+    không hiện trong bộ chọn — thà không thấy còn hơn chọn xong báo lỗi."""
+    out = []
+    if ANTHROPIC_API_KEY:
+        out += [PREFIX_CLAUDE + m for m in CLAUDE_MODELS]
+    if COMPAT_API_KEY and COMPAT_MODELS:
+        out += [PREFIX_COMPAT + m for m in COMPAT_MODELS]
+    return out
+
+
+def cloud_context_tokens(name: str) -> int:
+    return CLOUD_CTX_TOKENS.get(bare_model(name), CLOUD_CTX_DEFAULT)
+
+
+def cloud_config() -> dict:
+    """Tham số nhánh cloud, admin sửa trên web (app_settings). Import lười
+    như effective_llm_model: models.py nạp rất sớm, trước cả khi CSDL sẵn."""
+    cfg = {"enabled": False, "model": "claude:claude-sonnet-5",
+           "channels": "internal", "effort": "medium", "max_tokens": 8000,
+           "fallback_local": True, "scope": "law_only",
+           "context_char_budget": 0}
+    try:
+        from app import settings
+        g = settings.get_all()
+        truthy = lambda v: str(v).strip().lower() not in {"0", "false", "no", ""}
+        cfg["enabled"] = truthy(g.get("cloud_enabled", "false"))
+        cfg["model"] = (g.get("cloud_model") or cfg["model"]).strip()
+        cfg["channels"] = (g.get("cloud_channels") or cfg["channels"]).strip()
+        cfg["effort"] = (g.get("cloud_effort") or cfg["effort"]).strip().lower()
+        cfg["scope"] = (g.get("cloud_scope") or cfg["scope"]).strip().lower()
+        cfg["fallback_local"] = truthy(g.get("cloud_fallback_local", "true"))
+        cfg["max_tokens"] = settings.get_int("cloud_max_tokens", cfg["max_tokens"])
+        cfg["context_char_budget"] = settings.get_int(
+            "cloud_context_char_budget", cfg["context_char_budget"])
+    except Exception:
+        pass
+    return cfg
+
+
+def local_default_model() -> str:
+    """Model LOCAL để lui về. KHÔNG lấy thẳng cài đặt llm_model: admin có thể
+    đã đặt chính nó thành một model cloud, lúc ấy "lui về" lại quay ra ngoài."""
+    try:
+        from app import settings
+        cur = (settings.get("llm_model") or "").strip()
+        if cur and not is_cloud(cur):
+            return cur
+    except Exception:
+        pass
+    return LLM_MODEL
+
+
+def model_soan_thao(model_choice: str | None) -> str:
+    """Model cho các luồng SOẠN THẢO: điền mẫu, dựng bộ file .docx, phác nội
+    dung hợp đồng.
+
+    Những luồng này không đi qua rag.prepare nên không có chốt phạm vi ở đó —
+    mà chúng lại luôn cầm dữ liệu định danh: CCCD, ngày sinh, lương, điều
+    khoản hợp đồng của một người cụ thể. Vì vậy chỉ cho ra ngoài ở mức phạm vi
+    rộng nhất, và mức đó admin phải chọn tay. Mọi trường hợp khác: chạy bằng
+    model trên máy chủ, im lặng và an toàn.
+    """
+    if not is_cloud(model_choice or ""):
+        return model_choice
+    cfg = cloud_config()
+    if cfg["enabled"] and cfg["scope"] == "all_but_finance" and cloud_models():
+        return model_choice
+    return local_default_model()
+
+
+def cloud_enabled_for(channel: str) -> bool:
+    """Kênh này có được phép gọi API không. Mặc định CHỈ kênh nội bộ: kênh
+    public là cửa cho người ngoài gõ câu hỏi không giới hạn số lượt — mở cloud
+    ở đó là mở luôn hoá đơn cho người lạ bơm."""
+    cfg = cloud_config()
+    if not cfg["enabled"] or not cloud_models():
+        return False
+    allow = {c.strip() for c in (cfg["channels"] or "").split(",") if c.strip()}
+    return (channel or "internal") in allow
 
 
 def is_thinking_model(name: str) -> bool:
@@ -147,6 +312,12 @@ def auto_pick_model(question: str, configured_model: str | None = None,
     Câu hỏi phức tạp luôn dùng đúng model admin đã đặt, chấp nhận nạp lại nếu cần.
     """
     configured = configured_model or effective_llm_model()
+    # Model cloud KHÔNG đi qua bộ chọn theo cỡ. _param_size đọc số trong tên
+    # ('claude-sonnet-5' → không khớp mẫu '<số>b' → 999) nên trần cỡ thành vô
+    # hạn, và mọi model local đang nóng đều lọt — auto sẽ lặng lẽ hạ một lựa
+    # chọn cloud xuống Qwen mà không ai biết. Cloud thì dùng đúng cloud.
+    if is_cloud(configured):
+        return configured
     # Các câu đếm/chào hỏi đã được fast-path trả trực tiếp trước khi tới đây.
     # Phần còn lại là tra cứu/phân tích tài liệu, nơi tự hạ 8B xuống 4B làm tăng
     # nguy cơ bỏ citation và hiểu sai điều khoản. Auto lúc này ưu tiên chất lượng
@@ -303,9 +474,9 @@ class StripThink:
         return rest
 
 
-def llm_stream(prompt: str, system: str = "", temperature: float = 0.2,
-               model: str | None = None, stats: dict | None = None):
-    """Sinh câu trả lời THEO DÒNG — trả về generator từng mẩu chữ.
+def ollama_stream(prompt: str, system: str = "", temperature: float = 0.2,
+                  model: str | None = None, stats: dict | None = None):
+    """Sinh câu trả lời THEO DÒNG bằng model chạy trên máy chủ (Ollama) — trả về generator từng mẩu chữ.
 
     Đây là cách duy nhất giữ được trải nghiệm chấp nhận được trên máy chạy CPU:
     người dùng thấy chữ ngay sau khi model đọc xong ngữ cảnh, thay vì ngồi nhìn
@@ -366,25 +537,221 @@ def llm_stream(prompt: str, system: str = "", temperature: float = 0.2,
         r.close()
 
 
-def llm_openai(prompt: str, system: str = "", temperature: float = 0.2) -> tuple[str, int]:
-    key = os.getenv("OPENAI_API_KEY", "")
-    if not key:
-        raise RuntimeError("Chưa cấu hình OPENAI_API_KEY")
+# ===================== GỌI API NGOÀI =====================
+# Ba điều khiến nhánh này KHÔNG phải bản sao của nhánh Ollama:
+#
+# 1. KHÔNG gửi `temperature`. Claude Sonnet 5 / Opus 5 đã bỏ hẳn tham số lấy
+#    mẫu — gửi lên là lỗi 400, mất câu trả lời. Chữ ký hàm vẫn nhận temperature
+#    để mọi lời gọi sẵn có không phải sửa; nhánh Claude lặng lẽ bỏ qua nó.
+# 2. KHÔNG có num_ctx. Trần vật lý biến mất nghĩa là KHÔNG CÒN GÌ chặn độ dài
+#    prompt — tức không còn gì chặn hoá đơn. Trần cho nhánh cloud nằm ở
+#    cloud_context_char_budget (rag.py đọc), không phải ở đây.
+# 3. Hỏng thì phải quay về máy nhà. Mất mạng/hết quota mà không có đường lui
+#    là mất luôn trợ lý — nên mọi lỗi TRƯỚC token đầu tiên đều rơi xuống
+#    Ollama; sau token đầu tiên thì không lui nữa (người dùng đã đọc chữ rồi).
+
+
+class CloudError(RuntimeError):
+    """Lỗi ở nhánh API ngoài. Tách riêng để chỗ gọi phân biệt được 'API hỏng,
+    lui về local' với lỗi lập trình của chính mình."""
+
+
+def _usd(model: str, tok_in: int, tok_out: int, cached_in: int = 0):
+    """Ước chi phí một lượt (USD). Token đọc lại từ bộ đệm prompt chỉ tính 10%
+    giá vào — đó là lý do đáng đặt cache_control lên system prompt."""
+    price = CLAUDE_PRICES.get(bare_model(model))
+    if not price:
+        return None
+    pin, pout = price
+    cached_in = cached_in or 0
+    fresh = max(0, (tok_in or 0) - cached_in)
+    return round((fresh * pin + cached_in * pin * 0.1
+                  + (tok_out or 0) * pout) / 1_000_000, 6)
+
+
+def _anthropic_client():
+    try:
+        import anthropic
+    except ImportError:
+        raise CloudError("Chưa cài SDK Anthropic: pip install anthropic") from None
+    if not ANTHROPIC_API_KEY:
+        raise CloudError("Chưa cấu hình ANTHROPIC_API_KEY trong .env")
+    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+
+def claude_stream(prompt: str, system: str = "", temperature: float = 0.2,
+                  model: str | None = None, stats: dict | None = None):
+    """Sinh câu trả lời THEO DÒNG qua API Anthropic.
+
+    `temperature` bị BỎ QUA (xem ghi chú đầu mục). Độ sâu suy nghĩ chỉnh bằng
+    `cloud_effort` — đây là nút chỉnh chi phí chính: 'low' cho câu tra cứu
+    thường, 'high' cho rà soát hồ sơ. Mặc định 'medium'.
+
+    Khối `system` được đánh dấu cache_control: nó là phong cách tư vấn dài
+    hàng nghìn token và LẶP LẠI y hệt ở mọi câu hỏi, nên đọc lại từ bộ đệm chỉ
+    còn 10% giá. Phần tài liệu đổi theo từng câu nên không đệm được.
+    """
+    cfg = cloud_config()
+    name = bare_model(model or cfg["model"])
+    client = _anthropic_client()
+    kw = {
+        "model": name,
+        "max_tokens": max(1024, int(cfg["max_tokens"] or 8000)),
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system:
+        kw["system"] = [{"type": "text", "text": system,
+                         "cache_control": {"type": "ephemeral"}}]
+    tuned = dict(kw, thinking={"type": "adaptive"},
+                 output_config={"effort": cfg["effort"] or "medium"})
+
     t0 = time.time()
-    r = requests.post("https://api.openai.com/v1/chat/completions",
-                      headers={"Authorization": f"Bearer {key}"},
-                      json={"model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                            "messages": (([{"role": "system", "content": system}] if system else [])
-                                         + [{"role": "user", "content": prompt}]),
-                            "temperature": temperature}, timeout=300)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip(), int((time.time() - t0) * 1000)
+    try:
+        ctx = client.messages.stream(**tuned)
+    except TypeError:
+        # Bản SDK cũ hơn chưa biết thinking/output_config. Chạy được vẫn hơn
+        # là chết vì một tham số tinh chỉnh.
+        ctx = client.messages.stream(**kw)
+    with ctx as stream:
+        for piece in stream.text_stream:
+            if piece:
+                yield piece
+        final = stream.get_final_message()
+    if stats is not None:
+        u = getattr(final, "usage", None)
+        tok_in = getattr(u, "input_tokens", 0) or 0
+        tok_out = getattr(u, "output_tokens", 0) or 0
+        cached = getattr(u, "cache_read_input_tokens", 0) or 0
+        stats.update({
+            "model": PREFIX_CLAUDE + name, "provider": P_CLAUDE,
+            "prompt_tokens": tok_in + cached, "gen_tokens": tok_out,
+            "cache_read_tokens": cached,
+            "cost_usd": _usd(name, tok_in + cached, tok_out, cached),
+            "stop_reason": getattr(final, "stop_reason", None),
+            "total_ms": int((time.time() - t0) * 1000),
+        })
+
+
+def compat_stream(prompt: str, system: str = "", temperature: float = 0.2,
+                  model: str | None = None, stats: dict | None = None):
+    """Sinh câu trả lời THEO DÒNG qua endpoint TƯƠNG THÍCH OpenAI.
+
+    Một hàm cho cả nhóm: Qwen trên DashScope, DeepSeek, OpenRouter, Groq, hay
+    máy vLLM tự dựng sau này — họ nói chung giao thức POST /chat/completions
+    với SSE. Đổi nhà cung cấp chỉ là đổi COMPAT_BASE_URL + COMPAT_API_KEY.
+    """
+    if not COMPAT_API_KEY:
+        raise CloudError("Chưa cấu hình COMPAT_API_KEY (hoặc OPENAI_API_KEY)")
+    name = bare_model(model or "")
+    if not name:
+        raise CloudError("Chưa chọn model cho endpoint tương thích OpenAI")
+    cfg = cloud_config()
+    msgs = ([{"role": "system", "content": system}] if system else [])
+    msgs.append({"role": "user", "content": prompt})
+    body = {"model": name, "messages": msgs, "stream": True,
+            "temperature": temperature,
+            "max_tokens": max(1024, int(cfg["max_tokens"] or 8000))}
+    t0 = time.time()
+    strip = StripThink()      # qwen/deepseek qua API vẫn có thể trả <think>
+    tok_in = tok_out = 0
+    r = requests.post(f"{COMPAT_BASE_URL}/chat/completions",
+                      headers={"Authorization": f"Bearer {COMPAT_API_KEY}"},
+                      json=body, timeout=600, stream=True)
+    try:
+        r.raise_for_status()
+        for line in r.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                data = json.loads(payload)
+            except ValueError:
+                continue
+            for ch in data.get("choices") or []:
+                piece = strip.feed((ch.get("delta") or {}).get("content") or "")
+                if piece:
+                    yield piece
+            usage = data.get("usage") or {}
+            tok_in = usage.get("prompt_tokens") or tok_in
+            tok_out = usage.get("completion_tokens") or tok_out
+        tail = strip.flush()
+        if tail:
+            yield tail
+    finally:
+        r.close()
+    if stats is not None:
+        stats.update({
+            "model": PREFIX_COMPAT + name, "provider": P_COMPAT,
+            "prompt_tokens": tok_in, "gen_tokens": tok_out,
+            "total_ms": int((time.time() - t0) * 1000),
+        })
+
+
+def llm_stream(prompt: str, system: str = "", temperature: float = 0.2,
+               model: str | None = None, stats: dict | None = None):
+    """Bộ ĐIỀU PHỐI dòng chữ: chọn nhà cung cấp theo tên model rồi chuyển tiếp.
+
+    Vẫn là generator (dùng `yield from`) nên `close()` ở rag.py xuyên tới tận
+    generator con — nút "Dừng" ngắt được cả Ollama lẫn kết nối API.
+    """
+    prov = provider_of(model or "")
+    if prov == P_LOCAL:
+        yield from ollama_stream(prompt, system, temperature, model, stats)
+        return
+
+    fn = claude_stream if prov == P_CLAUDE else compat_stream
+    da_ra_chu = False
+    try:
+        for piece in fn(prompt, system, temperature, model, stats):
+            da_ra_chu = True
+            yield piece
+        return
+    except GeneratorExit:
+        raise                      # người dùng bấm Dừng — không phải lỗi
+    except Exception as e:
+        # Đã ra chữ thì không lui được nữa: chèn tiếp bản của model khác vào
+        # giữa câu còn tệ hơn dừng hẳn.
+        if da_ra_chu or not cloud_config()["fallback_local"]:
+            raise
+        loi = f"{type(e).__name__}: {e}"
+    if stats is not None:
+        stats["cloud_error"] = loi
+        stats["fallback"] = "local"
+    yield from ollama_stream(prompt, system, temperature, None, stats)
+
+
+def llm_cloud(prompt: str, system: str = "", temperature: float = 0.2,
+              model: str | None = None, stats: dict | None = None):
+    """Bản KHÔNG streaming của nhánh cloud — gom dòng chữ lại.
+
+    Gom từ luồng chứ không gọi endpoint non-stream: câu trả lời dài (rà soát
+    hồ sơ) vượt quá hạn HTTP của bản non-stream, mà đằng nào người gọi cũng
+    phải chờ trọn câu nên chẳng mất gì.
+    """
+    t0 = time.time()
+    text = "".join(llm_stream(prompt, system, temperature, model, stats))
+    return text.strip(), int((time.time() - t0) * 1000)
+
+
+def llm_openai(prompt: str, system: str = "", temperature: float = 0.2):
+    """Giữ tên cũ cho mã đã có: gọi endpoint tương thích OpenAI theo OPENAI_MODEL."""
+    name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return llm_cloud(prompt, system, temperature, model=PREFIX_COMPAT + name)
 
 
 def llm(prompt: str, system: str = "", prefer: str = "local", model: str | None = None,
         stats: dict | None = None, **kw):
-    if prefer == "cloud" and os.getenv("OPENAI_API_KEY"):
-        return llm_openai(prompt, system, **kw)   # kênh đám mây dùng OPENAI_MODEL
+    """Sinh câu trả lời, KHÔNG streaming. Nhà cung cấp do TÊN MODEL quyết định.
+
+    `prefer="cloud"` là đường cũ (chỉ OPENAI_MODEL) — giữ nguyên cho mã cũ,
+    nhưng cách đúng bây giờ là truyền thẳng tên model có tiền tố.
+    """
+    if is_cloud(model or ""):
+        return llm_cloud(prompt, system, model=model, stats=stats, **kw)
+    if prefer == "cloud" and COMPAT_API_KEY:
+        return llm_openai(prompt, system, **kw)
     return llm_local(prompt, system, model=model, stats=stats, **kw)
 
 
@@ -395,6 +762,12 @@ def benchmark(model: str | None = None, prompt_chars: int = 4000) -> dict:
     Hai con số này quyết định toàn bộ thời gian trả lời:
         thời gian ≈ (số token prompt / tốc độ đọc) + (số token sinh / tốc độ viết)
     """
+    if is_cloud(model or ""):
+        # Phép đo này nói về PHẦN CỨNG máy chủ (token/giây khi đọc prompt và
+        # khi viết). Với model chạy ở nhà người ta thì con số ấy không có ý
+        # nghĩa gì để admin ra quyết định — nói thẳng thay vì trả số vô nghĩa.
+        return {"ok": False, "error": "Model cloud không đo bằng phép đo phần cứng "
+                                      "này. Chọn một model Ollama để đo máy chủ."}
     filler = ("Đây là đoạn văn bản mẫu dùng để đo tốc độ đọc ngữ cảnh của máy chủ. "
               * ((prompt_chars // 80) + 1))[:prompt_chars]
     st: dict = {}
@@ -445,13 +818,20 @@ def check_ollama():
 def check_models():
     up, names = check_ollama()
     cur = effective_llm_model()
+    cloud = cloud_models()
+    cfg = cloud_config()
+    phan_cloud = {"cloud": cloud, "cloud_enabled": bool(cfg["enabled"] and cloud),
+                  "cloud_model": cfg["model"], "cloud_channels": cfg["channels"]}
     if not up:
-        return {"ollama": False, "llm": False, "embed": False, "models": [],
-                "loaded": [], "llm_model": cur, "embed_model": EMBED_MODEL}
-    has = lambda m: any(n.split(":")[0] == m.split(":")[0] for n in names)
+        # Ollama chết mà cloud còn sống thì hệ thống vẫn trả lời được — báo
+        # đúng như vậy thay vì "llm: false" khiến người trực tưởng hỏng hết.
+        return {"ollama": False, "llm": bool(phan_cloud["cloud_enabled"]),
+                "embed": False, "models": [], "loaded": [],
+                "llm_model": cur, "embed_model": EMBED_MODEL, **phan_cloud}
+    has = lambda m: is_cloud(m) or any(n.split(":")[0] == m.split(":")[0] for n in names)
     return {"ollama": True, "llm": has(cur), "embed": has(EMBED_MODEL),
             "models": names, "loaded": loaded_models(),
-            "llm_model": cur, "embed_model": EMBED_MODEL}
+            "llm_model": cur, "embed_model": EMBED_MODEL, **phan_cloud}
 
 
 if __name__ == "__main__":

@@ -30,6 +30,14 @@ export interface ModelInfo {
   /** Model tạo vector — cố định, đổi là hỏng tra cứu. Chỉ hiển thị. */
   embed_model: string | null;
   embed_ready: boolean;
+  /** Model gọi qua API ngoài, đã cấu hình khoá. Rỗng = chưa cấu hình. */
+  cloud?: string[];
+  /** Admin đã bật nhánh API ngoài chưa. Chưa bật thì chọn cũng tự về local. */
+  cloud_enabled?: boolean;
+  /** Model API dùng khi chọn "Cloud" ở ô chat. */
+  cloud_model?: string | null;
+  /** Kênh được phép gọi API, phân tách bằng dấu phẩy. */
+  cloud_channels?: string | null;
 }
 
 /** Kết quả đo tốc độ máy chủ — nói lên PHẦN CỨNG khoẻ tới đâu. */

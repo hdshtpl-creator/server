@@ -275,6 +275,21 @@ def revert_drive_keys(dry_run=False):
 # ---------------------------------------------------------------------------
 # Lượt quét
 # ---------------------------------------------------------------------------
+def _keys_tu_web() -> set:
+    """Danh tính những file do bộ quét web tải về (app/web_watch.py).
+
+    Bọc try/except vì đây là quan hệ MỘT CHIỀU và tuỳ chọn: kho local chạy
+    được trọn vẹn khi chưa ai bật bộ quét web, và một lỗi ở đó không được
+    phép làm hỏng lượt học của cả kho.
+    """
+    try:
+        from app import web_watch
+        return web_watch.keys_tu_web()
+    except Exception as e:  # noqa: BLE001
+        print(f"[CẢNH BÁO] Không đọc được danh sách file tải từ web: {e}")
+        return set()
+
+
 def run(dry_run=False):
     root = library_root()
     started_at = datetime.now(timezone.utc)
@@ -343,6 +358,11 @@ def run(dry_run=False):
                 "warnings": extraction_info.get("warnings") or [],
             })
 
+    # CHỐT 4 của bộ quét web: file do máy tự tải từ Internet luôn chờ người
+    # duyệt, kể cả khi kho đang bật tự duyệt. Đọc một lần cho cả lượt quét —
+    # không có bộ quét web thì đây là tập rỗng và không ai bị ảnh hưởng.
+    tu_web = _keys_tu_web()
+
     def learn(path, loc, labels, key, fingerprint, row):
         """Học một file (mới hoặc thay bản cũ). Trả về True nếu thành công."""
         try:
@@ -351,7 +371,8 @@ def run(dry_run=False):
             ok = auto_learn.learn_one(path, labels, key, fingerprint,
                                       replace_id=row[0] if row else None,
                                       diagnostics=extraction_info,
-                                      prev_approved=was_live, source_kind="local")
+                                      prev_approved=was_live, source_kind="local",
+                                      force_pending=key in tu_web)
             if ok:
                 note_learn_result(path, loc, extraction_info, was_live)
                 auto_learn._clear_failure(key)

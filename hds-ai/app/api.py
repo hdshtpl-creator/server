@@ -1641,6 +1641,13 @@ def models_list(user=Depends(current_user)):
         "current_ready": st.get("llm"),        # model mặc định có thật sự tồn tại không
         "embed_model": st.get("embed_model"),  # model tạo vector — cố định, không đổi
         "embed_ready": st.get("embed"),
+        # Model gọi qua API ngoài. Danh sách RỖNG khi chưa cấu hình khoá API —
+        # thà không hiện còn hơn cho chọn rồi báo lỗi. `cloud_enabled` cho biết
+        # admin đã bật nhánh này chưa; chưa bật thì chọn cũng tự về Qwen local.
+        "cloud": st.get("cloud", []),
+        "cloud_enabled": st.get("cloud_enabled", False),
+        "cloud_model": st.get("cloud_model"),
+        "cloud_channels": st.get("cloud_channels"),
     }
 
 

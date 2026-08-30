@@ -365,7 +365,8 @@ export const approveDraft = ApiJs.approveDraft as (
 
 export const exportDraft = ApiJs.exportDraft as (
   draftId: number,
-  filename?: string
+  filename?: string,
+  format?: 'docx' | 'pdf' | 'md'
 ) => Promise<void>;
 
 /** Bóc thông tin cá nhân từ MỘT hồ sơ (CCCD/sơ yếu/CV — PDF, ảnh, DOCX) để

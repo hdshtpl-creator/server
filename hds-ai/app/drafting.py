@@ -291,9 +291,10 @@ def generate_content(*, title: str, instructions: str, input_data: dict[str, Any
         evidence=evidence,
         previous_content=previous_content,
     )
-    chosen_model = (models.auto_pick_model(f"{title} {instructions}")
-                    if (model or "").strip().lower() == "auto"
-                    else (model or models.effective_llm_model()))
+    chosen_model = models.model_soan_thao(
+        models.auto_pick_model(f"{title} {instructions}")
+        if (model or "").strip().lower() == "auto"
+        else (model or models.effective_llm_model()))
     content, latency = models.llm(
         prompt, system=system, temperature=0.1, model=chosen_model
     )

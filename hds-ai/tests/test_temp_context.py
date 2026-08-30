@@ -181,9 +181,22 @@ class TranNguCanhTests(unittest.TestCase):
         # Admin đặt 6000 để cứu máy yếu — không được lặng lẽ nới ra.
         self.assertEqual(rag._context_char_cap(32768, 6000), 6000)
 
-    def test_may_ctx_nho_van_co_san_toi_thieu(self):
-        # num_ctx 8192 → công thức âm, phải chặn sàn chứ không trả số âm.
-        self.assertEqual(rag._context_char_cap(8192, 0), 20_000)
+    def test_may_ctx_nho_thi_san_co_theo_cua_so(self):
+        # Máy chủ thật chạy num_ctx=10000 (admin hạ cho vừa VRAM): sàn cứng
+        # 20 nghìn ký tự khi đó CAO HƠN cửa sổ chứa nổi → prompt tràn, Ollama
+        # cắt đầu. Sàn phải theo tỷ lệ cửa sổ, và luôn NHỎ hơn sức chứa.
+        for ctx in (8192, 10000, 16384):
+            cap = rag._context_char_cap(ctx, 0)
+            self.assertGreater(cap, 0)
+            self.assertLess(cap, int(ctx * 2.6),
+                            f"num_ctx={ctx}: trần tài liệu phải chừa chỗ "
+                            "cho hướng dẫn + lịch sử")
+
+    def test_ctx_10000_khong_con_bi_san_cung_day_tran(self):
+        # Đúng ca máy chủ thật: 10000 token ≈ 26 nghìn ký tự cả prompt.
+        cap = rag._context_char_cap(10000, 0)
+        self.assertLessEqual(cap, 16_000)
+        self.assertGreaterEqual(cap, 10_000)
 
     def test_ca_that_235k_bi_kep_xuong_duoi_tran(self):
         cap = rag._context_char_cap(32768, 0)

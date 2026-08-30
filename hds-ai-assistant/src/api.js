@@ -808,7 +808,10 @@ export async function autofillDraft(file) {
   return res.json();
 }
 
-export async function exportDraft(draftId, filename) {
+export async function exportDraft(draftId, filename, format = 'docx') {
+  // format: 'docx' | 'pdf' | 'md'. PDF do LibreOffice tren may chu chuyen tu
+  // chinh ban .docx nen bo cuc giong het, khong phai ban dung lai.
+  const dinhDang = ['docx', 'pdf', 'md'].includes(format) ? format : 'docx';
   if (useMockBackend) {
     const blob = new Blob(['Bản demo — chỉ xuất tệp khi kết nối backend thật.'], {
       type: 'text/plain;charset=utf-8',
@@ -816,7 +819,8 @@ export async function exportDraft(draftId, filename) {
     triggerDownload(blob, filename || `ban-nhap-${draftId}.txt`);
     return;
   }
-  const res = await fetch(`${apiBaseUrl}/drafts/${toIntOrNull(draftId)}/export?format=docx`, {
+  const res = await fetch(
+    `${apiBaseUrl}/drafts/${toIntOrNull(draftId)}/export?format=${dinhDang}`, {
     method: 'GET',
     headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
   });
@@ -827,7 +831,8 @@ export async function exportDraft(draftId, filename) {
   const blob = await res.blob();
   const cd = res.headers.get('Content-Disposition') || '';
   const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-  triggerDownload(blob, filename || (m ? decodeURIComponent(m[1]) : `ban-nhap-${draftId}.docx`));
+  triggerDownload(
+    blob, filename || (m ? decodeURIComponent(m[1]) : `ban-nhap-${draftId}.${dinhDang}`));
 }
 
 // ==================== 12. TỆP: TẢI LÊN / TẢI VỀ THẬT ====================

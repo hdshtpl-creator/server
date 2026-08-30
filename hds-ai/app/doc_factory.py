@@ -179,7 +179,10 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
         return {"answer": answer_md, "answer_mode": "structured",
                 "grounding_status": "not_applicable", "evidence": [], "state": {}}
 
-    chosen_model = (model or "").strip() or models.effective_llm_model()
+    # Bộ file luôn mang dữ liệu định danh của một người/một khách cụ thể —
+    # model_soan_thao giữ nó ở lại máy chủ trừ khi admin đã mở phạm vi rộng nhất.
+    chosen_model = models.model_soan_thao(
+        (model or "").strip() or models.effective_llm_model())
 
     def llm_full(prompt, system, temperature):
         """Gọi model qua STREAM rồi ghép lại — một lượt tạo bộ file có tới
