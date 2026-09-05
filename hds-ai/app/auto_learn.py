@@ -49,7 +49,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from app import db, settings
+from app import db, settings, van_ban
 from app.ingest import (ExtractionError, MAX_SOURCE_BYTES, SUPPORTED_EXTENSIONS,
                         apply_context_headers, client_display_name,
                         extract_text_with_metadata, safe_path_component,
@@ -498,28 +498,52 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
     diagnostics["forced_review"] = (path.suffix.lower() == ".pdf")
     vecs = embed([piece.content for piece in pieces])
     summary = summarize(text, title)
+    # Danh tính văn bản pháp lý (số hiệu/loại/trích yếu/ngày) — bóc trượt trả
+    # None, không warning, không chặn học. Quan hệ thay_thế/sửa_đổi ghi ở
+    # van_ban.xu_ly_sau_hoc, khoá theo SỐ HIỆU nên sống qua vòng DELETE+INSERT
+    # ngay bên dưới (documents.id đổi mỗi lần học lại là hành vi có sẵn).
+    vb_meta = (van_ban.boc_metadata(text)
+               if labels["doc_type"] in ("law", "an_le", "ban_an") else {})
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             source_version = 1
+            trang_thai_cu = None
             if replace_id:                       # file đã đổi → xoá bản cũ (chunks tự xoá theo)
-                cur.execute("SELECT coalesce(source_version,1)+1 FROM documents WHERE id=%s",
-                            (replace_id,))
+                cur.execute("""SELECT coalesce(source_version,1)+1, trang_thai_hieu_luc
+                                 FROM documents WHERE id=%s""", (replace_id,))
                 version_row = cur.fetchone()
                 source_version = version_row[0] if version_row else 1
+                # Trạng thái hiệu lực do NGƯỜI DUYỆT đặt tay phải sống qua lượt
+                # học lại: bản ghi cũ bị DELETE, bản mới mặc định 'chua_ro' —
+                # không kế thừa thì mỗi lần ai đó sửa file là công xác minh
+                # hiệu lực của luật sư bị xoá lặng lẽ (cùng loại bài học với
+                # kế thừa trạng thái duyệt 19/08).
+                if version_row and version_row[1] == "con_hieu_luc":
+                    trang_thai_cu = version_row[1]
                 cur.execute("DELETE FROM documents WHERE id=%s", (replace_id,))
             cur.execute("""INSERT INTO documents
                 (title, source_path, drive_file_id, checksum, doc_type, access_level,
                  client_id, department_id, matter_id, approved, label_verified, source_kind, summary,
-                 extraction_status,extraction_error,source_version,person_folder)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                 extraction_status,extraction_error,source_version,person_folder,
+                 so_hieu,loai_van_ban,trich_yeu,ngay_ban_hanh,ngay_hieu_luc,
+                 trang_thai_hieu_luc)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                        coalesce(%s,'chua_ro')) RETURNING id""",
                 (title, str(path), drive_id, checksum,
                  labels["doc_type"], labels["access_level"],
                  labels["client_id"], labels["department_id"], labels.get("matter_id"),
                  should_approve, should_approve, source_kind, summary,
                  "warning" if extraction.warnings else "ready",
                  json.dumps(extraction.warnings, ensure_ascii=False) if extraction.warnings else None,
-                 source_version, labels.get("title_context")))
+                 source_version, labels.get("title_context"),
+                 vb_meta.get("so_hieu"), vb_meta.get("loai_van_ban"),
+                 vb_meta.get("trich_yeu"), vb_meta.get("ngay_ban_hanh"),
+                 vb_meta.get("ngay_hieu_luc"), trang_thai_cu))
             doc_id = cur.fetchone()[0]
+            n_qh, n_ha = van_ban.xu_ly_sau_hoc(cur, labels["doc_type"], text, vb_meta)
+            if n_qh or n_ha:
+                diagnostics["van_ban"] = {"quan_he": n_qh, "ha_hieu_luc": n_ha}
+                print(f"     Văn bản: {n_qh} quan hệ, {n_ha} văn bản đổi trạng thái hiệu lực.")
             for idx, (piece, vec) in enumerate(zip(pieces, vecs)):
                 cur.execute("""INSERT INTO chunks
                     (document_id, chunk_index, content, page_number, section_title, source_locator,

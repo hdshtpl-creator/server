@@ -640,8 +640,23 @@ Người lao động có quyền đơn phương chấm dứt hợp đồng lao �
         self.assertIn("45/2019/QH14", document_citation(text))
 
     def test_each_article_becomes_one_chunk(self):
+        # 3 Điều + 1 đoạn "Phần mở đầu" (từ 31/08/2026 phần trước Điều 1 —
+        # số hiệu, ngày ký, trích yếu — không bị vứt nữa).
         pieces = chunk_law_structured(self.LAW)
-        self.assertEqual(len(pieces), 3)
+        self.assertEqual(len(pieces), 4)
+        self.assertEqual("phan_mo_dau", pieces[0].source_locator)
+
+    def test_preamble_carries_document_identity(self):
+        """Phần mở đầu là thẻ căn cước: số hiệu phải nằm TRONG nội dung đoạn."""
+        pieces = chunk_law_structured(self.LAW)
+        self.assertIn("45/2019/QH14", pieces[0].content)
+        self.assertIn("Phần mở đầu", pieces[0].section_title)
+
+    def test_citation_includes_subject_name(self):
+        """Chuẩn hành nghề: 'Bộ luật Lao động số 45/2019/QH14', không phải
+        'Bộ luật số 45/2019/QH14' trống không."""
+        self.assertEqual("Bộ luật Lao động số 45/2019/QH14",
+                         document_citation(self.LAW))
 
     def test_chunk_carries_full_citation_path(self):
         pieces = chunk_law_structured(self.LAW)

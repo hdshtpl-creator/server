@@ -11,6 +11,13 @@ interface DocForm {
   doc_type: string;
   access_level: string;
   client_id: string;
+  /* Danh tính văn bản pháp lý — máy bóc sẵn, người duyệt soát/sửa.
+     Hiện khi doc_type là law/an_le/ban_an. */
+  so_hieu: string;
+  loai_van_ban: string;
+  trich_yeu: string;
+  ngay_ban_hanh: string;
+  ngay_hieu_luc: string;
   error: string | null;
   isSubmitting: boolean;
 }
@@ -56,6 +63,11 @@ export const DocumentReviewTab: React.FC = () => {
               doc_type: doc.doc_type || 'other',
               access_level: doc.access_level || 'internal',
               client_id: doc.client_id != null ? String(doc.client_id) : '',
+              so_hieu: doc.so_hieu || '',
+              loai_van_ban: doc.loai_van_ban || '',
+              trich_yeu: doc.trich_yeu || '',
+              ngay_ban_hanh: doc.ngay_ban_hanh || '',
+              ngay_hieu_luc: doc.ngay_hieu_luc || '',
               error: null,
               isSubmitting: false,
             },
@@ -133,6 +145,18 @@ export const DocumentReviewTab: React.FC = () => {
     try {
       const res = await api.saveReviewContent(docId, cur.content);
       patchEditor(key, { saving: false, chunkCount: res.chunks ?? null, status: 'edited' });
+      // Backend vừa bóc LẠI danh tính từ bản đã sửa. Không nạp lại vào form thì
+      // nút Duyệt ngay sau đó gửi số hiệu bóc từ bản OCR CŨ — đè lại đúng con
+      // số người duyệt vừa chữa, và ô rỗng còn mang nghĩa XOÁ ở backend.
+      if (res.van_ban) {
+        patchForm(key, {
+          so_hieu: res.van_ban.so_hieu || '',
+          loai_van_ban: res.van_ban.loai_van_ban || '',
+          trich_yeu: res.van_ban.trich_yeu || '',
+          ngay_ban_hanh: res.van_ban.ngay_ban_hanh || '',
+          ngay_hieu_luc: res.van_ban.ngay_hieu_luc || '',
+        });
+      }
       showToast(`Đã lưu nội dung sửa và tạo lại ${res.chunks} đoạn vector. Bấm "Duyệt" để nạp vào AI.`, 'success');
     } catch (err: any) {
       patchEditor(key, { saving: false });
@@ -160,6 +184,17 @@ export const DocumentReviewTab: React.FC = () => {
         doc_type: form.doc_type,
         access_level: form.access_level,
         client_id: form.client_id || null,
+        // Danh tính văn bản pháp lý — gửi cả chuỗi rỗng (nghĩa "xoá") để
+        // người duyệt sửa được cái máy bóc sai.
+        ...(['law', 'an_le', 'ban_an'].includes(form.doc_type)
+          ? {
+              so_hieu: form.so_hieu,
+              loai_van_ban: form.loai_van_ban,
+              trich_yeu: form.trich_yeu,
+              ngay_ban_hanh: form.ngay_ban_hanh,
+              ngay_hieu_luc: form.ngay_hieu_luc,
+            }
+          : {}),
       });
       showToast('Đã duyệt và nạp tài liệu vào kho tri thức.', 'success');
       setDocs((prev) => prev.filter((d) => d.id !== docId));
@@ -212,10 +247,15 @@ export const DocumentReviewTab: React.FC = () => {
         <div className="space-y-4">
           {docs.map((doc) => {
             const key = String(doc.id);
-            const form = docForms[key] || {
+            const form: DocForm = docForms[key] || {
               doc_type: 'other',
               access_level: 'internal',
               client_id: '',
+              so_hieu: '',
+              loai_van_ban: '',
+              trich_yeu: '',
+              ngay_ban_hanh: '',
+              ngay_hieu_luc: '',
               error: null,
               isSubmitting: false,
             };
@@ -465,6 +505,68 @@ export const DocumentReviewTab: React.FC = () => {
                     )}
                   </div>
                 </div>
+
+                {/* Danh tính văn bản pháp lý — máy bóc sẵn từ nội dung, người
+                    duyệt soát và sửa. Số hiệu sai là căn cứ sai. */}
+                {['law', 'an_le', 'ban_an'].includes(form.doc_type) && (
+                  <div className="grid sm:grid-cols-5 gap-3 pt-1 text-xs">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Số hiệu
+                      </label>
+                      <input
+                        value={form.so_hieu}
+                        onChange={(e) => patchForm(key, { so_hieu: e.target.value, error: null })}
+                        placeholder="45/2019/QH14"
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Loại văn bản
+                      </label>
+                      <input
+                        value={form.loai_van_ban}
+                        onChange={(e) => patchForm(key, { loai_van_ban: e.target.value, error: null })}
+                        placeholder="Bộ luật / Nghị định…"
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Trích yếu (tên đầy đủ)
+                      </label>
+                      <input
+                        value={form.trich_yeu}
+                        onChange={(e) => patchForm(key, { trich_yeu: e.target.value, error: null })}
+                        placeholder="Lao động"
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Ngày ban hành
+                      </label>
+                      <input
+                        type="date"
+                        value={form.ngay_ban_hanh}
+                        onChange={(e) => patchForm(key, { ngay_ban_hanh: e.target.value, error: null })}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Ngày hiệu lực
+                      </label>
+                      <input
+                        type="date"
+                        value={form.ngay_hieu_luc}
+                        onChange={(e) => patchForm(key, { ngay_hieu_luc: e.target.value, error: null })}
+                        className={inputClass}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex justify-end pt-1">
                   <button

@@ -32,6 +32,49 @@ export const DOC_TYPE_LABELS: Record<string, string> = Object.fromEntries(
 );
 
 /* --------------------------------------------------------------
+   Quan hệ giữa các văn bản — schema.sql: van_ban_quan_he.loai CHECK (...)
+   và LOAI_QUAN_HE trong hds-ai/app/van_ban.py. Chiều đọc: NGUỒN <loại> ĐÍCH
+   ("A thay_the B" = A thay thế B, B hết hiệu lực).
+-------------------------------------------------------------- */
+export const RELATION_TYPES = [
+  { value: 'thay_the', label: 'Thay thế' },
+  { value: 'bai_bo', label: 'Bãi bỏ' },
+  { value: 'sua_doi_bo_sung', label: 'Sửa đổi, bổ sung' },
+  { value: 'huong_dan', label: 'Quy định chi tiết / hướng dẫn' },
+  { value: 'hop_nhat', label: 'Hợp nhất' },
+  { value: 'can_cu', label: 'Căn cứ' },
+  { value: 'lien_quan', label: 'Liên quan' },
+] as const;
+
+export const RELATION_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  RELATION_TYPES.map((r) => [r.value, r.label])
+);
+
+/* --------------------------------------------------------------
+   Trạng thái hiệu lực — documents.trang_thai_hieu_luc CHECK (...) và
+   TRANG_THAI_HIEU_LUC trong hds-ai/app/van_ban.py. Máy chỉ tự đặt hai
+   trạng thái "hết"; 'con_hieu_luc' là xác nhận tay của người duyệt.
+-------------------------------------------------------------- */
+export const HIEU_LUC_STATUS = [
+  { value: 'chua_ro', label: 'Chưa rõ hiệu lực', tone: 'muted' },
+  { value: 'con_hieu_luc', label: 'Còn hiệu lực', tone: 'ok' },
+  { value: 'het_hieu_luc_mot_phan', label: 'Đã sửa đổi, bổ sung', tone: 'warn' },
+  { value: 'het_hieu_luc', label: 'Hết hiệu lực', tone: 'danger' },
+] as const;
+
+export const HIEU_LUC_LABELS: Record<string, string> = Object.fromEntries(
+  HIEU_LUC_STATUS.map((s) => [s.value, s.label])
+);
+
+/** Lớp Tailwind cho badge hiệu lực — dùng chung mọi bảng/panel. */
+export const HIEU_LUC_BADGE_CLASS: Record<string, string> = {
+  con_hieu_luc: 'bg-emerald-100 text-emerald-700',
+  het_hieu_luc_mot_phan: 'bg-amber-100 text-amber-800',
+  het_hieu_luc: 'bg-red-100 text-red-700',
+  chua_ro: 'bg-gray-100 text-gray-500',
+};
+
+/* --------------------------------------------------------------
    Mức truy cập — schema.sql chỉ cho phép 3 giá trị.
    (Bản cũ có 'senior_only' — giá trị này KHÔNG tồn tại, đã bỏ.)
 -------------------------------------------------------------- */

@@ -16,7 +16,7 @@ import unicodedata
 from collections import defaultdict
 from datetime import date
 
-from app import chat_draft, company_context, db, settings
+from app import chat_draft, company_context, db, settings, van_ban
 from app.models import embed, llm
 
 # --------------------------------------------------------------------
@@ -141,6 +141,35 @@ def _smalltalk_answer(question: str, channel: str = "internal"):
 # trên web, lưu ở bảng app_settings. Xem app/settings.py (khoá prompt_<kênh>).
 
 
+# Phạt điểm văn bản luật đã mất hiệu lực trong xếp hạng. Luật cũ và luật mới
+# cùng điều chỉnh một vấn đề thì GẦN NHAU NHẤT về vector — đúng ca xấu nhất
+# của tìm kiếm ngữ nghĩa: Bộ luật Lao động 2012 thắng điểm Bộ luật 2019 là
+# chuyện thường. Phạt để bản mới đứng trên, nhưng KHÔNG đẩy xuống dưới sàn
+# MIN_SCORE: nguyên tắc của cả hệ là cảnh báo-không-chặn — luật cũ vẫn được
+# hiện (kèm cảnh báo) để luật sư đối chiếu lịch sử, không bị vô hình hoá.
+HIEU_LUC_PHAT = {"het_hieu_luc": 0.08, "het_hieu_luc_mot_phan": 0.03}
+
+
+def uu_tien_hieu_luc(items, san=None):
+    """Hàm thuần (sửa score tại chỗ) — test được không cần CSDL.
+
+    `san` là điểm sàn không được phạt xuống dưới. Mặc định bám theo ngưỡng lọc
+    ĐANG cấu hình (`min_relevance`) chứ không phải hằng số: admin nâng ngưỡng
+    lên 0.35 mà sàn vẫn cứng 0.26 thì mọi văn bản hết hiệu lực bị lọc câm khỏi
+    kết quả — thành ra CHẶN, trái hẳn nguyên tắc cảnh báo-không-chặn của hệ.
+    """
+    if san is None:
+        san = settings.get_float("min_relevance", MIN_SCORE) + 0.01
+    for item in items:
+        if item.get("doc_type") != "law":
+            continue
+        phat = HIEU_LUC_PHAT.get(item.get("trang_thai_hieu_luc") or "", 0.0)
+        if phat and item.get("score"):
+            item["score"] = round(
+                max(item["score"] - phat, min(item["score"], san)), 4)
+    return items
+
+
 def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
              top_k=None, can_finance=False, doc_types=None, document_ids=None,
              candidate_k=None, max_per_document=None, query_vector=None,
@@ -189,7 +218,9 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                        {lexical} AS lexical_score,
                        c.page_number,c.section_title,c.source_locator,
                        d.source_version,c.chunk_index,d.doc_type,d.client_id,cl.name,
-                       d.extraction_status,d.person_folder
+                       d.extraction_status,d.person_folder,
+                       d.so_hieu,d.loai_van_ban,d.trich_yeu,d.ngay_ban_hanh,
+                       d.ngay_hieu_luc,d.trang_thai_hieu_luc
                   FROM chunks c JOIN documents d ON d.id=c.document_id
                   LEFT JOIN clients cl ON cl.id=d.client_id"""
     # KHÔNG lọc theo extraction_status: mọi bản scan OCR đều mang status
@@ -258,6 +289,9 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
             "chunk_index": r[11], "doc_type": r[12], "client_id": r[13],
             "client_name": r[14], "extraction_status": r[15],
             "person_folder": r[16],
+            "so_hieu": r[17], "loai_van_ban": r[18], "trich_yeu": r[19],
+            "ngay_ban_hanh": r[20], "ngay_hieu_luc": r[21],
+            "trang_thai_hieu_luc": r[22],
         })
         item["semantic_score"] = max(item["semantic_score"], float(r[5] or 0))
         item["lexical_score"] = max(item["lexical_score"], float(r[6] or 0))
@@ -279,6 +313,7 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
         item["score"] = min(1.0, 0.70 * semantic + 0.15 * lexical
                             + 0.08 * coverage + 0.05 * title_cov + 0.02 * exact)
 
+    uu_tien_hieu_luc(merged.values())
     ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
     chosen, counts, used = [], defaultdict(int), set()
     for item in ranked:
@@ -343,7 +378,9 @@ def _with_neighbours(chosen, level, client_id, dept_ids, is_banqt, can_finance,
                                   c.page_number,c.section_title,c.source_locator,
                                   d.source_version,c.chunk_index,
                                   d.doc_type,d.client_id,cl.name,d.extraction_status,
-                                  d.person_folder
+                                  d.person_folder,
+                                  d.so_hieu,d.loai_van_ban,d.trich_yeu,
+                                  d.ngay_ban_hanh,d.ngay_hieu_luc,d.trang_thai_hieu_luc
                              FROM chunks c JOIN documents d ON d.id=c.document_id
                              LEFT JOIN clients cl ON cl.id=d.client_id
                             WHERE (c.document_id, c.chunk_index) IN (
@@ -363,6 +400,9 @@ def _with_neighbours(chosen, level, client_id, dept_ids, is_banqt, can_finance,
             "chunk_index": r[9], "doc_type": r[10], "client_id": r[11],
             "client_name": r[12], "extraction_status": r[13],
             "person_folder": r[14],
+            "so_hieu": r[15], "loai_van_ban": r[16], "trich_yeu": r[17],
+            "ngay_ban_hanh": r[18], "ngay_hieu_luc": r[19],
+            "trang_thai_hieu_luc": r[20],
             # Thấp hơn đoạn gốc: hàng xóm là ngữ cảnh bổ trợ, không phải căn cứ chính.
             "score": max(0.0, score_of.get((r[2], r[9]), 0.3) - 0.05),
             "is_neighbour": True,
@@ -417,7 +457,9 @@ def head_chunks(document_ids, level, client_id=None, dept_ids=None,
                                   t.page_number,t.section_title,t.source_locator,
                                   d.source_version,t.chunk_index,d.doc_type,
                                   d.client_id,cl.name,d.extraction_status,
-                                  d.person_folder
+                                  d.person_folder,
+                                  d.so_hieu,d.loai_van_ban,d.trich_yeu,
+                                  d.ngay_ban_hanh,d.ngay_hieu_luc,d.trang_thai_hieu_luc
                              FROM (
                                SELECT c.*, row_number() OVER (
                                         PARTITION BY c.document_id
@@ -441,6 +483,9 @@ def head_chunks(document_ids, level, client_id=None, dept_ids=None,
         "chunk_index": r[9], "doc_type": r[10], "client_id": r[11],
         "client_name": r[12], "extraction_status": r[13],
         "person_folder": r[14],
+        "so_hieu": r[15], "loai_van_ban": r[16], "trich_yeu": r[17],
+        "ngay_ban_hanh": r[18], "ngay_hieu_luc": r[19],
+        "trang_thai_hieu_luc": r[20],
         # Đủ cao để `relevant_sources` không giấu mất khỏi panel trích dẫn:
         # đây là giấy tờ được CHỌN CÓ CHỦ ĐÍCH, không phải đoán từ vector.
         "score": 0.6,
@@ -885,6 +930,26 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                           "không thấy thông tin cần trả lời, hãy nói rõ: kho CÓ file "
                           "này nhưng nội dung chưa đọc được đầy đủ, cần scan/lưu lại "
                           "bản rõ hơn — tuyệt đối không suy đoán.)")
+            # Văn bản luật đã mất hiệu lực: nói thẳng NGAY CẠNH nguồn, không
+            # trông chờ model tự nhận ra 2012 < 2019. Nội dung trích vẫn đúng
+            # từng chữ nên các chốt khác đều xanh — chỉ dòng này chặn được
+            # ca "căn cứ chết mà đèn xanh hết".
+            if c.get("doc_type") == "law":
+                tt_hl = c.get("trang_thai_hieu_luc") or ""
+                boi = (c.get("thay_the_boi") or "").strip()
+                if tt_hl == "het_hieu_luc":
+                    caveat += ("\n(LƯU Ý HIỆU LỰC: văn bản này ĐÃ HẾT HIỆU LỰC"
+                               + (f" — đã bị thay thế bởi {boi}" if boi else "")
+                               + ". Chỉ dùng để đối chiếu lịch sử; căn cứ hiện "
+                               "hành phải lấy từ văn bản còn hiệu lực, và khi "
+                               "trích văn bản này phải nói rõ nó đã hết hiệu lực.)")
+                elif tt_hl == "het_hieu_luc_mot_phan":
+                    caveat += ("\n(LƯU Ý HIỆU LỰC: văn bản này ĐÃ BỊ SỬA ĐỔI, "
+                               "BỔ SUNG"
+                               + (f" bởi {boi}" if boi else "")
+                               + " — điều khoản trích dưới đây có thể đã đổi. "
+                               "Đối chiếu văn bản sửa đổi trước khi dùng làm "
+                               "căn cứ, hoặc nói rõ là chưa đối chiếu được.)")
             parts.append(f"[Nguồn {i}] {owner}{c.get('title','')}{label}{caveat}\n{content}\n")
         # Chỉ dẫn phân biệt chủ thể — chỉ chèn khi thật sự có hồ sơ khách trong
         # bộ nguồn, để câu hỏi thuần pháp lý không phải cõng thêm chữ thừa.
@@ -986,6 +1051,11 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                  "còn hợp đồng, vụ nào quá hạn), TỰ so từng ngày kết thúc trong tài liệu "
                  "với HÔM NAY ở đầu prompt: ngày kết thúc đã qua = ĐÃ HẾT HẠN, ĐỪNG coi "
                  "là còn hiệu lực. Nói rõ hợp đồng nào còn, hợp đồng nào đã hết và hết từ khi nào. "
+                 "HIỆU LỰC VĂN BẢN LUẬT: nguồn mang dòng 'LƯU Ý HIỆU LỰC' là văn bản đã "
+                 "hết hiệu lực hoặc đã bị sửa đổi — ƯU TIÊN trích văn bản còn hiệu lực; "
+                 "nếu buộc phải nhắc văn bản cũ thì phải nói rõ nó đã hết hiệu lực/đã bị "
+                 "sửa đổi và bởi văn bản nào. Hai văn bản cùng điều chỉnh một vấn đề mà "
+                 "khác đời (nhìn năm trong số hiệu) thì căn cứ theo bản mới hơn. "
                  "TRẢ LỜI BẰNG THÔNG TIN, KHÔNG MÔ TẢ CẤU TRÚC TÀI LIỆU: tuyệt đối không "
                  "liệt kê tên cột, tên sheet, tiêu đề bảng hay tên mục rồi nói rằng chúng "
                  "'có mặt nhưng không có số liệu' — với người đọc thì đó là câu trả lời "
@@ -1570,8 +1640,14 @@ def _canh_bao_so_hieu(text: str, chunks) -> str:
     chiếu trước, chặn sau".
     """
     text = text or ""
+    # `thay_the_boi`/`so_hieu` cũng là số hiệu CÓ THẬT lấy từ kho: prompt bảo
+    # model nêu đích danh văn bản thay thế, rồi chính bộ kiểm này gắn cờ "bịa
+    # số hiệu" lên nó vì nó không nằm trong nội dung đoạn — cảnh báo giả làm
+    # người đọc mất tin vào những cảnh báo thật.
     trong_nguon = " ".join(
-        f"{c.get('title') or ''} {c.get('content') or ''}" for c in (chunks or []))
+        f"{c.get('title') or ''} {c.get('content') or ''} "
+        f"{c.get('so_hieu') or ''} {c.get('thay_the_boi') or ''}"
+        for c in (chunks or []))
     co_that = set(_so_hieu_van_ban(trong_nguon))
     nghi_ngo = []
     for so in dict.fromkeys(_so_hieu_van_ban(text)):
@@ -1590,6 +1666,42 @@ def _canh_bao_so_hieu(text: str, chunks) -> str:
     return (text + chr(10) * 2 + "---" + chr(10)
             + "*⚠ Kiểm tra lại số hiệu văn bản trước khi dùng làm căn cứ — "
             + "; ".join(dong) + ".*")
+
+
+def _canh_bao_hieu_luc(text, chunks) -> str:
+    """Footer cảnh báo khi câu trả lời TRÍCH DẪN văn bản đã mất hiệu lực.
+
+    Cùng tinh thần _canh_bao_so_hieu: không xoá câu (nội dung trích vẫn đúng
+    nguyên văn — chỉ là văn bản đã chết), chỉ nói thẳng để người đọc tự kiểm.
+    Chỉ soi nguồn ĐƯỢC TRÍCH ([Nguồn n] có mặt trong câu) — nguồn nằm trong
+    panel mà không được dùng thì không đáng một dòng cảnh báo.
+    """
+    text = text or ""
+    chunks = list(chunks or [])
+    dinh_dem = []
+    for m in _CITATION_RE.finditer(text):
+        n = int(m.group(1))
+        if not 1 <= n <= len(chunks):
+            continue
+        c = chunks[n - 1]
+        tt = c.get("trang_thai_hieu_luc") or ""
+        if c.get("doc_type") == "law" and tt in ("het_hieu_luc",
+                                                 "het_hieu_luc_mot_phan"):
+            ten = (c.get("so_hieu") or c.get("title") or f"Nguồn {n}")
+            trang_thai = ("ĐÃ HẾT HIỆU LỰC" if tt == "het_hieu_luc"
+                          else "đã bị sửa đổi, bổ sung")
+            boi = (c.get("thay_the_boi") or "").strip()
+            dong = f"[Nguồn {n}] {ten} — {trang_thai}"
+            if boi:
+                dong += f" (bởi {boi})"
+            if dong not in dinh_dem:
+                dinh_dem.append(dong)
+    if not dinh_dem:
+        return text
+    return (text + chr(10) * 2 + "---" + chr(10)
+            + "*⚠ Căn cứ trích từ văn bản đã mất hiệu lực — đối chiếu văn bản "
+            + "đang có hiệu lực trước khi dùng: "
+            + "; ".join(dinh_dem[:4]) + ".*")
 
 
 def validate_grounding(text, chunks, answer_mode="grounded", strict=True,
@@ -1652,8 +1764,10 @@ def validate_grounding(text, chunks, answer_mode="grounded", strict=True,
                     "được với nguồn — mở **Nguồn trích dẫn** để tự kiểm tra, "
                     "hoặc hỏi cụ thể hơn để mình tìm thêm căn cứ.*")
             cleaned_out = re.sub(r"\n{3,}", "\n\n", "".join(blocks)).strip()
-            return _canh_bao_so_hieu(cleaned_out + note, chunks), "partial"
-        return (_canh_bao_so_hieu(cleaned, chunks),
+            return (_canh_bao_hieu_luc(
+                _canh_bao_so_hieu(cleaned_out + note, chunks), chunks),
+                "partial")
+        return (_canh_bao_hieu_luc(_canh_bao_so_hieu(cleaned, chunks), chunks),
                 "partial" if unsupported else "verified")
     if not strict or answer_mode == "mixed":
         return cleaned, "uncited"
@@ -2003,6 +2117,51 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         kept = legal_added + kept
         timings["can_cu_phap_ly_them"] = len(legal_added)
 
+    # VĂN BẢN TRÚNG ĐÃ CHẾT → KÉO BẢN SỐNG VÀO. Luật cũ và luật mới gần nhau
+    # nhất về vector, nên nguồn trúng rất hay là bản đã bị thay thế/sửa đổi.
+    # Không loại nó (luật sư cần đối chiếu lịch sử) — nhưng kéo thêm đoạn đầu
+    # của văn bản THAY THẾ nằm trong kho, đặt lên đầu nguồn, và ghi thẳng vào
+    # từng đoạn cũ "đã bị thay thế bởi X" để build_prompt/format_sources dùng.
+    # Chạy cho MỌI kênh: người dân trên cổng public càng cần luật còn sống.
+    het_hl = {(c.get("so_hieu") or "").strip() for c in kept
+              if c.get("doc_type") == "law" and c.get("so_hieu")
+              and c.get("trang_thai_hieu_luc") in ("het_hieu_luc",
+                                                   "het_hieu_luc_mot_phan")}
+    if het_hl:
+        try:
+            with db.session(role=CHANNEL_LEVEL[channel], client_id=client_id,
+                            dept_ids=dept_ids, is_banqt=is_banqt,
+                            can_finance=can_finance) as conn:
+                with conn.cursor() as cur:
+                    moi_hon = van_ban.van_ban_moi_hon(cur, sorted(het_hl))
+        except Exception:
+            moi_hon = []            # bảng quan hệ chưa có (kho cũ) — bỏ qua êm
+        if moi_hon:
+            # Nêu ĐÚNG loại quan hệ: "sửa đổi, bổ sung" mà nói thành "thay thế"
+            # là sai nghiệp vụ — văn bản bị sửa một phần vẫn còn hiệu lực ở
+            # phần chưa sửa, luật sư đọc câu trả lời sẽ bỏ nhầm cả văn bản.
+            boi = {}
+            for m in moi_hon:
+                nhan = van_ban.LOAI_QUAN_HE_VN.get(m["loai"], m["loai"])
+                boi.setdefault(m["so_hieu_cu"], []).append(f"{m['ten']} ({nhan})")
+            for c in kept:
+                so = van_ban.chuan_hoa_so_hieu(c.get("so_hieu") or "")
+                if so in boi:
+                    c["thay_the_boi"] = "; ".join(dict.fromkeys(boi[so]))
+            da_co_doc = {c["document_id"] for c in kept}
+            id_moi = [m["document_id"] for m in moi_hon
+                      if m["document_id"] not in da_co_doc]
+            if id_moi:
+                ban_song = head_chunks(
+                    dict.fromkeys(id_moi), CHANNEL_LEVEL[channel],
+                    client_id=client_id, dept_ids=dept_ids, is_banqt=is_banqt,
+                    can_finance=can_finance, per_doc=2)
+                seen_ids = {c["chunk_id"] for c in kept}
+                ban_song = [c for c in ban_song
+                            if c["chunk_id"] not in seen_ids]
+                kept = ban_song + kept
+                timings["van_ban_thay_the_them"] = len(ban_song)
+
     # Hỏi đích danh một người ("chi tiết Mai") thì GHIM đúng bộ hồ sơ của người
     # đó lên đầu nguồn. Không có bước này, ba bộ hồ sơ na ná nhau về mặt vector
     # và bot dễ trả lời bằng giấy tờ của người khác — đúng bài học 19/08/2026,
@@ -2214,6 +2373,20 @@ def format_sources(chunks):
             "page_number": c.get("page_number"),
             "section_title": c.get("section_title"),
             "source_locator": c.get("source_locator"),
+            # Danh tính + hiệu lực văn bản pháp lý — ngày đổi sang chuỗi ISO vì
+            # evidence được lưu nguyên vào messages.sources (JSONB) và stream
+            # qua SSE; đối tượng date không json.dumps được.
+            "so_hieu": c.get("so_hieu"),
+            "loai_van_ban": c.get("loai_van_ban"),
+            "trich_yeu": c.get("trich_yeu"),
+            "ngay_ban_hanh": (c["ngay_ban_hanh"].isoformat()
+                              if getattr(c.get("ngay_ban_hanh"), "isoformat", None)
+                              else c.get("ngay_ban_hanh")),
+            "ngay_hieu_luc": (c["ngay_hieu_luc"].isoformat()
+                              if getattr(c.get("ngay_hieu_luc"), "isoformat", None)
+                              else c.get("ngay_hieu_luc")),
+            "trang_thai_hieu_luc": c.get("trang_thai_hieu_luc"),
+            "thay_the_boi": c.get("thay_the_boi"),
             "quote": quote, "snippet": quote,
             "score": score, "relevance_score": score,
             "semantic_score": round(float(c.get("semantic_score") or 0), 3),

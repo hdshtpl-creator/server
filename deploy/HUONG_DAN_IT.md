@@ -69,6 +69,10 @@ Timer **tuỳ chọn**, không tự cài: `hds-ai-quet-kho.timer` — quét kho 
 
 ## 2. CẤU TRÚC THƯ MỤC VÀ DỮ LIỆU NẰM ĐÂU
 
+> **Máy chủ HDS hiện tại đặt repo ở `/home/pc/hds-ai-full`** (user `pc`). Các ví
+> dụ trong sổ tay viết `/opt/hds-ai-full` theo quy ước cài mới — đổi đường dẫn
+> cho khớp trước khi chạy, nhất là ở mục 6 (cập nhật) và mục 7 (sao lưu).
+
 ```
 hds-ai-full/                          ← repo, đặt ở /home/<user>/ hoặc /opt/  (KHÔNG đặt trong /root/)
 ├── deploy/                           ← toàn bộ script vận hành + tài liệu này
@@ -76,6 +80,7 @@ hds-ai-full/                          ← repo, đặt ở /home/<user>/ hoặc 
 │   ├── update.sh         cập nhật sau git pull
 │   ├── go-public.sh      mở ra Internet + HTTPS
 │   ├── hoc-tu-thu-muc.sh    quét kho trên máy chủ / cài timer 15 phút
+│   ├── theo-doi-nguon-web.sh theo dõi nguồn văn bản trên mạng / timer 6 giờ
 │   ├── auto-learn.sh        (cũ) học từ Google Drive — giữ để còn đường lùi
 │   ├── luu-tru-drive.sh     (cũ) kéo toàn bộ Drive về, dùng lúc chuyển đổi
 │   ├── kiem-tra-toc-do.sh   chẩn đoán tốc độ
@@ -266,6 +271,122 @@ cd hds-ai && .venv/bin/python -m app.ingest data/raw law
 - **Sửa nội dung file**: học lại. Nếu bản mới rơi lại hàng chờ duyệt (PDF luôn
   vậy, hoặc trích xuất có cảnh báo) thì in `[GỠ KHỎI KHO]` và hiện cảnh báo cam
   trên thẻ trạng thái — **đó là lúc bot mất một tài liệu đang phục vụ**.
+
+### 4.5b Danh tính + quan hệ văn bản luật (31/08/2026)
+
+Từ bản này, mỗi văn bản luật vào kho được bóc **số hiệu, loại, trích yếu, ngày
+ban hành, ngày hiệu lực** và **quan hệ** với văn bản khác (thay thế / sửa đổi,
+bổ sung / hướng dẫn / căn cứ) — tự động lúc học, người duyệt soát và sửa được
+ngay trên form duyệt nhãn. Văn bản trong kho bị một văn bản khác (cũng trong
+kho) thay thế thì tự mang trạng thái **hết hiệu lực**: bot phạt điểm khi tra
+cứu, kéo bản thay thế vào nguồn và dán cảnh báo đỏ — **không** ẩn bản cũ.
+
+**Sau lần deploy đầu tiên có tính năng này, chạy backfill MỘT LẦN** để kho cũ
+(file không đổi nội dung nên bộ quét bỏ qua) cũng có metadata:
+
+```bash
+cd hds-ai
+.venv/bin/python -m app.backfill_van_ban --dry-run   # xem trước, không ghi
+.venv/bin/python -m app.backfill_van_ban             # điền metadata + quan hệ
+# Tùy chọn, tốn thời gian embed (chạy đêm): cắt lại đoạn cho văn bản luật cũ
+# để từng vector cũng mang trích dẫn đầy đủ + đoạn "Phần mở đầu":
+.venv/bin/python -m app.backfill_van_ban --lam-lai-doan
+```
+
+Backfill **không** đụng trạng thái duyệt (tuyệt đối không "học lại cả kho" để
+điền metadata — PDF sẽ rơi hết về hàng chờ duyệt, bot mất cả kho luật đang
+phục vụ). Máy chỉ tự đánh dấu chiều xấu đi (hết hiệu lực / đã sửa đổi);
+"còn hiệu lực" là xác nhận tay của người duyệt trong nút **Chi tiết** ở
+Kho tri thức, và giá trị người đặt tay không bị máy ghi đè.
+
+### 4.6 Đẩy tài liệu từ máy cá nhân lên kho (qua SSH)
+
+Ngoài ổ mạng Samba (4.2), có thể đẩy thẳng qua SSH — tiện khi IT nạp một lô lớn.
+
+**Bỏ đúng chỗ mới học được.** Ba quy tắc, sai là file nằm im mà không ai báo:
+
+- File để ở **gốc** `data/raw` bị bỏ qua với lý do *"nằm ở thư mục gốc (không rõ
+  loại)"*. Phải nằm trong một thư mục cấp 1 — tên thư mục quyết định loại tài
+  liệu **và ai được xem**.
+- Trong `9. HỒ SƠ KHÁCH HÀNG` phải có thêm một cấp nữa: thư mục của từng khách,
+  đặt tên `1729. Tên công ty` hoặc `[MÃ] Tên khách`. Không tách được mã là bỏ qua.
+- `uploads/` là chỗ API cất file tải lên qua web — đừng thả tài liệu vào đó.
+
+**Cách 1 — MobaXterm** (dễ nhất): panel SFTP bên trái, gõ đường dẫn kho rồi kéo thả.
+
+**Cách 2 — `scp` từ Git Bash trên Windows:**
+
+```bash
+scp -i ~/.ssh/<khoá> -r "/c/Users/<bạn>/Desktop/tai-lieu-moi/." "pc@<IP máy chủ>:/home/pc/hds-ai-full/hds-ai/data/raw/1. VĂN BẢN PHÁP LUẬT/"
+```
+
+OpenSSH từ bản 9 trở đi chạy `scp` qua giao thức SFTP, **không** qua shell của
+máy chủ. Vì vậy đường dẫn có dấu cách và tiếng Việt chỉ bọc **một lớp** nháy kép;
+lồng thêm nháy đơn bên trong sẽ tạo ra thư mục mang cả dấu nháy trong tên.
+
+Máy Windows thường không có `rsync`, máy chủ thì có. Lô lớn cần đồng bộ nhiều
+lần thì chép sang máy chủ một lần rồi `rsync` tại chỗ.
+
+**Kiểm sau khi chép** — số file phải tăng:
+
+```bash
+ssh pc@<IP máy chủ> "find ~/hds-ai-full/hds-ai/data/raw -type f | wc -l"
+```
+
+Chép xong vẫn phải chạy bộ quét (4.3) thì bot mới học; tài liệu vào hàng chờ duyệt.
+
+### 4.7 Bộ quét nguồn văn bản trên mạng
+
+Từ 30/08/2026. Theo dõi vài trang nguồn đã chọn, tải file mới về đúng thư mục
+kho, rồi **để bộ quét kho (4.3) học như file nhân viên thả vào** — nghĩa là vẫn
+qua cổng duyệt, vẫn phân quyền theo tên thư mục. Không có LLM nào quyết định gì
+trong bộ quét này.
+
+Khai nguồn ở **Quản trị → Cài đặt AI → Nguồn văn bản trên mạng** (khoá
+`web_sources`). Mặc định **không nguồn nào bật**.
+
+```json
+{"nguon": [{"ten": "Công báo — văn bản mới",
+            "bat": true,
+            "kieu": "rss",
+            "url": "https://…/rss",
+            "mien_cho_phep": ["ten-mien.gov.vn"],
+            "thu_muc": "1. VĂN BẢN PHÁP LUẬT",
+            "duoi_file": [".pdf", ".doc", ".docx"],
+            "mau_lien_ket": "",
+            "toi_da_moi_lan": 20}]}
+```
+
+`kieu` nhận `rss`, `sitemap` hoặc `html`. `mien_cho_phep` **bắt buộc** — không có
+thì không tải gì, kể cả link nằm ngay trong trang đó. `mau_lien_ket` là regex lọc
+thêm khi trang trộn văn bản với tin tức, ví dụ `/van-ban/`.
+
+```bash
+bash deploy/theo-doi-nguon-web.sh --dry-run            # xem nhặt ra link nào, chưa tải gì
+bash deploy/theo-doi-nguon-web.sh                      # tải thật
+bash deploy/theo-doi-nguon-web.sh --nguon "Công báo"   # chỉ một nguồn
+sudo bash deploy/theo-doi-nguon-web.sh --install-timer # lịch 6 giờ/lần
+journalctl -u hds-ai-nguon-web.service -n 40 --no-pager
+```
+
+**Luôn chạy `--dry-run` trước khi bật một nguồn mới**: mỗi trang dựng link một
+kiểu, phải nhìn nó nhặt ra gì đã.
+
+Năm chốt an toàn — đây là cửa **duy nhất** trong hệ thống nhận dữ liệu từ
+Internet, gỡ chốt nào là mở đúng cửa đó:
+
+1. Chỉ tải từ miền trong `mien_cho_phep`, kiểm lại **cả sau khi** đi hết chuyển hướng.
+2. Nội dung phải đúng định dạng mà tên file tự xưng. Link `.pdf` trả về trang lỗi
+   HTML là ca hỏng thường gặp nhất — không chặn thì kho có "văn bản luật" mà toàn
+   văn là `404 Not Found`.
+3. Trần dung lượng kiểm cả lúc đang tải, không tin `Content-Length`.
+4. **File tải từ mạng luôn chờ người duyệt**, bất kể `AUTO_LEARN_AUTO_APPROVE`.
+   Mọi tài liệu khác trong kho đều do nhân viên tự tay đặt vào; đây là loại đầu
+   tiên không ai nhìn qua trước.
+5. Thư mục đích và tên file lấy từ URL đều bị ràng phải nằm trong kho.
+
+Không làm được: trang dựng danh sách bằng JavaScript (dùng RSS/sitemap của chính
+trang đó thay thế), và trang cần đăng nhập.
 
 ## 5. TÊN MIỀN VÀ HTTPS
 
@@ -532,6 +653,15 @@ cd hds-ai && .venv/bin/python -m tests.test_security
 | Trần đoạn mỗi tài liệu (`retrieval_max_chunks_per_doc`) | 8 | Chặn một file dài chiếm hết chỗ, ép nguồn đa dạng | Câu trả lời chỉ dựa vào một file → giảm còn 4 |
 | **Phong cách tư vấn** ×4 | | Prompt hệ thống cho 4 kênh: nội bộ / cổng khách / website / **tab Kiểm tra pháp lý** (`prompt_legal_review` — giọng rà soát hồ sơ, khác hẳn giọng tư vấn) | Đổi giọng văn, quy tắc trích dẫn |
 | **Bản đồ thư mục kho** | JSON | Tên thư mục trong kho → nhãn tài liệu | Thêm ngăn mới vào kho |
+| **Gọi model qua API** (`cloud_enabled`) | `false` | Bật là dữ liệu câu hỏi **rời khỏi máy chủ** và mỗi lượt hỏi tốn tiền. Cần `ANTHROPIC_API_KEY` (hoặc `COMPAT_*`) trong `.env` | Cần lập luận pháp lý sâu hơn qwen3:14b |
+| Phạm vi dữ liệu ra ngoài (`cloud_scope`) | `law_only` | `law_only` / `plus_attachments` / `all_but_finance`. Câu hỏi chạm dữ liệu ngoài phạm vi **không bị cắt xén** — nó tự chạy bằng model trên máy chủ. Công nợ chặn cứng ở mọi mức | Muốn tab Kiểm tra pháp lý dùng cloud → `plus_attachments` |
+| Model cloud (`cloud_model`) | `claude:claude-sonnet-5` | Tiền tố `claude:` (API Anthropic) hoặc `api:` (endpoint tương thích OpenAI — Qwen/DashScope, DeepSeek, OpenRouter) | Rẻ hơn → `claude:claude-haiku-4-5` |
+| Kênh được gọi API (`cloud_channels`) | `internal` | **Không mở cho `public`** — đó là cửa cho người lạ gõ câu hỏi không giới hạn, mở cloud ở đó là mở hoá đơn cho người lạ bơm | Hiếm khi đổi |
+| Độ sâu suy nghĩ (`cloud_effort`) | `medium` | Nút chỉnh chi phí chính sau khi đã chốt model | Rà soát hồ sơ → `high`; tra cứu thường → `low` |
+| Trần ký tự cloud (`cloud_context_char_budget`) | 60000 | **Bắt buộc phải có**: qua API không còn `num_ctx` làm trần vật lý, prompt phình bao nhiêu hoá đơn theo bấy nhiêu | 0 = theo cửa sổ thật của model (rất đắt) |
+| Trần token trả lời cloud (`cloud_max_tokens`) | 8000 | Khác `llm_num_predict` vì API tính tiền theo token sinh ra | Câu trả lời bị cụt → tăng |
+| Lui về local khi API hỏng (`cloud_fallback_local`) | `true` | Mất mạng hoặc hết quota mà không có đường lui là mất luôn trợ lý | Chỉ tắt khi đang tìm nguyên nhân lỗi |
+| **Nguồn văn bản trên mạng** (`web_sources`) | không nguồn nào bật | Bộ quét định kỳ tải văn bản mới về kho — xem mục 4.7 | Thêm nguồn theo dõi |
 
 > **Cảnh báo cửa sổ ngữ cảnh:** prompt dài hơn `llm_num_ctx` bị Ollama cắt **phần đầu** — đúng chỗ chứa dữ liệu công ty. Giao diện hiện cảnh báo vàng "Ngữ cảnh đã chạm trần" trong bảng thời gian khi việc này xảy ra. Gặp cảnh báo thì giảm *Trần ký tự tài liệu*, đừng tăng `num_ctx` vô tội vạ (tốn RAM).
 >

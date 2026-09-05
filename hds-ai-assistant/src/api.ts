@@ -29,6 +29,7 @@ import type {
   DraftDocument,
   DraftCreateInput,
   DraftTemplate,
+  DocumentDetail,
 } from './types';
 
 export const setUserId = ApiJs.setUserId as (id: string | number) => void;
@@ -188,7 +189,18 @@ export const getPendingReviews = ApiJs.getPendingReviews as () => Promise<Pendin
 
 export const approveReview = ApiJs.approveReview as (
   id: number,
-  data: { doc_type: string; access_level: string; client_id?: number | string | null }
+  data: {
+    doc_type: string;
+    access_level: string;
+    client_id?: number | string | null;
+    /* Danh tính văn bản pháp lý — không gửi = giữ giá trị máy bóc. */
+    so_hieu?: string | null;
+    loai_van_ban?: string | null;
+    trich_yeu?: string | null;
+    ngay_ban_hanh?: string | null;
+    ngay_hieu_luc?: string | null;
+    trang_thai_hieu_luc?: string | null;
+  }
 ) => Promise<{ ok?: boolean; document_id?: number }>;
 
 /** Nội dung trích xuất để người duyệt soát/sửa trước khi duyệt (PDF bắt buộc). */
@@ -209,7 +221,20 @@ export const getReviewContent = ApiJs.getReviewContent as (id: number) => Promis
 export const saveReviewContent = ApiJs.saveReviewContent as (
   id: number,
   content: string
-) => Promise<{ ok?: boolean; document_id?: number; chunks?: number }>;
+) => Promise<{
+  ok?: boolean;
+  document_id?: number;
+  chunks?: number;
+  /** Danh tính bóc LẠI từ bản vừa sửa — form duyệt phải nạp đè giá trị cũ. */
+  van_ban?: {
+    so_hieu: string | null;
+    loai_van_ban: string | null;
+    trich_yeu: string | null;
+    ngay_ban_hanh: string | null;
+    ngay_hieu_luc: string | null;
+    trang_thai_hieu_luc: string | null;
+  };
+}>;
 
 export const getPendingLearns = ApiJs.getPendingLearns as () => Promise<PendingLearnMessage[]>;
 
@@ -271,6 +296,32 @@ export const getDocuments = ApiJs.getDocuments as (params?: {
 export const getBrowseDocuments = ApiJs.getBrowseDocuments as (params?: {
   q?: string;
 }) => Promise<BrowseDocument[]>;
+
+export const getDocumentDetail = ApiJs.getDocumentDetail as (
+  docId: number
+) => Promise<DocumentDetail>;
+
+export const addDocumentRelation = ApiJs.addDocumentRelation as (
+  docId: number,
+  data: { loai: string; so_hieu_dich?: string | null; ten_dich?: string | null; ghi_chu?: string | null }
+) => Promise<{ ok: boolean; id: number }>;
+
+export const deleteDocumentRelation = ApiJs.deleteDocumentRelation as (
+  docId: number,
+  relId: number
+) => Promise<{ ok: boolean }>;
+
+export const updateDocumentVanBan = ApiJs.updateDocumentVanBan as (
+  docId: number,
+  meta: {
+    so_hieu?: string | null;
+    loai_van_ban?: string | null;
+    trich_yeu?: string | null;
+    ngay_ban_hanh?: string | null;
+    ngay_hieu_luc?: string | null;
+    trang_thai_hieu_luc?: string | null;
+  }
+) => Promise<{ ok: boolean; document_id: number }>;
 
 export const getClients = ApiJs.getClients as () => Promise<Client[]>;
 

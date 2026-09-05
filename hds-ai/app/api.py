@@ -28,7 +28,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -38,7 +38,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app import company_context, db, rag, auth, settings
+from app import company_context, db, rag, auth, settings, van_ban
 from app.admin_ui import ADMIN_HTML
 
 app = FastAPI(title="HDS AI", version="1.0")
@@ -983,7 +983,9 @@ def review_pending(user=Depends(current_user), limit: int = 50):
         with conn.cursor() as cur:
             cur.execute("""SELECT d.id,d.title,d.doc_type,d.access_level,d.client_id,d.confidence,
                            d.source_kind,c.name,d.extraction_status,d.extraction_error,
-                           (SELECT left(content,200) FROM chunks WHERE document_id=d.id ORDER BY chunk_index LIMIT 1)
+                           (SELECT left(content,200) FROM chunks WHERE document_id=d.id ORDER BY chunk_index LIMIT 1),
+                           d.so_hieu,d.loai_van_ban,d.trich_yeu,d.ngay_ban_hanh,
+                           d.ngay_hieu_luc,d.trang_thai_hieu_luc
                            FROM documents d LEFT JOIN clients c ON c.id=d.client_id
                            WHERE NOT d.label_verified ORDER BY d.confidence NULLS FIRST, d.id LIMIT %s""",
                         (limit,))
@@ -991,13 +993,26 @@ def review_pending(user=Depends(current_user), limit: int = 50):
     return [{"id": r[0], "title": r[1], "doc_type": r[2], "access_level": r[3], "client_id": r[4],
              "confidence": r[5], "source_kind": r[6], "client_name": r[7],
              "extraction_status": r[8], "extraction_warning": r[9],
-             "preview": r[10]} for r in rows]
+             "preview": r[10],
+             # Metadata máy bóc sẵn — form duyệt điền trước cho người soát/sửa.
+             "so_hieu": r[11], "loai_van_ban": r[12], "trich_yeu": r[13],
+             "ngay_ban_hanh": str(r[14]) if r[14] else None,
+             "ngay_hieu_luc": str(r[15]) if r[15] else None,
+             "trang_thai_hieu_luc": r[16]} for r in rows]
 
 
 class LabelIn(BaseModel):
     doc_type: str
     access_level: str
     client_id: int | None = None
+    # Danh tính văn bản pháp lý — người duyệt sửa được cái máy bóc. None nghĩa
+    # là "không đổi" (giữ giá trị máy bóc); chuỗi rỗng nghĩa là xoá.
+    so_hieu: str | None = None
+    loai_van_ban: str | None = None
+    trich_yeu: str | None = None
+    ngay_ban_hanh: str | None = None
+    ngay_hieu_luc: str | None = None
+    trang_thai_hieu_luc: str | None = None
 
 
 _CTX_HEADER_RE = re.compile(r"^\[Tài liệu: [^\]]*\]\n?")
@@ -1080,9 +1095,58 @@ def review_content_put(doc_id: int, body: ContentIn, user=Depends(current_user))
             cur.execute("""UPDATE documents SET summary=%s,extraction_status='edited',
                                   extraction_error=NULL,updated_at=now()
                             WHERE id=%s""", (summary, doc_id))
+            # Người duyệt vừa sửa chữ (thường là chữa số hiệu/ngày OCR sai) —
+            # bóc lại danh tính + quan hệ từ bản đã sửa cho khớp nội dung mới.
+            # CHỈ ghi đè bằng giá trị BÓC ĐƯỢC: bóc trượt trả None, ghi None đè
+            # lên số hiệu người duyệt đã gõ tay là xoá lặng lẽ công của họ —
+            # mà quan hệ văn bản khoá theo số hiệu nên mất số là đứt hết liên kết.
+            if doc_type in ("law", "an_le", "ban_an"):
+                vb_meta = van_ban.boc_metadata(text)
+                cot = [(c, vb_meta.get(c)) for c in
+                       ("so_hieu", "loai_van_ban", "trich_yeu",
+                        "ngay_ban_hanh", "ngay_hieu_luc")
+                       if vb_meta.get(c) is not None]
+                if cot:
+                    cur.execute(
+                        f"UPDATE documents SET {','.join(f'{c}=%s' for c, _ in cot)} "
+                        "WHERE id=%s", (*[v for _, v in cot], doc_id))
+                van_ban.xu_ly_sau_hoc(cur, doc_type, text, vb_meta)
+            # Trả metadata VỪA BÓC LẠI cho giao diện: form duyệt đang giữ giá
+            # trị bóc từ bản OCR CŨ, bấm Duyệt ngay sau khi lưu là gửi lại số
+            # hiệu sai vừa được người duyệt chữa (và chuỗi rỗng = lệnh XOÁ).
+            cur.execute("""SELECT so_hieu,loai_van_ban,trich_yeu,
+                                  ngay_ban_hanh,ngay_hieu_luc,trang_thai_hieu_luc
+                             FROM documents WHERE id=%s""", (doc_id,))
+            r = cur.fetchone() or (None,) * 6
         db.audit(conn, user["id"], "edit_document_content", "documents", doc_id,
                  {"chunks": len(pieces), "characters": len(text)})
-    return {"ok": True, "document_id": doc_id, "chunks": len(pieces)}
+    return {"ok": True, "document_id": doc_id, "chunks": len(pieces),
+            "van_ban": {"so_hieu": r[0], "loai_van_ban": r[1], "trich_yeu": r[2],
+                        "ngay_ban_hanh": str(r[3]) if r[3] else None,
+                        "ngay_hieu_luc": str(r[4]) if r[4] else None,
+                        "trang_thai_hieu_luc": r[5]}}
+
+
+_NGAY_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _ngay_hop_le(raw, ten):
+    """'YYYY-MM-DD' → giữ nguyên cho psycopg; rỗng → None; sai dạng/sai ngày → 422.
+
+    Kiểm cả GIÁ TRỊ chứ không chỉ khuôn: '2024-02-31' khớp regex nhưng Postgres
+    ném DatetimeFieldOverflow lúc UPDATE — người duyệt gõ nhầm ngày nhận 500
+    Internal Server Error thay vì một câu tiếng Việt nói rõ sai ở đâu.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if not _NGAY_ISO_RE.match(raw):
+        raise HTTPException(422, f"{ten} phải theo dạng YYYY-MM-DD")
+    try:
+        date.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(422, f"{ten} không phải ngày có thật (YYYY-MM-DD)")
+    return raw
 
 
 @app.post("/review/{doc_id}/approve")
@@ -1090,12 +1154,64 @@ def review_approve(doc_id: int, body: LabelIn, user=Depends(current_user)):
     require_reviewer(user)
     if body.access_level == "client" and body.client_id is None:
         raise HTTPException(400, "Tài liệu của khách bắt buộc chọn khách hàng")
+    if (body.trang_thai_hieu_luc
+            and body.trang_thai_hieu_luc not in van_ban.TRANG_THAI_HIEU_LUC):
+        raise HTTPException(422, "Trạng thái hiệu lực không hợp lệ")
+    # Cột nào người duyệt gửi thì mới đổi — form cũ không gửi các trường này
+    # vẫn hoạt động y nguyên.
+    meta_sets, meta_vals = [], []
+    for cot, gia_tri in (("so_hieu", body.so_hieu),
+                         ("loai_van_ban", body.loai_van_ban),
+                         ("trich_yeu", body.trich_yeu),
+                         ("trang_thai_hieu_luc", body.trang_thai_hieu_luc)):
+        if gia_tri is not None:
+            gia_tri = gia_tri.strip()
+            if cot == "so_hieu":
+                gia_tri = van_ban.chuan_hoa_so_hieu(gia_tri)
+            meta_sets.append(f"{cot}=%s")
+            meta_vals.append(gia_tri or None)
+    for cot, gia_tri in (("ngay_ban_hanh", body.ngay_ban_hanh),
+                         ("ngay_hieu_luc", body.ngay_hieu_luc)):
+        if gia_tri is not None:
+            meta_sets.append(f"{cot}=%s")
+            meta_vals.append(_ngay_hop_le(gia_tri, cot))
+    extra_sql = ("," + ",".join(meta_sets)) if meta_sets else ""
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("""UPDATE documents SET doc_type=%s,access_level=%s,client_id=%s,
-                           label_verified=true,approved=true,extraction_status='ready',updated_at=now()
+            cur.execute(f"""UPDATE documents SET doc_type=%s,access_level=%s,client_id=%s,
+                           label_verified=true,approved=true,extraction_status='ready',
+                           updated_at=now(){extra_sql}
                            WHERE id=%s""",
-                        (body.doc_type, body.access_level, body.client_id, doc_id))
+                        (body.doc_type, body.access_level, body.client_id,
+                         *meta_vals, doc_id))
+            # Văn bản luật vừa được duyệt có thể chính là bản thay thế một văn
+            # bản đang trong kho (hoặc ngược lại) — soi lại trạng thái đôi bên.
+            if body.doc_type in ("law", "an_le", "ban_an"):
+                cur.execute("SELECT so_hieu FROM documents WHERE id=%s", (doc_id,))
+                row = cur.fetchone()
+                if not (row and row[0]):
+                    # Tài liệu nạp với nhãn khác (mặc định 'other') rồi người
+                    # duyệt ĐỔI sang văn bản luật: lượt học đã bỏ qua bước bóc
+                    # danh tính vì lúc đó doc_type chưa phải luật. Không bóc ở
+                    # đây thì nó vĩnh viễn không có số hiệu — vô hình với toàn
+                    # bộ cơ chế hiệu lực, mà không ai biết vì sao.
+                    cur.execute("""SELECT string_agg(content, E'\n\n' ORDER BY chunk_index)
+                                     FROM (SELECT content, chunk_index FROM chunks
+                                            WHERE document_id=%s
+                                            ORDER BY chunk_index LIMIT 4) t""",
+                                (doc_id,))
+                    noi_dung = (cur.fetchone() or [None])[0] or ""
+                    vb_meta = van_ban.boc_metadata(noi_dung)
+                    cot = [(c, vb_meta.get(c)) for c in
+                           ("so_hieu", "loai_van_ban", "trich_yeu",
+                            "ngay_ban_hanh", "ngay_hieu_luc")
+                           if vb_meta.get(c) is not None]
+                    if cot:
+                        cur.execute(
+                            f"UPDATE documents SET {','.join(f'{c}=%s' for c, _ in cot)} "
+                            "WHERE id=%s", (*[v for _, v in cot], doc_id))
+                        van_ban.xu_ly_sau_hoc(cur, body.doc_type, noi_dung, vb_meta)
+                van_ban.cap_nhat_hieu_luc(cur)
         db.audit(conn, user["id"], "approve_label", "documents", doc_id, body.model_dump())
     return {"ok": True, "document_id": doc_id}
 
@@ -1349,7 +1465,8 @@ def documents_list(user=Depends(current_user), q: str = "", doc_type: str = "", 
     limit = max(1, min(limit, 500))
     sql = """SELECT d.id, d.title, d.doc_type, d.access_level, d.summary,
                     d.source_kind, d.created_at, c.name,
-                    (SELECT count(*) FROM chunks WHERE document_id=d.id) AS so_doan
+                    (SELECT count(*) FROM chunks WHERE document_id=d.id) AS so_doan,
+                    d.so_hieu, d.loai_van_ban, d.trich_yeu, d.trang_thai_hieu_luc
                FROM documents d LEFT JOIN clients c ON c.id=d.client_id
               WHERE d.label_verified = true AND d.approved = true
                 AND coalesce(d.active,true)
@@ -1372,7 +1489,9 @@ def documents_list(user=Depends(current_user), q: str = "", doc_type: str = "", 
             rows = cur.fetchall()
     return [{"id": r[0], "title": r[1], "doc_type": r[2], "access_level": r[3],
              "summary": r[4] or "(chưa có tóm tắt)", "source_kind": r[5],
-             "created_at": str(r[6])[:10], "client_name": r[7], "so_doan": r[8]} for r in rows]
+             "created_at": str(r[6])[:10], "client_name": r[7], "so_doan": r[8],
+             "so_hieu": r[9], "loai_van_ban": r[10], "trich_yeu": r[11],
+             "trang_thai_hieu_luc": r[12]} for r in rows]
 
 
 @app.get("/drive/sync-status")
@@ -1431,7 +1550,8 @@ def documents_browse(user=Depends(current_user), q: str = "", limit: int = 300):
     q = (q or "").strip()[:200]
     limit = max(1, min(limit, 500))
     sql = """SELECT d.id,d.title,d.doc_type,d.access_level,d.client_id,d.department_id,
-                    dep.name, c.name, d.summary
+                    dep.name, c.name, d.summary,
+                    d.so_hieu, d.loai_van_ban, d.trich_yeu, d.trang_thai_hieu_luc
                FROM documents d
                LEFT JOIN clients c ON c.id=d.client_id
                LEFT JOIN departments dep ON dep.id=d.department_id
@@ -1465,8 +1585,245 @@ def documents_browse(user=Depends(current_user), q: str = "", limit: int = 300):
             "department": r[6],
             "can_open": can_open,
             "summary": (r[8] or "") if can_open else None,   # ẩn tóm tắt nếu không mở được
+            # Danh tính văn bản luật là dữ liệu public (kệ luật public) nhưng
+            # vẫn theo cùng luật che: không mở được thì không thấy gì thêm.
+            "so_hieu": r[9] if can_open else None,
+            "loai_van_ban": r[10] if can_open else None,
+            "trich_yeu": r[11] if can_open else None,
+            "trang_thai_hieu_luc": r[12] if can_open else None,
         })
     return out
+
+
+# ---------- 7a-bis. CHI TIẾT MỘT TÀI LIỆU + QUAN HỆ VĂN BẢN ----------
+def _doc_row_or_404(cur, doc_id: int):
+    cur.execute("""SELECT d.id,d.title,d.doc_type,d.access_level,d.client_id,
+                          d.department_id,dep.name,c.name,d.summary,d.source_kind,
+                          d.created_at,d.so_hieu,d.loai_van_ban,d.trich_yeu,
+                          d.ngay_ban_hanh,d.ngay_hieu_luc,d.trang_thai_hieu_luc,
+                          d.extraction_status,
+                          (SELECT count(*) FROM chunks WHERE document_id=d.id)
+                     FROM documents d
+                     LEFT JOIN clients c ON c.id=d.client_id
+                     LEFT JOIN departments dep ON dep.id=d.department_id
+                    WHERE d.id=%s AND coalesce(d.active,true)""", (doc_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Không thấy tài liệu")
+    return row
+
+
+def _quan_he_hien_thi(rel, user, rules, chieu):
+    """Một dòng quan hệ đã lọc quyền hiển thị cho tài liệu đối ứng trong kho.
+
+    Văn bản đích NGOÀI kho chỉ có số hiệu + tên (dữ liệu công khai của văn bản
+    luật). Văn bản TRONG kho thì tiêu đề đi qua đúng cửa can_open_doc/mask_title
+    như mọi danh sách khác — không mở thêm cửa phân quyền thứ ba.
+
+    CHỐT CHE TÊN: `ten_nguon`/`ten_dich` là chuỗi DENORMALIZE trong bảng quan
+    hệ (van_ban.ten_day_du của chính tài liệu đối ứng). Che mỗi `title` mà để
+    hai trường đó nguyên văn là mở đúng cửa vừa khoá: bản án ở access_level
+    'client' mang tên đương sự trong trích yếu, người phòng khác đọc được qua
+    quan hệ của một văn bản luật họ mở được. Không mở được ⇒ giấu cả tên, số
+    hiệu và document_id của phía bị che.
+    """
+    doc = rel.get("doc")
+    hien_thi = {
+        "id": rel["id"], "loai": rel["loai"],
+        "loai_vn": van_ban.LOAI_QUAN_HE_VN.get(rel["loai"], rel["loai"]),
+        "nguon": rel["nguon"], "ghi_chu": rel["ghi_chu"],
+        "so_hieu_nguon": rel["so_hieu_nguon"], "ten_nguon": rel["ten_nguon"],
+        "so_hieu_dich": rel["so_hieu_dich"], "ten_dich": rel["ten_dich"],
+        "document_id": None, "title": None, "can_open": False,
+        "trang_thai_hieu_luc": None,
+    }
+    if doc:
+        d = {"access_level": doc["access_level"],
+             "department_id": doc["department_id"], "doc_type": doc["doc_type"],
+             "client_id": doc["client_id"], "title": doc["title"]}
+        can_open = rag.can_open_doc(user["role"], user["dept_ids"],
+                                    user["is_banqt"], d,
+                                    can_finance=user["can_finance"],
+                                    rules=rules, dept_codes=user["dept_codes"])
+        hien_thi.update({
+            "document_id": doc["document_id"] if can_open else None,
+            "title": rag.mask_title(d, can_open),
+            "can_open": can_open,
+            "trang_thai_hieu_luc": doc["trang_thai_hieu_luc"] if can_open else None,
+        })
+        if not can_open:
+            # Phía bị che là đầu KIA của quan hệ: chiều 'xuoi' thì đó là đích,
+            # chiều 'nguoc' thì đó là nguồn.
+            if chieu == "xuoi":
+                hien_thi["ten_dich"] = None
+                hien_thi["so_hieu_dich"] = None
+            else:
+                hien_thi["ten_nguon"] = None
+                hien_thi["so_hieu_nguon"] = None
+    return hien_thi
+
+
+@app.get("/documents/{doc_id}/detail")
+def document_detail(doc_id: int, user=Depends(current_user)):
+    """Thẻ căn cước một tài liệu: metadata đầy đủ + VĂN BẢN LIÊN QUAN hai chiều.
+
+    'Xuôi' = tài liệu này nói về ai (thay thế/sửa đổi/căn cứ văn bản nào);
+    'ngược' = ai nói về nó (bị ai thay thế/sửa đổi/hướng dẫn). Mỗi dòng mang
+    tiêu đề đầy đủ và mở được bản gốc nếu người xem có quyền.
+    """
+    require(user, INTERNAL_ROLES)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            r = _doc_row_or_404(cur, doc_id)
+            quan_he = (van_ban.doc_quan_he(cur, r[11]) if r[11]
+                       else {"xuoi": [], "nguoc": []})
+    doc = {"access_level": r[3], "department_id": r[5], "doc_type": r[2],
+           "client_id": r[4], "title": r[1], "department_name": r[6]}
+    rules = rag.load_access_rules()
+    can_open = rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"],
+                                doc, can_finance=user["can_finance"],
+                                rules=rules, dept_codes=user["dept_codes"])
+    if not can_open:
+        raise HTTPException(403, "Bạn không có quyền xem chi tiết tài liệu này")
+    ten = van_ban.ten_day_du({"loai_van_ban": r[12], "trich_yeu": r[13]},
+                             so_hieu=r[11])
+    return {
+        "id": r[0], "title": r[1], "doc_type": r[2], "access_level": r[3],
+        "client_name": r[7], "department": r[6],
+        "summary": r[8], "source_kind": r[9], "created_at": str(r[10])[:10],
+        "so_hieu": r[11], "loai_van_ban": r[12], "trich_yeu": r[13],
+        "ten_day_du": ten or r[1],
+        "ngay_ban_hanh": str(r[14]) if r[14] else None,
+        "ngay_hieu_luc": str(r[15]) if r[15] else None,
+        "trang_thai_hieu_luc": r[16], "extraction_status": r[17],
+        "so_doan": r[18], "can_open": True,
+        "quan_he_xuoi": [_quan_he_hien_thi(q, user, rules, "xuoi")
+                         for q in quan_he["xuoi"]],
+        "quan_he_nguoc": [_quan_he_hien_thi(q, user, rules, "nguoc")
+                          for q in quan_he["nguoc"]],
+    }
+
+
+class RelationIn(BaseModel):
+    loai: str
+    so_hieu_dich: str | None = None
+    ten_dich: str | None = None
+    ghi_chu: str | None = None
+
+
+@app.post("/documents/{doc_id}/relations")
+def document_relation_add(doc_id: int, body: RelationIn, user=Depends(current_user)):
+    """Người duyệt nối tay một quan hệ mà máy bóc trượt. Khoá theo SỐ HIỆU —
+    tài liệu chưa có số hiệu thì điền số hiệu trước (form duyệt / sửa metadata)."""
+    require_reviewer(user)
+    if body.loai not in van_ban.LOAI_QUAN_HE:
+        raise HTTPException(422, "Loại quan hệ không hợp lệ")
+    so_dich = van_ban.chuan_hoa_so_hieu(body.so_hieu_dich or "") or None
+    ten_dich = (body.ten_dich or "").strip() or None
+    if not (so_dich or ten_dich):
+        raise HTTPException(422, "Cần số hiệu hoặc tên văn bản đích")
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            r = _doc_row_or_404(cur, doc_id)
+            so_nguon = r[11]
+            if not so_nguon:
+                raise HTTPException(400, "Tài liệu này chưa có số hiệu — điền "
+                                    "số hiệu ở phần duyệt nhãn/sửa metadata trước")
+            ten_nguon = van_ban.ten_day_du(
+                {"loai_van_ban": r[12], "trich_yeu": r[13]}, so_hieu=so_nguon)
+            cur.execute(
+                """INSERT INTO van_ban_quan_he
+                     (so_hieu_nguon, ten_nguon, loai, so_hieu_dich, ten_dich,
+                      nguon, ghi_chu, created_by)
+                   SELECT %s,%s,%s,%s,%s,'manual',%s,%s
+                    WHERE NOT EXISTS (
+                      SELECT 1 FROM van_ban_quan_he
+                       WHERE lower(so_hieu_nguon)=lower(%s) AND loai=%s
+                         AND lower(coalesce(so_hieu_dich,''))=lower(coalesce(%s,''))
+                         AND lower(coalesce(ten_dich,''))=lower(coalesce(%s,'')))
+                   RETURNING id""",
+                (so_nguon, ten_nguon, body.loai, so_dich, ten_dich,
+                 (body.ghi_chu or "").strip() or None, user["id"],
+                 so_nguon, body.loai, so_dich, ten_dich))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(409, "Quan hệ này đã tồn tại")
+            if so_dich:
+                van_ban.cap_nhat_hieu_luc(cur, [so_dich, so_nguon])
+        db.audit(conn, user["id"], "add_doc_relation", "van_ban_quan_he", row[0],
+                 {"document_id": doc_id, "loai": body.loai,
+                  "so_hieu_dich": so_dich, "ten_dich": ten_dich})
+    return {"ok": True, "id": row[0]}
+
+
+@app.delete("/documents/{doc_id}/relations/{rel_id}")
+def document_relation_delete(doc_id: int, rel_id: int, user=Depends(current_user)):
+    """Gỡ một dòng quan hệ sai. Trạng thái hiệu lực KHÔNG tự đảo lại (máy chỉ
+    đánh dấu chiều xấu đi) — nếu văn bản bị đánh dấu oan, sửa trạng thái ở
+    PUT /documents/{id}/van-ban sau khi gỡ."""
+    require_reviewer(user)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            r = _doc_row_or_404(cur, doc_id)
+            if not r[11]:
+                raise HTTPException(404, "Tài liệu không có số hiệu — không có quan hệ nào")
+            cur.execute("""DELETE FROM van_ban_quan_he
+                            WHERE id=%s AND (lower(so_hieu_nguon)=lower(%s)
+                                             OR lower(coalesce(so_hieu_dich,''))=lower(%s))""",
+                        (rel_id, r[11], r[11]))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Không thấy quan hệ này của tài liệu")
+        db.audit(conn, user["id"], "delete_doc_relation", "van_ban_quan_he",
+                 rel_id, {"document_id": doc_id})
+    return {"ok": True}
+
+
+class VanBanMetaIn(BaseModel):
+    so_hieu: str | None = None
+    loai_van_ban: str | None = None
+    trich_yeu: str | None = None
+    ngay_ban_hanh: str | None = None
+    ngay_hieu_luc: str | None = None
+    trang_thai_hieu_luc: str | None = None
+
+
+@app.put("/documents/{doc_id}/van-ban")
+def document_meta_put(doc_id: int, body: VanBanMetaIn, user=Depends(current_user)):
+    """Sửa danh tính văn bản của tài liệu ĐÃ duyệt (đường duyệt nhãn chỉ đi qua
+    một lần). None = không đổi; chuỗi rỗng = xoá giá trị."""
+    require_reviewer(user)
+    if (body.trang_thai_hieu_luc
+            and body.trang_thai_hieu_luc not in van_ban.TRANG_THAI_HIEU_LUC):
+        raise HTTPException(422, "Trạng thái hiệu lực không hợp lệ")
+    sets, vals = [], []
+    for cot, gia_tri in (("so_hieu", body.so_hieu),
+                         ("loai_van_ban", body.loai_van_ban),
+                         ("trich_yeu", body.trich_yeu),
+                         ("trang_thai_hieu_luc", body.trang_thai_hieu_luc)):
+        if gia_tri is not None:
+            gia_tri = gia_tri.strip()
+            if cot == "so_hieu":
+                gia_tri = van_ban.chuan_hoa_so_hieu(gia_tri)
+            sets.append(f"{cot}=%s")
+            vals.append(gia_tri or None)
+    for cot, gia_tri in (("ngay_ban_hanh", body.ngay_ban_hanh),
+                         ("ngay_hieu_luc", body.ngay_hieu_luc)):
+        if gia_tri is not None:
+            sets.append(f"{cot}=%s")
+            vals.append(_ngay_hop_le(gia_tri, cot))
+    if not sets:
+        raise HTTPException(422, "Không có trường nào để sửa")
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            _doc_row_or_404(cur, doc_id)
+            cur.execute(f"UPDATE documents SET {','.join(sets)},updated_at=now() "
+                        "WHERE id=%s", (*vals, doc_id))
+            # Số hiệu đổi có thể nối tài liệu vào các quan hệ đang treo.
+            if body.so_hieu is not None:
+                van_ban.cap_nhat_hieu_luc(cur)
+        db.audit(conn, user["id"], "edit_doc_van_ban_meta", "documents", doc_id,
+                 body.model_dump(exclude_none=True))
+    return {"ok": True, "document_id": doc_id}
 
 
 # ---------- 7b. HỒ SƠ KHÁCH 360° ----------

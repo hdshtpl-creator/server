@@ -156,6 +156,16 @@ export interface Source {
   source_version?: number | string | null;
   semantic_score?: number;
   lexical_score?: number;
+  /* Danh tính + hiệu lực văn bản pháp lý (31/08/2026). Optional hết:
+     tin nhắn cũ trong lịch sử là snapshot JSONB không có các trường này. */
+  so_hieu?: string | null;
+  loai_van_ban?: string | null;
+  trich_yeu?: string | null;
+  ngay_ban_hanh?: string | null;
+  ngay_hieu_luc?: string | null;
+  trang_thai_hieu_luc?: string | null;
+  /** Tên văn bản đã thay thế/sửa đổi văn bản này (nếu có trong kho). */
+  thay_the_boi?: string | null;
 }
 
 export type GroundingStatus = 'grounded' | 'partial' | 'uncited' | 'insufficient' | string;
@@ -430,6 +440,13 @@ export interface PendingReviewDoc {
   confidence: number | null;
   source_kind: string;
   preview: string | null;
+  /* Metadata máy bóc sẵn — form duyệt điền trước cho người soát/sửa. */
+  so_hieu?: string | null;
+  loai_van_ban?: string | null;
+  trich_yeu?: string | null;
+  ngay_ban_hanh?: string | null;
+  ngay_hieu_luc?: string | null;
+  trang_thai_hieu_luc?: string | null;
 }
 
 export interface PendingLearnMessage {
@@ -464,6 +481,10 @@ export interface LearnedDocument {
   created_at: string;
   client_name?: string | null;
   so_doan: number;
+  so_hieu?: string | null;
+  loai_van_ban?: string | null;
+  trich_yeu?: string | null;
+  trang_thai_hieu_luc?: string | null;
 }
 
 export interface BrowseDocument {
@@ -476,6 +497,55 @@ export interface BrowseDocument {
   /** Bị ẩn (null) khi người dùng không có quyền mở tài liệu. */
   summary?: string | null;
   created_at?: string;
+  so_hieu?: string | null;
+  loai_van_ban?: string | null;
+  trich_yeu?: string | null;
+  trang_thai_hieu_luc?: string | null;
+}
+
+/** Một dòng quan hệ văn bản (GET /documents/{id}/detail). */
+export interface DocRelation {
+  id: number;
+  loai: string;
+  loai_vn: string;
+  nguon: 'auto' | 'manual';
+  ghi_chu?: string | null;
+  so_hieu_nguon: string;
+  ten_nguon?: string | null;
+  so_hieu_dich?: string | null;
+  ten_dich?: string | null;
+  /** null = văn bản đối ứng chưa có trong kho. */
+  document_id?: number | null;
+  title?: string | null;
+  can_open: boolean;
+  trang_thai_hieu_luc?: string | null;
+}
+
+/** Thẻ căn cước tài liệu + văn bản liên quan hai chiều. */
+export interface DocumentDetail {
+  id: number;
+  title: string;
+  doc_type: string;
+  access_level: string;
+  client_name?: string | null;
+  department?: string | null;
+  summary?: string | null;
+  source_kind: string;
+  created_at: string;
+  so_hieu?: string | null;
+  loai_van_ban?: string | null;
+  trich_yeu?: string | null;
+  ten_day_du: string;
+  ngay_ban_hanh?: string | null;
+  ngay_hieu_luc?: string | null;
+  trang_thai_hieu_luc?: string | null;
+  extraction_status?: string | null;
+  so_doan: number;
+  can_open: boolean;
+  /** Văn bản này nói về ai (thay thế/sửa đổi/căn cứ văn bản nào). */
+  quan_he_xuoi: DocRelation[];
+  /** Ai nói về nó (bị ai thay thế/sửa đổi/hướng dẫn). */
+  quan_he_nguoc: DocRelation[];
 }
 
 export interface Client {

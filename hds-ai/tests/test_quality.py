@@ -1182,5 +1182,100 @@ class ContextWindowTests(unittest.TestCase):
         self.assertEqual(rag._best_window(content, "bất kỳ", 1000), content)
 
 
+class HieuLucVanBanTests(unittest.TestCase):
+    """Hiệu lực văn bản luật 31/08/2026: nguồn là luật đã chết thì phải nói
+    thẳng trong prompt, trong panel nguồn, và trong footer câu trả lời — vì
+    nội dung trích vẫn đúng nguyên văn nên mọi chốt khác đều xanh."""
+
+    def _chunk(self, **kw):
+        base = {"chunk_id": 1, "content": "[Bộ luật Lao động số 10/2012/QH13 — "
+                "Điều 35]\nNgười lao động có quyền đơn phương chấm dứt hợp đồng.",
+                "score": 0.7, "title": "Bo luat Lao dong 2012",
+                "doc_type": "law", "extraction_status": "ready",
+                "so_hieu": "10/2012/QH13",
+                "trang_thai_hieu_luc": "het_hieu_luc",
+                "thay_the_boi": "Bộ luật Lao động số 45/2019/QH14"}
+        base.update(kw)
+        return base
+
+    def test_prompt_gan_luu_y_hieu_luc_canh_nguon(self):
+        prompt = rag.build_prompt("đơn phương chấm dứt hợp đồng",
+                                  [self._chunk()], chunk_chars=0, budget=0)
+        self.assertIn("LƯU Ý HIỆU LỰC:", prompt)
+        self.assertIn("ĐÃ HẾT HIỆU LỰC", prompt)
+        self.assertIn("45/2019/QH14", prompt)      # chỉ đích danh bản thay thế
+
+    def test_van_ban_bi_sua_doi_canh_bao_khac(self):
+        prompt = rag.build_prompt(
+            "câu hỏi", [self._chunk(trang_thai_hieu_luc="het_hieu_luc_mot_phan")],
+            chunk_chars=0, budget=0)
+        self.assertIn("ĐÃ BỊ SỬA ĐỔI", prompt)
+
+    def test_van_ban_con_hieu_luc_khong_co_luu_y(self):
+        prompt = rag.build_prompt(
+            "câu hỏi", [self._chunk(trang_thai_hieu_luc="chua_ro",
+                                    thay_the_boi=None)],
+            chunk_chars=0, budget=0)
+        self.assertNotIn("LƯU Ý HIỆU LỰC:", prompt)
+
+    def test_footer_canh_bao_khi_trich_nguon_chet(self):
+        text = "Theo Điều 35, người lao động có quyền này. [Nguồn 1]"
+        ra = rag._canh_bao_hieu_luc(text, [self._chunk()])
+        self.assertIn("mất hiệu lực", ra)
+        self.assertIn("10/2012/QH13", ra)
+        self.assertTrue(ra.startswith(text))       # không xoá câu, chỉ nối đuôi
+
+    def test_footer_im_lang_khi_nguon_chet_khong_duoc_trich(self):
+        """Nguồn nằm trong panel mà không được dùng thì không đáng cảnh báo."""
+        ra = rag._canh_bao_hieu_luc("Câu trả lời không trích gì.",
+                                    [self._chunk()])
+        self.assertNotIn("mất hiệu lực", ra)
+
+    def test_validate_grounding_giu_footer_hieu_luc(self):
+        """Luật chặn-không-căn-cứ không được lược mất dòng cảnh báo hệ thống."""
+        text = "Người lao động có quyền đơn phương chấm dứt hợp đồng. [Nguồn 1]"
+        ra, status = rag.validate_grounding(text, [self._chunk()],
+                                            answer_mode="grounded", strict=True)
+        self.assertEqual("verified", status)
+        self.assertIn("mất hiệu lực", ra)
+
+    def test_khong_canh_bao_bia_so_hieu_cho_van_ban_thay_the(self):
+        """Prompt BẢO model nêu đích danh văn bản thay thế; số hiệu đó lấy từ
+        kho (thay_the_boi) chứ không nằm trong nội dung đoạn. Trước bản vá,
+        chính bộ kiểm gắn cờ 'bịa số hiệu' lên nó — cảnh báo giả làm người đọc
+        mất tin vào cảnh báo thật."""
+        text = ("Điều 35 quy định như vậy [Nguồn 1]. Văn bản này đã bị thay thế "
+                "bởi Bộ luật Lao động số 45/2019/QH14. [Nguồn 1]")
+        ra = rag._canh_bao_so_hieu(text, [self._chunk()])
+        self.assertNotIn("Kiểm tra lại số hiệu", ra)
+
+    def test_van_canh_bao_so_hieu_that_su_bia(self):
+        text = "Theo Nghị định số 999/2099/NĐ-CP thì… [Nguồn 1]"
+        ra = rag._canh_bao_so_hieu(text, [self._chunk()])
+        self.assertIn("999/2099/NĐ-CP", ra)
+
+    def test_preamble_khong_nhan_doi_qua_vong_sua_noi_dung(self):
+        """PUT /review/{id}/content gửi lên phần chữ ghép từ các đoạn cũ —
+        đã mang sẵn dòng '[… — Phần mở đầu]'. Không lọc thì mỗi vòng sửa lại
+        chồng thêm một dòng nhãn vào đúng đoạn thẻ căn cước."""
+        from app.ingest import chunk_law_structured
+        law = ("BỘ LUẬT\nLAO ĐỘNG\nSố: 45/2019/QH14\n"
+               "Hà Nội, ngày 20 tháng 11 năm 2019\nCăn cứ Hiến pháp;\n\n"
+               "Điều 1. Phạm vi\nNội dung điều một dài đủ hai mươi ký tự.")
+        v1 = chunk_law_structured(law)
+        v2 = chunk_law_structured("\n\n".join(p.content for p in v1))
+        self.assertEqual(1, v2[0].content.count("Phần mở đầu]"))
+
+    def test_format_sources_mang_du_danh_tinh(self):
+        from datetime import date
+        src = rag.format_sources([self._chunk(
+            loai_van_ban="Bộ luật", trich_yeu="Lao động",
+            ngay_ban_hanh=date(2012, 6, 18), ngay_hieu_luc=date(2013, 5, 1))])[0]
+        self.assertEqual("10/2012/QH13", src["so_hieu"])
+        self.assertEqual("het_hieu_luc", src["trang_thai_hieu_luc"])
+        self.assertEqual("2012-06-18", src["ngay_ban_hanh"])   # ISO cho JSONB/SSE
+        self.assertEqual("Bộ luật Lao động số 45/2019/QH14", src["thay_the_boi"])
+
+
 if __name__ == "__main__":
     unittest.main()

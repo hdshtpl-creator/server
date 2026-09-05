@@ -480,17 +480,21 @@ export async function saveReviewContent(id, content) {
   });
 }
 
-export async function approveReview(id, { doc_type, access_level, client_id }) {
+export async function approveReview(id, { doc_type, access_level, client_id, ...vanBanMeta }) {
   const clientId = toIntOrNull(client_id);
   if (access_level === 'client' && clientId === null) {
     throw new Error('Tài liệu mức "Hồ sơ khách hàng" bắt buộc phải chọn khách hàng.');
   }
+  // vanBanMeta: so_hieu / loai_van_ban / trich_yeu / ngay_ban_hanh /
+  // ngay_hieu_luc / trang_thai_hieu_luc — chỉ gửi trường có mặt (backend hiểu
+  // "không gửi" là "không đổi").
   return request(`/review/${id}/approve`, {
     method: 'POST',
     body: JSON.stringify({
       doc_type,
       access_level,
       client_id: clientId,
+      ...vanBanMeta,
     }),
   });
 }
@@ -551,6 +555,32 @@ export async function getBrowseDocuments({ q = '' } = {}) {
   if (q) params.append('q', q);
   const queryStr = params.toString();
   return request(`/documents/browse${queryStr ? `?${queryStr}` : ''}`, { method: 'GET' });
+}
+
+// GET /documents/{id}/detail — thẻ căn cước tài liệu + văn bản liên quan hai chiều
+export async function getDocumentDetail(docId) {
+  return request(`/documents/${docId}/detail`, { method: 'GET' });
+}
+
+// POST /documents/{id}/relations — người duyệt nối tay một quan hệ văn bản
+export async function addDocumentRelation(docId, { loai, so_hieu_dich, ten_dich, ghi_chu }) {
+  return request(`/documents/${docId}/relations`, {
+    method: 'POST',
+    body: JSON.stringify({ loai, so_hieu_dich, ten_dich, ghi_chu }),
+  });
+}
+
+// DELETE /documents/{id}/relations/{relId} — gỡ một dòng quan hệ sai
+export async function deleteDocumentRelation(docId, relId) {
+  return request(`/documents/${docId}/relations/${relId}`, { method: 'DELETE' });
+}
+
+// PUT /documents/{id}/van-ban — sửa danh tính văn bản của tài liệu đã duyệt
+export async function updateDocumentVanBan(docId, meta) {
+  return request(`/documents/${docId}/van-ban`, {
+    method: 'PUT',
+    body: JSON.stringify(meta),
+  });
 }
 
 // ==================== 7. KHÁCH HÀNG 360° ====================
@@ -1666,7 +1696,10 @@ async function handleMockRequest(endpoint, options, headers) {
   const needsReviewer =
     endpoint.startsWith('/review') ||
     endpoint.startsWith('/learn') ||
-    (endpoint.startsWith('/documents') && !endpoint.startsWith('/documents/browse'));
+    (endpoint.startsWith('/documents') &&
+      !endpoint.startsWith('/documents/browse') &&
+      // Chi tiết tài liệu mở cho mọi nhân viên nội bộ (backend: INTERNAL_ROLES)
+      !/^\/documents\/\d+\/detail$/.test(endpoint));
   if (needsReviewer && !isReviewer) {
     throw new Error('Chỉ admin hoặc người được cấp quyền duyệt mới thực hiện được (403)');
   }
@@ -1901,6 +1934,26 @@ Với câu hỏi "${question}":
           created_at: d.created_at,
         };
       });
+  }
+
+  // Chi tiết tài liệu + quan hệ văn bản — demo trả bộ khung tối thiểu.
+  const detailMatch = endpoint.match(/^\/documents\/(\d+)\/detail$/);
+  if (detailMatch) {
+    const doc = mockState.documents.find((d) => d.id === Number(detailMatch[1]));
+    if (!doc) throw new Error('Không thấy tài liệu (404)');
+    return {
+      ...doc,
+      ten_day_du: doc.title,
+      so_hieu: doc.so_hieu || null,
+      trang_thai_hieu_luc: doc.trang_thai_hieu_luc || 'chua_ro',
+      so_doan: 3,
+      can_open: true,
+      quan_he_xuoi: [],
+      quan_he_nguoc: [],
+    };
+  }
+  if (/^\/documents\/\d+\/relations/.test(endpoint) || /^\/documents\/\d+\/van-ban$/.test(endpoint)) {
+    return { ok: true, id: 1 };
   }
 
   if (endpoint.startsWith('/documents')) {

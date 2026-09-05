@@ -15,7 +15,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 from xml.etree import ElementTree
 
-from app import db
+from app import db, van_ban
 from app.models import embed, summarize
 
 # Kích thước ĐOẠN MỤC TIÊU, không phải kích thước cố định. `chunk_generic` cắt
@@ -1349,7 +1349,15 @@ def document_citation(text: str) -> str:
 
     Chỉ soi phần đầu: số hiệu luôn nằm ở phần mở đầu, còn thân văn bản thì đầy
     số hiệu của văn bản KHÁC (điều khoản dẫn chiếu) — quét cả bài là lấy nhầm.
+
+    31/08/2026: chuẩn hành nghề đòi TÊN văn bản chứ không chỉ loại + số
+    ("Bộ luật Lao động số 45/2019/QH14", không phải "Bộ luật số 45/2019/QH14")
+    — van_ban.trich_dan bóc thêm trích yếu khi tìm được; logic cũ giữ làm
+    lưới đỡ cho văn bản trình bày lạ.
     """
+    day_du = van_ban.trich_dan(text)
+    if day_du:
+        return day_du
     head = text[:4000]
     # 45/2019/QH14, 01/2021/TT-BXD, 15/2020/NĐ-CP…
     number = re.search(
@@ -1430,6 +1438,24 @@ def chunk_law_structured(text: str) -> list[ChunkPiece]:
                 for piece in chunk_generic(text)]
 
     pieces: list[ChunkPiece] = []
+    # PHẦN MỞ ĐẦU (trước Điều 1) — trước 31/08/2026 bị vứt hẳn khỏi kho: số
+    # hiệu, ngày ký, trích yếu, các dòng "Căn cứ…" không nằm trong chunk nào,
+    # nên hỏi "Nghị định 15/2020 ban hành ngày nào" là bot mù. Giữ nó thành
+    # đoạn đầu tiên: thẻ căn cước của văn bản, tra được bằng cả vector lẫn FTS.
+    preamble = text[:marks[0][0]].strip()
+    # Bỏ nhãn do CHÍNH bộ cắt này gắn ở lượt trước. Người duyệt sửa nội dung
+    # (PUT /review/{id}/content) gửi lên phần chữ đã ghép từ các đoạn cũ, tức
+    # có sẵn dòng "[… — Phần mở đầu]"; không lọc thì mỗi vòng sửa lại chồng
+    # thêm một dòng nhãn vào đúng đoạn thẻ căn cước của văn bản.
+    preamble = re.sub(r"^\s*\[[^\]\n]{0,200}\]\s*$", "", preamble,
+                      flags=re.MULTILINE).strip()
+    if len(preamble) >= 40:
+        header = f"[{citation} — Phần mở đầu]" if citation else "[Phần mở đầu]"
+        pieces.append(ChunkPiece(
+            content=f"{header}\n{preamble[:2500]}",
+            section_title=(f"{citation} — Phần mở đầu" if citation
+                           else "Phần mở đầu"),
+            source_locator="phan_mo_dau"))
     for index, (position, label) in enumerate(marks):
         end = marks[index + 1][0] if index + 1 < len(marks) else len(text)
         body = text[position:end].strip()
@@ -1813,16 +1839,27 @@ def ingest_file(path: Path, doc_type="other", access_level="internal", client_id
     # biến một OCR/bảng bị cắt thành nguồn sự thật ngay lập tức.
     safe_approved = bool(approved and extraction_status == "ready")
     safe_verified = bool(label_verified and extraction_status == "ready")
+    # Danh tính văn bản pháp lý: số hiệu/loại/trích yếu/ngày. Bóc trượt trả
+    # None hết — KHÔNG thêm warning (warning làm safe_approved chặn duyệt).
+    # Bản án/án lệ cũng có số hiệu theo cùng khuôn; quan hệ + hiệu lực thì
+    # chỉ áp cho 'law' (van_ban.xu_ly_sau_hoc tự gác).
+    vb_meta = (van_ban.boc_metadata(text)
+               if doc_type in ("law", "an_le", "ban_an") else {})
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""INSERT INTO documents
                 (title,source_path,checksum,doc_type,access_level,client_id,department_id,matter_id,
-                 approved,label_verified,source_kind,summary,extraction_status,extraction_error)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                 approved,label_verified,source_kind,summary,extraction_status,extraction_error,
+                 so_hieu,loai_van_ban,trich_yeu,ngay_ban_hanh,ngay_hieu_luc)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                 (path.stem, str(path), checksum, doc_type, access_level, client_id, department_id, matter_id,
                  safe_approved, safe_verified, source_kind, summary,
-                 extraction_status, extraction_note))
+                 extraction_status, extraction_note,
+                 vb_meta.get("so_hieu"), vb_meta.get("loai_van_ban"),
+                 vb_meta.get("trich_yeu"), vb_meta.get("ngay_ban_hanh"),
+                 vb_meta.get("ngay_hieu_luc")))
             doc_id = cur.fetchone()[0]
+            n_qh, n_ha = van_ban.xu_ly_sau_hoc(cur, doc_type, text, vb_meta)
             for idx, (piece, vec) in enumerate(zip(pieces, vecs)):
                 cur.execute("""INSERT INTO chunks
                     (document_id,chunk_index,content,page_number,section_title,source_locator,
@@ -1833,6 +1870,10 @@ def ingest_file(path: Path, doc_type="other", access_level="internal", client_id
                      doc_type, json.dumps(vec)))
         db.audit(conn, None, "ingest_document", "documents", doc_id,
                  {"file": path.name, "chunks": len(pieces),
+                  # Dấu vết cho câu hỏi "vì sao văn bản X bỗng thành hết hiệu
+                  # lực": lượt nạp nào ghi quan hệ và hạ trạng thái mấy văn bản.
+                  "van_ban": {"so_hieu": vb_meta.get("so_hieu"),
+                              "quan_he": n_qh, "ha_hieu_luc": n_ha},
                   "extraction": {"method": extraction.method,
                                  "status": extraction.status,
                                  "warnings": extraction.warnings,

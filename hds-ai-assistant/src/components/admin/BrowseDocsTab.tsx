@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { BrowseDocument } from '../../types';
-import { DOC_TYPE_LABELS } from '../../constants';
+import { DOC_TYPE_LABELS, HIEU_LUC_BADGE_CLASS, HIEU_LUC_LABELS } from '../../constants';
 import {
   Search,
   Lock,
@@ -13,14 +13,22 @@ import {
   ShieldAlert,
   Download,
   Eye,
+  Info,
 } from 'lucide-react';
+import { DocumentDetailModal } from './DocumentDetailModal';
 
 export const BrowseDocsTab: React.FC = () => {
-  const { showToast } = useApp();
+  const { showToast, currentUser } = useApp();
   const [docs, setDocs] = useState<BrowseDocument[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [detailId, setDetailId] = useState<number | null>(null);
+  // Khớp ĐÚNG require_reviewer của backend (api.py: admin hoặc can_review).
+  // 'ban_qt' KHÔNG được tính — mở control ghi cho họ là mời bấm rồi ăn 403.
+  const canReview = Boolean(
+    currentUser && (currentUser.role === 'admin' || currentUser.can_review)
+  );
 
   // Xem bản gốc ngay trong trình duyệt — người duyệt cần nhìn tận mắt trang
   // scan trước khi quyết định, không phải tải về rồi mở bằng ứng dụng khác.
@@ -163,6 +171,20 @@ export const BrowseDocsTab: React.FC = () => {
                           <FileText className="w-4 h-4 text-hds-blue shrink-0 mt-0.5" />
                           <div className="min-w-0">
                             <span className="font-bold break-words">{doc.title}</span>
+                            {(doc.so_hieu || (doc.trang_thai_hieu_luc && doc.trang_thai_hieu_luc !== 'chua_ro')) && (
+                              <span className="flex flex-wrap items-center gap-1 mt-0.5">
+                                {doc.so_hieu && (
+                                  <span className="text-[10px] bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 px-1.5 py-0.5 rounded font-semibold font-mono">
+                                    {doc.so_hieu}
+                                  </span>
+                                )}
+                                {doc.trang_thai_hieu_luc && doc.trang_thai_hieu_luc !== 'chua_ro' && (
+                                  <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${HIEU_LUC_BADGE_CLASS[doc.trang_thai_hieu_luc] || ''}`}>
+                                    {HIEU_LUC_LABELS[doc.trang_thai_hieu_luc] || doc.trang_thai_hieu_luc}
+                                  </span>
+                                )}
+                              </span>
+                            )}
                             {doc.summary && (
                               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-snug line-clamp-2">
                                 {doc.summary}
@@ -209,6 +231,14 @@ export const BrowseDocsTab: React.FC = () => {
                       {doc.can_open ? (
                         <span className="inline-flex items-center gap-1.5">
                         <button
+                          onClick={() => setDetailId(doc.id)}
+                          className="px-3 py-1.5 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg text-xs inline-flex items-center gap-1 border border-blue-200 dark:border-slate-700 transition-colors"
+                          title="Metadata đầy đủ + văn bản liên quan"
+                        >
+                          <Info className="w-3.5 h-3.5" />
+                          Chi tiết
+                        </button>
+                        <button
                           onClick={() => handlePreview(doc.id)}
                           className="px-3 py-1.5 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg text-xs inline-flex items-center gap-1 border border-blue-200 dark:border-slate-700 transition-colors"
                           title="Mở bản gốc ngay trong trình duyệt"
@@ -248,6 +278,17 @@ export const BrowseDocsTab: React.FC = () => {
           </div>
         )}
       </div>
+
+      {detailId != null && (
+        <DocumentDetailModal
+          docId={detailId}
+          canReview={canReview}
+          onClose={() => {
+            setDetailId(null);
+            fetchBrowseDocs();  // trạng thái hiệu lực có thể vừa đổi trong modal
+          }}
+        />
+      )}
     </div>
   );
 };

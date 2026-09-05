@@ -276,5 +276,124 @@ class ConversationCreateKindTests(unittest.TestCase):
         self.assertEqual(ghi["kind"], "legal")
 
 
+class QuanHeVanBanGuardTests(unittest.TestCase):
+    """Endpoint quan hệ/metadata văn bản: chốt quyền + validate TRƯỚC mọi lệnh CSDL."""
+
+    REVIEWER = {"id": 1, "role": "chuyen_vien", "can_review": True,
+                "is_banqt": False, "can_finance": False,
+                "dept_ids": [], "dept_codes": []}
+    STAFF = {"id": 2, "role": "staff", "can_review": False,
+             "is_banqt": False, "can_finance": False,
+             "dept_ids": [], "dept_codes": []}
+
+    def test_them_quan_he_can_quyen_duyet(self):
+        with self.assertRaises(HTTPException) as ctx:
+            api.document_relation_add(1, api.RelationIn(loai="thay_the",
+                                                        so_hieu_dich="1/2020/NĐ-CP"),
+                                      user=self.STAFF)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_loai_quan_he_la_bi_chan_422(self):
+        with self.assertRaises(HTTPException) as ctx:
+            api.document_relation_add(1, api.RelationIn(loai="ban_be",
+                                                        so_hieu_dich="1/2020/NĐ-CP"),
+                                      user=self.REVIEWER)
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_thieu_ca_so_hieu_lan_ten_bi_chan_422(self):
+        with self.assertRaises(HTTPException) as ctx:
+            api.document_relation_add(1, api.RelationIn(loai="thay_the"),
+                                      user=self.REVIEWER)
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_sua_meta_ngay_sai_dang_bi_chan_422(self):
+        with self.assertRaises(HTTPException) as ctx:
+            api.document_meta_put(1, api.VanBanMetaIn(ngay_ban_hanh="31/08/2026"),
+                                  user=self.REVIEWER)
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_ngay_dung_khuon_nhung_khong_co_that_bi_chan_422(self):
+        """'2024-02-31' khớp regex nhưng Postgres ném DatetimeFieldOverflow lúc
+        UPDATE — người duyệt gõ nhầm phải nhận 422 tiếng Việt, không phải 500."""
+        for xau in ("2024-02-31", "2024-13-01", "2024-00-10"):
+            with self.subTest(ngay=xau):
+                with self.assertRaises(HTTPException) as ctx:
+                    api.document_meta_put(1, api.VanBanMetaIn(ngay_hieu_luc=xau),
+                                          user=self.REVIEWER)
+                self.assertEqual(ctx.exception.status_code, 422)
+
+
+    def test_trang_thai_hieu_luc_la_bi_chan_422(self):
+        with self.assertRaises(HTTPException) as ctx:
+            api.document_meta_put(1, api.VanBanMetaIn(trang_thai_hieu_luc="chet_roi"),
+                                  user=self.REVIEWER)
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_hop_le_thi_moi_cham_csdl(self):
+        # Sentinel (bài học 28/08): update.sh chạy test trên máy chủ thật.
+        sentinel = RuntimeError("cham toi CSDL")
+
+        def chan(*a, **kw):
+            raise sentinel
+
+        goc = api.db.session
+        api.db.session = chan
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                api.document_relation_add(
+                    1, api.RelationIn(loai="thay_the", so_hieu_dich="1/2020/NĐ-CP"),
+                    user=self.REVIEWER)
+            self.assertIs(ctx.exception, sentinel)
+            with self.assertRaises(RuntimeError) as ctx:
+                api.document_detail(1, user=self.REVIEWER)
+            self.assertIs(ctx.exception, sentinel)
+        finally:
+            api.db.session = goc
+
+
+class QuanHeCheTenTests(unittest.TestCase):
+    """Tài liệu đối ứng không mở được thì KHÔNG lộ gì qua bảng quan hệ.
+
+    `ten_nguon`/`ten_dich` là chuỗi denormalize (van_ban.ten_day_du của chính
+    tài liệu bị che) — che mỗi `title` mà để hai trường đó nguyên văn là mở
+    đúng cửa vừa khoá: bản án ở mức 'client' mang tên đương sự trong trích yếu.
+    """
+
+    NGOAI_PHONG = {"id": 3, "role": "chuyen_vien", "can_review": False,
+                   "is_banqt": False, "can_finance": False,
+                   "dept_ids": [7], "dept_codes": ["KD"]}
+
+    def _rel(self):
+        return {
+            "id": 1, "loai": "can_cu", "nguon": "auto", "ghi_chu": None,
+            "so_hieu_nguon": "58/2023/HNG-ST",
+            "ten_nguon": "Bản án V/v tranh chấp giữa ông Nguyễn Văn A và Công ty Z "
+                         "số 58/2023/HNG-ST",
+            "so_hieu_dich": "45/2019/QH14", "ten_dich": "Bộ luật Lao động",
+            "doc": {"document_id": 42, "title": "Ban an 58-2023",
+                    "trich_yeu": "V/v tranh chấp giữa ông Nguyễn Văn A",
+                    "loai_van_ban": "Bản án", "trang_thai_hieu_luc": "chua_ro",
+                    "doc_type": "ban_an", "access_level": "client",
+                    "client_id": 5, "department_id": 9},
+        }
+
+    def test_khong_mo_duoc_thi_giau_ca_ten_va_so_hieu_va_id(self):
+        ra = api._quan_he_hien_thi(self._rel(), self.NGOAI_PHONG,
+                                   rules=[], chieu="nguoc")
+        self.assertFalse(ra["can_open"])
+        self.assertIsNone(ra["ten_nguon"], "tên đầy đủ của tài liệu bị che vẫn lọt")
+        self.assertIsNone(ra["so_hieu_nguon"])
+        self.assertIsNone(ra["document_id"])
+        self.assertNotIn("Nguyễn Văn A", str(ra))
+
+    def test_van_ban_ngoai_kho_van_hien_binh_thuong(self):
+        """Văn bản luật chưa có trong kho chỉ là số hiệu + tên công khai."""
+        rel = self._rel()
+        rel["doc"] = None
+        ra = api._quan_he_hien_thi(rel, self.NGOAI_PHONG, rules=[], chieu="xuoi")
+        self.assertEqual("Bộ luật Lao động", ra["ten_dich"])
+        self.assertEqual("45/2019/QH14", ra["so_hieu_dich"])
+
+
 if __name__ == "__main__":
     unittest.main()

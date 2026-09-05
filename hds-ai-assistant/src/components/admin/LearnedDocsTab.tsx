@@ -3,16 +3,24 @@ import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { LearnedDocument } from '../../types';
 import { DOC_TYPES, DOC_TYPE_LABELS, ACCESS_LEVEL_BADGES, SOURCE_KIND_BADGES } from '../../constants';
-import { BookOpen, Search, Filter, RefreshCw, Building2, Download, Eye, Upload } from 'lucide-react';
+import { BookOpen, Search, Filter, RefreshCw, Building2, Download, Eye, Info, Upload } from 'lucide-react';
 import { DriveSyncStatusCard } from './DriveSyncStatusCard';
 import { UploadToKnowledgeModal } from './UploadToKnowledgeModal';
+import { DocumentDetailModal } from './DocumentDetailModal';
+import { HIEU_LUC_BADGE_CLASS, HIEU_LUC_LABELS } from '../../constants';
 
 export const LearnedDocsTab: React.FC = () => {
-  const { showToast } = useApp();
+  const { showToast, currentUser } = useApp();
   const [docs, setDocs] = useState<LearnedDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [detailId, setDetailId] = useState<number | null>(null);
+  // Khớp ĐÚNG require_reviewer của backend (api.py: admin hoặc can_review).
+  // 'ban_qt' KHÔNG được tính — mở control ghi cho họ là mời bấm rồi ăn 403.
+  const canReview = Boolean(
+    currentUser && (currentUser.role === 'admin' || currentUser.can_review)
+  );
 
   const [searchQuery, setSearchQuery] = useState('');
   const [docTypeFilter, setDocTypeFilter] = useState('');
@@ -95,6 +103,17 @@ export const LearnedDocsTab: React.FC = () => {
         onClose={() => setUploadOpen(false)}
         onUploaded={() => fetchLearnedDocs()}
       />
+
+      {detailId != null && (
+        <DocumentDetailModal
+          docId={detailId}
+          canReview={canReview}
+          onClose={() => {
+            setDetailId(null);
+            fetchLearnedDocs();  // trạng thái hiệu lực có thể vừa đổi trong modal
+          }}
+        />
+      )}
 
       {/* Trạng thái đồng bộ Drive — file nào đã học, file nào chờ xử lý và vì sao */}
       <DriveSyncStatusCard />
@@ -182,6 +201,21 @@ export const LearnedDocsTab: React.FC = () => {
                       <td className="p-4 font-bold text-slate-900 dark:text-slate-100 max-w-xs">
                         <div className="space-y-1">
                           <span className="block leading-snug break-words">{doc.title}</span>
+                          {/* Danh tính văn bản luật: số hiệu + badge hiệu lực */}
+                          {(doc.so_hieu || (doc.trang_thai_hieu_luc && doc.trang_thai_hieu_luc !== 'chua_ro')) && (
+                            <span className="flex flex-wrap items-center gap-1">
+                              {doc.so_hieu && (
+                                <span className="text-[10px] bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 px-1.5 py-0.5 rounded font-semibold font-mono">
+                                  {doc.so_hieu}
+                                </span>
+                              )}
+                              {doc.trang_thai_hieu_luc && doc.trang_thai_hieu_luc !== 'chua_ro' && (
+                                <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${HIEU_LUC_BADGE_CLASS[doc.trang_thai_hieu_luc] || ''}`}>
+                                  {HIEU_LUC_LABELS[doc.trang_thai_hieu_luc] || doc.trang_thai_hieu_luc}
+                                </span>
+                              )}
+                            </span>
+                          )}
                           <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono block">
                             ID: {doc.id}
                           </span>
@@ -237,6 +271,14 @@ export const LearnedDocsTab: React.FC = () => {
                       </td>
 
                       <td className="p-4 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => setDetailId(doc.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 mr-1.5 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg border border-blue-200 dark:border-slate-700 text-[11px] transition-colors"
+                          title="Metadata đầy đủ + văn bản liên quan"
+                        >
+                          <Info className="w-3 h-3" />
+                          <span>Chi tiết</span>
+                        </button>
                         <button
                           onClick={() => handlePreview(doc.id)}
                           className="inline-flex items-center gap-1 px-2.5 py-1 mr-1.5 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg border border-blue-200 dark:border-slate-700 text-[11px] transition-colors"

@@ -173,6 +173,58 @@ ALTER TABLE documents ADD CONSTRAINT documents_doc_type_check CHECK (doc_type IN
   ('law','ban_an','an_le','mau_hd','nhan_hieu','thu_mau','quy_trinh','ho_so_ns',
    'ho_so_kh','advisory','filing','contract','cong_no','other'));
 
+-- 31/08/2026: DANH TÍNH VĂN BẢN PHÁP LUẬT. Trước đây kho chỉ biết tên file —
+-- không số hiệu, không ngày, không trạng thái hiệu lực: luật 2012 đã bị thay
+-- và luật 2019 thay nó nằm cạnh nhau mà bộ tra cứu không phân biệt được.
+-- Bóc tự động lúc học (app/van_ban.py), người duyệt sửa được khi duyệt nhãn.
+-- Tất cả nullable: văn bản không phải luật không có các trường này — bình thường.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS so_hieu TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS loai_van_ban TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS trich_yeu TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ngay_ban_hanh DATE;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ngay_hieu_luc DATE;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS trang_thai_hieu_luc TEXT DEFAULT 'chua_ro';
+ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_trang_thai_hieu_luc_check;
+ALTER TABLE documents ADD CONSTRAINT documents_trang_thai_hieu_luc_check CHECK
+  (trang_thai_hieu_luc IN ('chua_ro','con_hieu_luc','het_hieu_luc_mot_phan','het_hieu_luc'));
+-- Khoá đối chiếu giữa các văn bản: JOIN theo lower(so_hieu) ở bảng quan hệ.
+CREATE INDEX IF NOT EXISTS idx_doc_so_hieu ON documents(lower(so_hieu))
+  WHERE so_hieu IS NOT NULL;
+
+-- QUAN HỆ GIỮA CÁC VĂN BẢN: A thay_the B, A sua_doi_bo_sung B, A huong_dan B…
+-- Khoá theo SỐ HIỆU chứ KHÔNG theo documents.id — mỗi lần file được học lại,
+-- learn_one XOÁ bản ghi documents cũ và INSERT bản mới với id MỚI (chunks
+-- CASCADE theo); quan hệ khoá theo id sẽ bốc hơi im lặng sau mỗi lần sửa file.
+-- Văn bản đích có thể CHƯA có trong kho: giữ so_hieu_dich/ten_dich để hiển thị,
+-- tự nối khi văn bản đó được học về sau.
+-- KHÔNG bật RLS — có chủ ý: quan hệ chỉ tồn tại giữa văn bản luật (kệ public,
+-- xem drive_map), và cảnh báo hết hiệu lực phải chạy được cả trên kênh public.
+-- Tiêu đề tài liệu đối ứng khi hiển thị vẫn đi qua can_open_doc/mask_title ở
+-- tầng API.
+CREATE TABLE IF NOT EXISTS van_ban_quan_he (
+  id             SERIAL PRIMARY KEY,
+  so_hieu_nguon  TEXT NOT NULL,
+  ten_nguon      TEXT,
+  loai           TEXT NOT NULL CHECK (loai IN
+                   ('thay_the','bai_bo','sua_doi_bo_sung','huong_dan',
+                    'hop_nhat','can_cu','lien_quan')),
+  so_hieu_dich   TEXT,
+  ten_dich       TEXT,
+  nguon          TEXT NOT NULL DEFAULT 'auto' CHECK (nguon IN ('auto','manual')),
+  ghi_chu        TEXT,
+  created_by     INT REFERENCES users(id),
+  created_at     TIMESTAMPTZ DEFAULT now(),
+  CONSTRAINT quan_he_phai_co_dich CHECK (so_hieu_dich IS NOT NULL OR ten_dich IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_vbqh_nguon ON van_ban_quan_he(lower(so_hieu_nguon));
+CREATE INDEX IF NOT EXISTS idx_vbqh_dich ON van_ban_quan_he(lower(so_hieu_dich))
+  WHERE so_hieu_dich IS NOT NULL;
+-- Chặn trùng khi học lại chạy song song; app tự khử trùng trước bằng NOT EXISTS.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vbqh_duy_nhat ON van_ban_quan_he
+  (lower(so_hieu_nguon), loai, lower(coalesce(so_hieu_dich,'')), lower(coalesce(ten_dich,'')));
+-- GRANT cho hds_app nằm DƯỚI khối tạo role (sau dòng \quit) — đặt ở đây thì
+-- CSDL dựng mới chết vì role chưa tồn tại. Tìm "van_ban_quan_he TO hds_app".
+
 CREATE TABLE IF NOT EXISTS access_rules (
   role_level      TEXT NOT NULL,
   department_code TEXT DEFAULT '*',
@@ -762,6 +814,13 @@ GRANT USAGE, SELECT ON SEQUENCE notes_id_seq TO hds_app;
 -- bản vá này nút × trả 500 "Internal Server Error", còn lượt dọn quá hạn chết
 -- im lặng trong try/except — hồ sơ khách nằm lại vô hạn (ca thật 29/08/2026).
 GRANT SELECT, INSERT, UPDATE, DELETE ON temp_files TO hds_app;
+
+-- van_ban_quan_he: khai ở khối nâng cấp phía trên (trước khi role hds_app chắc
+-- chắn tồn tại) nên GRANT nằm đây. Cần DELETE thật: gỡ một dòng quan hệ sai là
+-- thao tác thường ngày của người duyệt, thiếu DELETE thì nút gỡ trả 500 im lặng
+-- (đúng vết xe temp_files 29/08/2026).
+GRANT SELECT, INSERT, UPDATE, DELETE ON van_ban_quan_he TO hds_app;
+GRANT USAGE, SELECT ON SEQUENCE van_ban_quan_he_id_seq TO hds_app;
 
 -- ============================================================
 -- TÀI LIỆU CÓ TRONG DRIVE NHƯNG KHÔNG HỌC ĐƯỢC

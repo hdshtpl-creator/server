@@ -534,14 +534,41 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
                             <span className="font-semibold text-slate-800 dark:text-slate-100 block break-words">
                               {typeof src.n === 'number' ? `[Nguồn ${src.n}] ` : ''}
                               {src.title || src.document_title || 'Tài liệu nguồn'}
+                              {/* Hiệu lực văn bản luật: nội dung trích vẫn đúng
+                                  nguyên văn nên chỉ badge này báo được nguồn là
+                                  luật đã chết — phải đập vào mắt ngay cạnh tên. */}
+                              {src.trang_thai_hieu_luc === 'het_hieu_luc' && (
+                                <span className="ml-1.5 inline-block align-middle rounded px-1.5 py-0.5 text-[9px] font-bold uppercase bg-red-100 text-red-700">
+                                  Hết hiệu lực
+                                </span>
+                              )}
+                              {src.trang_thai_hieu_luc === 'het_hieu_luc_mot_phan' && (
+                                <span className="ml-1.5 inline-block align-middle rounded px-1.5 py-0.5 text-[9px] font-bold uppercase bg-amber-100 text-amber-800">
+                                  Đã sửa đổi
+                                </span>
+                              )}
                             </span>
-                            {(page != null || section || src.source_locator || src.source_version != null) && (
+                            {(src.so_hieu || page != null || section || src.source_locator || src.source_version != null) && (
                               <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400">
                                 <MapPin className="w-3 h-3" />
+                                {src.so_hieu && (
+                                  <span className="font-semibold text-slate-600 dark:text-slate-300">
+                                    {[src.loai_van_ban, src.trich_yeu].filter(Boolean).join(' ')}
+                                    {(src.loai_van_ban || src.trich_yeu) ? ' — ' : ''}
+                                    Số {src.so_hieu}
+                                  </span>
+                                )}
+                                {src.ngay_ban_hanh && <span>BH: {src.ngay_ban_hanh}</span>}
+                                {src.ngay_hieu_luc && <span>HL: {src.ngay_hieu_luc}</span>}
                                 {page != null && <span>Trang {page}</span>}
                                 {section && <span>Mục: {section}</span>}
                                 {src.source_locator && <span>Vị trí: {src.source_locator}</span>}
                                 {src.source_version != null && <span>Phiên bản {src.source_version}</span>}
+                              </span>
+                            )}
+                            {src.thay_the_boi && (
+                              <span className="mt-0.5 block text-[10px] font-semibold text-red-600 dark:text-red-400">
+                                → Đã bị thay thế/sửa đổi bởi: {src.thay_the_boi}
                               </span>
                             )}
                             {quote && (
