@@ -1,14 +1,12 @@
 import React, { useState } from 'react';
-import { MessageMarkdown } from './MessageMarkdown';
+import { MessageMarkdown, CITE_RE } from './MessageMarkdown';
+import { SourcePanel } from './SourcePanel';
 import type { ChatMessage, ChatTimings } from '../../types';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import {
   User,
   Bot,
-  BookOpen,
-  ChevronDown,
-  ChevronUp,
   FileText,
   Sliders,
   Clock,
@@ -20,11 +18,7 @@ import {
   Flag,
   StickyNote,
   Undo2,
-  ExternalLink,
   Download,
-  Eye,
-  Quote,
-  MapPin,
 } from 'lucide-react';
 
 const fmtSec = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
@@ -139,6 +133,13 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
       ),
     [message.sources],
   );
+  // Số nguồn THẬT SỰ được dẫn trong câu trả lời — panel nguồn xếp chúng lên
+  // đầu, phần bot đọc mà không dẫn thu gọn lại.
+  const citedSources = React.useMemo(() => {
+    const out = new Set<number>();
+    for (const m of (message.text || '').matchAll(CITE_RE)) out.add(parseInt(m[1], 10));
+    return out;
+  }, [message.text]);
 
   const canReport = !isUser && !isError && typeof message.serverMessageId === 'number';
   // Chỉ cho ghi chú / báo cáo khi câu trả lời đã viết xong — lưu bản dở dang
@@ -489,163 +490,19 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             </div>
           )}
 
-          {/* Ẩn nguồn trong lúc đang đọc/soạn — lúc đó chỉ hiện đúng một dòng
-              "đang đọc tài liệu…". Nguồn chỉ hiện khi câu trả lời đã xong. */}
+          {/* Nguồn chỉ hiện khi câu trả lời đã xong — trong lúc đọc/soạn chỉ có
+              một dòng "đang đọc tài liệu…". Gom theo tài liệu: xem SourcePanel. */}
           {!isUser && !message.isStreaming && message.sources && message.sources.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
-              <button
-                onClick={() => setShowSources(!showSources)}
-                className="flex items-center justify-between w-full text-xs font-semibold bg-slate-50 dark:bg-slate-800/70 hover:bg-slate-100 dark:hover:bg-slate-800 p-2 rounded-lg border border-slate-200 dark:border-slate-700 transition-colors"
-                aria-expanded={showSources}
-              >
-                <span className="flex items-center gap-1.5 text-hds-navy dark:text-blue-300">
-                  <BookOpen className="w-4 h-4 text-hds-gold" />
-                  <span>Nguồn trích dẫn ({message.sources.length})</span>
-                </span>
-                {showSources ? (
-                  <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
-                ) : (
-                  <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-                )}
-              </button>
-
-              {showSources && (
-                <ul className="mt-2 space-y-1.5">
-                  {message.sources.map((src, idx) => {
-                    const rawScore = src.relevance_score ?? src.score;
-                    const score = typeof rawScore === 'number' ? Math.round(rawScore * 100) : null;
-                    const page = src.page_number ?? src.page;
-                    const section = src.section_title ?? src.section;
-                    const quote = src.quote ?? src.excerpt ?? src.snippet;
-
-                    return (
-                      <li
-                        key={`${src.doc_id ?? 'src'}-${idx}`}
-                        id={typeof src.n === 'number' ? `msg-${message.id}-src-${src.n}` : undefined}
-                        className={`bg-hds-soft dark:bg-slate-800/50 border rounded-lg p-2.5 text-xs flex items-start justify-between gap-3 transition-all ${
-                          focusSource != null && src.n === focusSource
-                            ? 'border-hds-gold ring-2 ring-hds-gold/40'
-                            : 'border-blue-100 dark:border-slate-700'
-                        }`}
-                      >
-                        <div className="flex items-start gap-2 min-w-0">
-                          <BookOpen className="w-3.5 h-3.5 text-hds-navy dark:text-blue-300 shrink-0 mt-0.5" />
-                          <div className="min-w-0">
-                            <span className="font-semibold text-slate-800 dark:text-slate-100 block break-words">
-                              {typeof src.n === 'number' ? `[Nguồn ${src.n}] ` : ''}
-                              {src.title || src.document_title || 'Tài liệu nguồn'}
-                              {/* Hiệu lực văn bản luật: nội dung trích vẫn đúng
-                                  nguyên văn nên chỉ badge này báo được nguồn là
-                                  luật đã chết — phải đập vào mắt ngay cạnh tên. */}
-                              {src.trang_thai_hieu_luc === 'het_hieu_luc' && (
-                                <span className="ml-1.5 inline-block align-middle rounded px-1.5 py-0.5 text-[9px] font-bold uppercase bg-red-100 text-red-700">
-                                  Hết hiệu lực
-                                </span>
-                              )}
-                              {src.trang_thai_hieu_luc === 'het_hieu_luc_mot_phan' && (
-                                <span className="ml-1.5 inline-block align-middle rounded px-1.5 py-0.5 text-[9px] font-bold uppercase bg-amber-100 text-amber-800">
-                                  Đã sửa đổi
-                                </span>
-                              )}
-                            </span>
-                            {(src.so_hieu || page != null || section || src.source_locator || src.source_version != null) && (
-                              <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400">
-                                <MapPin className="w-3 h-3" />
-                                {src.so_hieu && (
-                                  <span className="font-semibold text-slate-600 dark:text-slate-300">
-                                    {[src.loai_van_ban, src.trich_yeu].filter(Boolean).join(' ')}
-                                    {(src.loai_van_ban || src.trich_yeu) ? ' — ' : ''}
-                                    Số {src.so_hieu}
-                                  </span>
-                                )}
-                                {src.ngay_ban_hanh && <span>BH: {src.ngay_ban_hanh}</span>}
-                                {src.ngay_hieu_luc && <span>HL: {src.ngay_hieu_luc}</span>}
-                                {page != null && <span>Trang {page}</span>}
-                                {section && <span>Mục: {section}</span>}
-                                {src.source_locator && <span>Vị trí: {src.source_locator}</span>}
-                                {src.source_version != null && <span>Phiên bản {src.source_version}</span>}
-                              </span>
-                            )}
-                            {src.thay_the_boi && (
-                              <span className="mt-0.5 block text-[10px] font-semibold text-red-600 dark:text-red-400">
-                                → Đã bị thay thế/sửa đổi bởi: {src.thay_the_boi}
-                              </span>
-                            )}
-                            {quote && (
-                              <blockquote className="mt-2 border-l-2 border-hds-gold pl-2 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300 whitespace-pre-wrap break-words">
-                                <Quote className="inline w-3 h-3 mr-1 -mt-0.5 text-hds-gold" />
-                                {quote}
-                              </blockquote>
-                            )}
-                            {/* Mở bản gốc trên Drive + tải về — như kho tài liệu / NotebookLM */}
-                            <span className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
-                              {/* Chỉ tài liệu học từ Drive mới có link Drive.
-                                  Từ 27/08/2026 kho nằm trên máy chủ: khoá nguồn
-                                  mang tiền tố "local:" — mở bằng Xem trước /
-                                  Tải về bên cạnh, không dựng URL Drive giả. */}
-                              {src.drive_file_id && !String(src.drive_file_id).startsWith('local:') && (
-                                <a
-                                  href={`https://drive.google.com/file/d/${src.drive_file_id}/view`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-hds-navy dark:text-blue-300 hover:underline"
-                                >
-                                  <ExternalLink className="w-3 h-3" />
-                                  Mở bản gốc
-                                </a>
-                              )}
-                              {typeof src.document_id === 'number' && (
-                                <button
-                                  type="button"
-                                  onClick={() => previewSource(src.document_id!)}
-                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-hds-navy dark:text-blue-300 hover:underline"
-                                  title="Mở bản gốc ngay trong trình duyệt (PDF/ảnh xem thẳng, file Word xem bản PDF)"
-                                >
-                                  <Eye className="w-3 h-3" />
-                                  Xem trước
-                                </button>
-                              )}
-                              {typeof src.document_id === 'number' && (
-                                <button
-                                  type="button"
-                                  onClick={() => downloadSource(src.document_id!, src.title)}
-                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-hds-navy dark:text-blue-300 hover:underline"
-                                >
-                                  <Download className="w-3 h-3" />
-                                  Tải về
-                                </button>
-                              )}
-                            </span>
-                          </div>
-                        </div>
-
-                        {score !== null && (
-                          <div
-                            className="shrink-0 flex items-center gap-1 bg-white dark:bg-slate-900 px-2 py-0.5 rounded border border-blue-200 dark:border-slate-700"
-                            title="Mức độ liên quan do AI chấm"
-                          >
-                            <span className="text-[10px] text-slate-500 dark:text-slate-400 hidden sm:inline">
-                              Liên quan
-                            </span>
-                            <span
-                              className={`font-bold text-xs ${
-                                score >= 90
-                                  ? 'text-hds-green dark:text-emerald-400'
-                                  : score >= 75
-                                  ? 'text-hds-blue dark:text-blue-400'
-                                  : 'text-amber-600 dark:text-amber-400'
-                              }`}
-                            >
-                              {score}%
-                            </span>
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
+            <SourcePanel
+              sources={message.sources}
+              messageId={message.id}
+              open={showSources}
+              onToggle={() => setShowSources((v) => !v)}
+              focusN={focusSource}
+              cited={citedSources}
+              onPreview={previewSource}
+              onDownload={downloadSource}
+            />
           )}
 
           {/* Hàng thao tác: lưu ghi chú + báo cáo chất lượng — mỗi cái có Hoàn tác */}

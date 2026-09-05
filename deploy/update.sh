@@ -70,9 +70,13 @@ run_as "cd '$BACKEND_DIR' && .venv/bin/python -m unittest discover -s tests -v" 
 c_ok "Backend tests đạt"
 
 c_info "4/5  Build lại giao diện"
-run_as "cd '$FRONTEND_DIR' && { [ -f package-lock.json ] && npm ci || npm install; } && npm run build"
+# Dấu bản build in vào giao diện (tooltip logo, hộp "Cấu hình kết nối", chân
+# khung chat). Nhìn là biết tab đang chạy bản nào — hết cảnh "update rồi mà lỗi
+# cũ còn nguyên" không phân biệt được tại trình duyệt giữ bản cũ hay tại mã.
+BUILD_ID="$(run_as "git -C '$REPO_ROOT' rev-parse --short HEAD" 2>/dev/null || echo tay)-$(date +%d%m.%H%M)"
+run_as "cd '$FRONTEND_DIR' && { [ -f package-lock.json ] && npm ci || npm install; } && VITE_BUILD_ID='$BUILD_ID' npm run build"
 [ -f "$FRONTEND_DIR/dist/index.html" ] || die "Build frontend thất bại"
-c_ok "Đã build"
+c_ok "Đã build bản $BUILD_ID"
 
 c_info "5/5  Khởi động lại dịch vụ"
 
@@ -93,12 +97,53 @@ if [ -f "$NGINX_SITE" ] && ! grep -q "proxy_buffering" "$NGINX_SITE"; then
   fi
 fi
 
+# Deploy xong mà trình duyệt vẫn giữ index.html cũ → tải JS cũ → lỗi đã sửa
+# "còn nguyên" (06/09/2026; Cloudflare còn gắn max-age 4 giờ cho JS). index.html
+# phải luôn hỏi lại máy chủ; file trong /assets/ có mã băm trong tên nên giữ
+# được cả năm. Chèn trước khối `location /` bằng awk để giữ nguyên thụt dòng
+# và chỉ chèn MỘT lần (file có certbot sửa có thể có hai khối server).
+CACHE_BLOCK='    # index.html không cache (deploy là thấy ngay); /assets/ băm tên nên bất biến.
+    location = /index.html {
+        add_header Cache-Control "no-cache, must-revalidate";
+    }
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+'
+if [ -f "$NGINX_SITE" ] && ! grep -q "Cache-Control" "$NGINX_SITE"; then
+  cp "$NGINX_SITE" "$NGINX_SITE.bak.$(date +%Y%m%d%H%M%S)"
+  awk -v blk="$CACHE_BLOCK" '
+    /^[[:space:]]*location \/ \{/ && !done { printf "%s", blk; done = 1 }
+    { print }
+  ' "$NGINX_SITE" > "$NGINX_SITE.tmp" && mv "$NGINX_SITE.tmp" "$NGINX_SITE"
+  if nginx -t >/dev/null 2>&1; then
+    c_ok "Đã thêm header chống cache cho index.html"
+  else
+    cp "$(ls -t "$NGINX_SITE".bak.* | head -1)" "$NGINX_SITE"
+    c_warn "Không vá được nginx tự động — chép tay khối 'location = /index.html' từ deploy/setup.sh"
+  fi
+fi
+
 systemctl restart hds-ai-backend
 systemctl reload nginx
 sleep 2
 systemctl is-active --quiet hds-ai-backend \
   && c_ok "Backend đang chạy" \
   || die "Backend lỗi — xem: journalctl -u hds-ai-backend -n 40 --no-pager"
+
+# Danh tính văn bản luật (số hiệu/quan hệ/hiệu lực) chỉ tự bóc khi file được
+# học MỚI. Kho đã học từ trước phải backfill một lần — 06/09/2026 phát hiện
+# 65/65 văn bản luật so_hieu=NULL, bảng quan hệ trống, tức toàn bộ cơ chế
+# "luật sau sửa luật trước" bất động suốt một tuần mà không ai biết. Không tự
+# chạy ở đây (đọc lại file + embed lại đoạn mất hàng chục phút), chỉ đếm và
+# nhắc to.
+CHUA_DANH_TINH="$(docker exec -i hds-postgres psql -U hds -d hdsai -At -c \
+  "SELECT count(*) FROM documents WHERE doc_type='law' AND so_hieu IS NULL AND coalesce(active,true)" 2>/dev/null || echo '?')"
+if [ "$CHUA_DANH_TINH" != "0" ]; then
+  c_warn "Còn $CHUA_DANH_TINH văn bản luật CHƯA có danh tính (số hiệu/quan hệ/hiệu lực)."
+  c_warn "Chạy một lần (không cần sudo):  cd $BACKEND_DIR && .venv/bin/python -m app.backfill_van_ban --lam-lai-doan"
+fi
 
 echo
 c_ok "CẬP NHẬT XONG."

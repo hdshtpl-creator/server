@@ -5,6 +5,7 @@ import { ChatMessageItem } from './ChatMessageItem';
 import * as api from '../../api';
 import type { BrowseDocument, MethodTemplate, TempAttachment } from '../../types';
 import { isClientRole, ATTACH_ACCEPT_FALLBACK } from '../../constants';
+import { BUILD_ID } from '../../banMoi';
 import {
   Send,
   Square,
@@ -890,7 +891,9 @@ export const ChatLayout: React.FC = () => {
                   )}
                 </span>
               </span>
-              <span className="hidden sm:inline shrink-0">HDS Law Firm — Nền tảng AI Pháp lý</span>
+              <span className="hidden sm:inline shrink-0" title="Dấu bản build đang chạy — so với bản vừa deploy để biết trình duyệt có còn giữ bản cũ">
+                HDS Law Firm — Nền tảng AI Pháp lý · <span className="font-mono">{BUILD_ID}</span>
+              </span>
             </div>
           </form>
         </div>

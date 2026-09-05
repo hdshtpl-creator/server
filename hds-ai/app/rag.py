@@ -820,10 +820,32 @@ NGUOI_DUNG_DAN_MIN = 220
 # Trích tối đa bấy nhiêu ký tự mỗi đoạn dán — dán cả chương luật thì cắt bớt
 # chứ đừng đẩy prompt vượt cửa sổ.
 NGUOI_DUNG_DAN_MAX = 12_000
+NGUOI_DUNG_DAN_TITLE = "[Người dùng cung cấp trong hội thoại]"
 
+# Viết tắt luật sư dùng hằng ngày — "theo BLDS 2015", "Điều 47 LDN" — không có
+# chữ "luật" nào để chốt bắt được (chạy thử 06/09/2026: câu hủy bỏ hợp đồng
+# "theo BLDS 2015" không được coi là câu hỏi luật, kệ luật không được kéo vào).
+_VIET_TAT_VAN_BAN = {
+    "blds": ("bo luat", "dan su"), "blld": ("bo luat", "lao dong"),
+    "bltds": ("bo luat", "to tung dan su"), "blhs": ("bo luat", "hinh su"),
+    "bltths": ("bo luat", "to tung hinh su"), "ldn": ("luat", "doanh nghiep"),
+    "ltm": ("luat", "thuong mai"), "ldt": ("luat", "dau tu"),
+    "lshtt": ("luat", "so huu tri tue"), "ldd": ("luat", "dat dai"),
+}
 _RE_MOC_PHAP_LY = re.compile(
     r"\b(dieu|khoan|diem)\s+\d+|\bluat\b|\bnghi dinh\b|\bthong tu\b|"
-    r"\bbo luat\b|\bnghi quyet\b|\ban le\b", re.IGNORECASE)
+    r"\bbo luat\b|\bnghi quyet\b|\ban le\b|"
+    r"\b(" + "|".join(_VIET_TAT_VAN_BAN) + r")\b", re.IGNORECASE)
+# Dấu hiệu đoạn là NGUYÊN VĂN điều luật — tiêu đề "Điều 107." / "… quy định:" /
+# "… như sau:" — chứ không phải câu hỏi tình huống có NHẮC tên văn bản. Thiếu
+# chốt này, câu hỏi dài "Khách hàng mua 51% cổ phần… theo Nghị định 13/2023"
+# bị coi là nguồn, và model trích dẫn CHÍNH CÂU HỎI để bảo chứng cho nội dung
+# bịa từ trí nhớ (chạy thử trên máy chủ 06/09/2026: câu TD5, THU8, BC2).
+# "quy định:" phải đi sau một mốc "Điều n": "Hợp đồng logistics quy định: nếu
+# bên B…" là điều khoản HỢP ĐỒNG trong câu hỏi tình huống (BC2), không phải luật.
+_RE_DAU_HIEU_TRICH_LUAT = re.compile(
+    r"(?:^|\s)dieu\s+\d+[a-z]?\s*[.:]"
+    r"|(?:^|\s)dieu\s+\d+[a-z]?[^.:\n]{0,80}?\b(?:quy dinh|nhu sau)\s*:", re.IGNORECASE)
 
 
 def _can_cu_nguoi_dung_dan(question, history):
@@ -853,16 +875,20 @@ def _can_cu_nguoi_dung_dan(question, history):
         text = (raw or "").strip()
         if len(text) < NGUOI_DUNG_DAN_MIN:
             continue
-        if not _RE_MOC_PHAP_LY.search(_fold_text(text)):
+        folded = _fold_text(text)
+        if not _RE_MOC_PHAP_LY.search(folded):
+            continue
+        if not _RE_DAU_HIEU_TRICH_LUAT.search(folded):
             continue
         khoa = text[:200]
         if khoa in da_thay:
             continue
         da_thay.add(khoa)
         out.append({
-            "title": "[Người dùng cung cấp trong hội thoại]",
+            "title": NGUOI_DUNG_DAN_TITLE,
             "content": text[:NGUOI_DUNG_DAN_MAX],
             "score": 1.0,
+            "kind": "user_provided",
         })
     return out
 
@@ -879,9 +905,141 @@ def _yeu_cau_bang(question: str) -> bool:
     return bool(_RE_SO_SANH.search(_fold_text(question or "")))
 
 
+def _la_cau_hoi_phap_ly(question: str) -> bool:
+    """Câu hỏi có nêu mốc pháp lý (Điều/khoản n, tên loại văn bản, án lệ)."""
+    return bool(_RE_MOC_PHAP_LY.search(_fold_text(question or "")))
+
+
+# ---- Văn bản người hỏi NÊU ĐÍCH DANH có nằm trong nguồn không ----------------
+# Chạy thử 06/09/2026: hỏi "thời giờ làm thêm theo Bộ luật Lao động 2019" khi
+# kho KHÔNG có BLLĐ → bot lấy hợp đồng lao động của nhân viên làm [Nguồn] và
+# viết "50 giờ/tháng" từ trí nhớ (sai; luật là 40). Hỏi "phạt 20% theo Luật
+# Thương mại 2005" (kho không có) → bịa Điều 312. Model không tự biết kho
+# thiếu gì; phải nói cho nó biết ngay trong prompt.
+_LOAI_VB_NHAC = (("bo", "luat"), ("luat",), ("phap", "lenh"), ("nghi", "dinh"),
+                 ("thong", "tu", "lien", "tich"), ("thong", "tu"), ("nghi", "quyet"))
+# Từ đứng sau tên loại mà KHÔNG phải một phần của tên văn bản: "luật hiện
+# hành", "luật này quy định", "nghị định hướng dẫn", "luật sư" (sư đứng đầu).
+_TU_DUNG_TEN = {
+    "quy", "so", "ngay", "hien", "thi", "co", "la", "de", "va", "cua", "ve",
+    "tai", "theo", "nam", "sua", "duoc", "ban", "hanh", "nao", "gi", "nhu",
+    "the", "trong", "hoac", "nay", "do", "khac", "moi", "cu", "lien", "su",
+    "huong", "ap", "dung", "con", "da", "se", "thuoc", "phap", "chung", "cac",
+    "moi", "hoi", "dan", "dieu", "khoan", "thuong", "neu", "khi", "ma", "voi",
+}
+# "dan" là từ dừng ("luật dân sự"?) — KHÔNG: "dân sự", "dân chủ" là tên thật.
+_TU_DUNG_TEN.discard("dan")
+_TU_DUNG_TEN.discard("thuong")   # "thương mại"
+_RE_TOKEN_VB = re.compile(r"[^\W_]+(?:[/\-][^\W_]+)*|[,.;:?!()]", re.UNICODE)
+_LOAI_KHO_LUAT = {"law", "an_le", "ban_an", "advisory"}
+
+
+def _van_ban_nhac_trong_cau_hoi(question: str) -> list:
+    """Các văn bản được nêu đích danh: [{loai, so_hieu|None, ten|None, nam|None,
+    hien_thi}]. `ten`/`loai`/`nam` đã bỏ dấu để so khớp; `hien_thi` giữ nguyên
+    chữ người hỏi gõ để đưa lại vào prompt."""
+    words = _RE_TOKEN_VB.findall(question or "")
+    fold = [_fold_text(w) for w in words]
+    ra, i = [], 0
+    while i < len(words):
+        # Viết tắt: "BLDS 2015", "Điều 47 LDN" — tên đã biết sẵn, chỉ còn tìm năm.
+        if fold[i] in _VIET_TAT_VAN_BAN:
+            loai_vt, ten_vt = _VIET_TAT_VAN_BAN[fold[i]]
+            nam = fold[i + 1] if i + 1 < len(fold) and re.fullmatch(r"(?:19|20)\d{2}", fold[i + 1]) else None
+            k = i + (2 if nam else 1)
+            ra.append({"loai": loai_vt, "so_hieu": None, "ten": ten_vt, "nam": nam,
+                       "hien_thi": " ".join(words[i:k])})
+            i = k
+            continue
+        loai = None
+        for pat in _LOAI_VB_NHAC:
+            if tuple(fold[i:i + len(pat)]) == pat:
+                loai = pat
+                break
+        if not loai:
+            i += 1
+            continue
+        j = i + len(loai)
+        # Dạng số hiệu: "Nghị định 13/2023/NĐ-CP", "Luật số 59/2020/QH14".
+        k = j + 1 if j < len(fold) and fold[j] == "so" else j
+        if k < len(words) and re.fullmatch(r"\d{1,4}/\d{4}/\S+", words[k]):
+            ra.append({"loai": " ".join(loai), "so_hieu": words[k].upper(),
+                       "ten": None, "nam": words[k].split("/")[1],
+                       "hien_thi": " ".join(words[i:k + 1])})
+            i = k + 1
+            continue
+        # Dạng tên: "Bộ luật Lao động 2019", "Luật Thương mại", dừng ở năm,
+        # số, dấu câu hoặc từ dừng.
+        ten, nam, k = [], None, j
+        while k < len(words) and len(ten) < 6:
+            f = fold[k]
+            if re.fullmatch(r"(?:19|20)\d{2}", f):
+                nam = f
+                k += 1
+                break
+            if not re.fullmatch(r"[a-z]+", f):
+                break
+            if f in _TU_DUNG_TEN and not (f == "su" and ten):
+                break
+            ten.append(f)
+            k += 1
+        if ten:
+            ra.append({"loai": " ".join(loai), "so_hieu": None,
+                       "ten": " ".join(ten), "nam": nam,
+                       "hien_thi": " ".join(words[i:k])})
+        i = max(k, j)
+    return ra
+
+
+def _van_ban_thieu_trong_kho(question: str, chunks) -> list:
+    """Những văn bản câu hỏi nêu đích danh mà KHÔNG có trong danh sách nguồn.
+
+    So với chữ ký của các nguồn LUẬT (số hiệu, loại, trích yếu, tên file, nhãn
+    đoạn, 300 ký tự đầu) và cả đoạn người dùng dán / file đính kèm — họ dán
+    Điều 107 BLLĐ vào thì BLLĐ "có mặt". Hồ sơ nhân sự, hợp đồng mẫu KHÔNG
+    tính: dòng "Căn cứ Bộ luật Lao động" trong một HĐLĐ không làm kho có luật.
+
+    Kho cũ chưa backfill danh tính (tên file "Bộ-luật-91-2015-QH13", nhãn đoạn
+    không có tên) thì khớp yếu: đúng LOẠI + đúng NĂM cũng coi là có, thà bỏ sót
+    cảnh báo còn hơn bảo model "kho không có BLDS" khi nó đang ở ngay đó.
+    """
+    nhac = _van_ban_nhac_trong_cau_hoi(question)
+    if not nhac:
+        return []
+    chu_ky = []
+    for c in chunks or []:
+        kind = c.get("kind") or ""
+        # CHỈ văn bản luật (và đoạn người dùng dán/file đính kèm) mới chứng
+        # minh "kho có luật này". Án lệ, bản án nhắc "Bộ luật Lao động" trong
+        # lập luận không làm kho có BLLĐ — lượt chạy ba 06/09: án lệ lao động
+        # 071/2018 lọt vào nguồn, chốt tưởng kho có BLLĐ, bot lại bịa Điều 35.
+        if kind not in ("user_provided", "attachment") \
+                and (c.get("doc_type") or "") != "law":
+            continue
+        s = " ".join(str(c.get(k) or "") for k in
+                     ("so_hieu", "loai_van_ban", "trich_yeu", "title", "section_title"))
+        s = _fold_text(s + " " + (c.get("content") or "")[:300])
+        chu_ky.append(" " + s.replace("-", " ").replace("_", " ") + " ")
+    thieu = []
+    for v in nhac:
+        if v["so_hieu"]:
+            so = _fold_text(v["so_hieu"]).replace("-", " ")
+            co = any(so in k for k in chu_ky)
+        else:
+            # Có năm thì năm PHẢI khớp cùng chữ ký: "Bộ luật Lao động 2019" và
+            # một bản BLLĐ 2012 (nếu có) là hai văn bản khác nhau.
+            nam = f" {v['nam']} " if v["nam"] else ""
+            co = any(f" {v['ten']} " in k and (not nam or nam in k) for k in chu_ky)
+            if not co and v["nam"]:
+                co = any(nam in k and f" {v['loai']} " in k for k in chu_ky)
+        if not co and all(v["hien_thi"] != t["hien_thi"] for t in thieu):
+            thieu.append(v)
+    return thieu
+
+
 def build_prompt(question, chunks, temp_chunks=None, method=None,
                  company="", history=None, chunk_chars=None, budget=None,
-                 summary=None):
+                 summary=None, van_ban_thieu=None):
     # Model KHÔNG tự biết hôm nay là ngày nào. Không nói cho nó thì nó đọc "hợp
     # đồng đến 01/08/2024" mà tưởng còn hiệu lực, dù thực tế đã qua 2 năm. Đây
     # là mốc để nó phán đoán còn hạn / đã hết hạn / quá hạn.
@@ -1022,6 +1180,16 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             who = "Người hỏi" if role == "user" else "Trợ lý"
             parts.append(f"{who}: {(content or '')[:HISTORY_CHARS]}")
         parts.append("")
+    if van_ban_thieu:
+        ten = "; ".join(v["hien_thi"] for v in van_ban_thieu[:4])
+        parts.append(
+            "KHO KHÔNG CÓ VĂN BẢN NGƯỜI HỎI NÊU: " + ten + ". Mở đầu câu trả "
+            "lời bằng việc nói thẳng tài liệu tham khảo chưa có văn bản này "
+            "(hoặc văn bản không tồn tại). KHÔNG trích số điều, nội dung của "
+            "nó từ trí nhớ; KHÔNG lấy hồ sơ nội bộ (hợp đồng lao động, hồ sơ "
+            "nhân sự, biểu mẫu) thay cho căn cứ pháp luật. Chỉ trả lời phần "
+            "có tài liệu tham khảo thật, phần còn lại ghi rõ 'chưa đối chiếu "
+            "được, cần bổ sung văn bản vào kho'." + chr(10))
     if _yeu_cau_bang(question):
         # Chi chen khi cau hoi that su can — nhet vao moi luot thi model ke
         # bang ca cho cau hoi mot y, vua ton token vua kho doc.
@@ -1337,6 +1505,32 @@ def conversation_temp_paths(conversation_id):
 TEMP_FULL_CHARS = 45_000
 
 
+def _nguon_dinh_kem(fname, content, tom_tat=False):
+    """Một đoạn (hoặc bản tóm tắt) của file đính kèm, dưới dạng nguồn.
+
+    `kind`/`attachment_name` để panel nguồn gom các đoạn cùng file làm một thẻ,
+    và để bộ lọc "chỉ nguồn liên quan" biết điểm 1.0 ở đây nghĩa là "người
+    dùng đưa cho bot", không phải độ liên quan.
+    """
+    return {"title": f"[{'Tóm tắt file' if tom_tat else 'File'}: {fname}]",
+            "content": content, "score": 1.0,
+            "kind": "attachment", "attachment_name": fname, "is_summary": tom_tat}
+
+
+def _nguon_chua_tom_tat(fname):
+    """Lời nhắn cho MODEL khi file dài chưa kịp tóm tắt ở nền.
+
+    kind=notice: model vẫn đọc để chuyển lời cho người dùng, nhưng panel nguồn
+    không hiện nó như một "căn cứ" (phản hồi 06/09/2026: dòng này đứng ở
+    [Nguồn 1] với nhãn Liên quan 100%).
+    """
+    return {"title": f"[File: {fname}]",
+            "content": "(File dài, bản tóm tắt toàn văn đang được chuẩn bị ở "
+                       "nền — chờ một lát rồi hỏi lại, hoặc hỏi cụ thể vào một "
+                       "nội dung để lấy đúng đoạn liên quan.)",
+            "score": 1.0, "kind": "notice", "attachment_name": fname}
+
+
 def get_temp_context(conversation_id, question, top_k=None, query_vector=None,
                      full_chars=None):
     """Nội dung file đính kèm của cuộc chat này.
@@ -1371,7 +1565,7 @@ def get_temp_context(conversation_id, question, top_k=None, query_vector=None,
 
     def _lam_nguon(i):
         fname, content, _ = items[i]
-        return {"title": f"[File: {fname}]", "content": content, "score": 1.0}
+        return _nguon_dinh_kem(fname, content)
 
     tong = sum(len(c) for _, c, _ in items)
     if tong <= budget and not top_k:
@@ -1385,16 +1579,11 @@ def get_temp_context(conversation_id, question, top_k=None, query_vector=None,
     out = []
     for fname, _ej, sm in rows:
         if (sm or "").strip():
-            out.append({"title": f"[Tóm tắt file: {fname}]",
-                        "content": sm.strip(), "score": 1.0})
+            out.append(_nguon_dinh_kem(fname, sm.strip(), tom_tat=True))
         else:
             # Chưa kịp tóm tắt (file vừa tải, hàng nền còn xếp) — nói thật để
             # model chuyển lời cho người dùng, đừng im lặng bỏ qua cả file.
-            out.append({"title": f"[File: {fname}]",
-                        "content": "(File dài, bản tóm tắt toàn văn đang được "
-                                   "chuẩn bị ở nền — chờ một lát rồi hỏi lại, "
-                                   "hoặc hỏi cụ thể vào một nội dung để lấy "
-                                   "đúng đoạn liên quan.)", "score": 1.0})
+            out.append(_nguon_chua_tom_tat(fname))
     con_lai = max(0, budget - sum(len(o["content"]) for o in out))
 
     # Chấm điểm theo độ liên quan để CHỌN đoạn chi tiết, nhưng ghép theo thứ tự.
@@ -1649,6 +1838,11 @@ def _canh_bao_so_hieu(text: str, chunks) -> str:
         f"{c.get('so_hieu') or ''} {c.get('thay_the_boi') or ''}"
         for c in (chunks or []))
     co_that = set(_so_hieu_van_ban(trong_nguon))
+    # Tên file trong kho viết số hiệu bằng gạch ngang ("Nghị-định-168-2025-NĐ-CP")
+    # — kho chưa backfill danh tính thì đó là chỗ DUY NHẤT có số thật; không đọc
+    # nó thì số đúng 168/2025/NĐ-CP bị gắn cờ "chưa đối chiếu được" (06/09/2026).
+    for a, b, c in re.findall(r"(\d{1,4})-(\d{4})-([A-ZĐ][A-ZĐ0-9\-]*)", trong_nguon):
+        co_that.add(f"{a}/{b}/{c}")
     nghi_ngo = []
     for so in dict.fromkeys(_so_hieu_van_ban(text)):
         if so not in co_that:
@@ -1666,6 +1860,25 @@ def _canh_bao_so_hieu(text: str, chunks) -> str:
     return (text + chr(10) * 2 + "---" + chr(10)
             + "*⚠ Kiểm tra lại số hiệu văn bản trước khi dùng làm căn cứ — "
             + "; ".join(dong) + ".*")
+
+
+def _canh_bao_kho_thieu(text, van_ban_thieu) -> str:
+    """Dòng mở đầu DO MÁY CHÈN khi kho không có văn bản người hỏi nêu đích danh.
+
+    Prompt đã bảo model nói thẳng và cấm trích từ trí nhớ; model 14b nghe được
+    nửa: lượt chạy cuối 06/09/2026 nó vẫn mở đầu "không quá 50 giờ/tháng
+    [Nguồn 7]" (sai, nguồn là một nghị quyết HĐND vô can) rồi mới thừa nhận
+    kho chưa có BLLĐ. Người đọc lướt dòng đầu là lấy con số sai. Nên cảnh báo
+    phải đứng TRƯỚC câu trả lời và không phụ thuộc model có tuân thủ hay không
+    — cùng tinh thần _canh_bao_so_hieu: không xoá, chỉ nói thẳng.
+    """
+    ten = [v.get("hien_thi") for v in (van_ban_thieu or []) if v.get("hien_thi")]
+    if not ten or not (text or "").strip():
+        return text
+    dong = ("**⚠ Kho tài liệu chưa có: " + "; ".join(ten[:4]) + ".** Phần dưới "
+            "chưa được đối chiếu với văn bản đó — mọi số điều, con số nhắc tới "
+            "văn bản này chỉ là gợi ý, cần tra bản gốc trước khi dùng.")
+    return dong + chr(10) * 2 + text
 
 
 def _canh_bao_hieu_luc(text, chunks) -> str:
@@ -2098,6 +2311,36 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         kept = [c for c in hr_extra if c["chunk_id"] not in seen_ids] + kept
         timings["ho_so_ns_them"] = len(kept) - len(seen_ids)
 
+    # CÂU HỎI PHÁP LÝ (nêu Điều/khoản, tên loại văn bản): (1) hồ sơ nhân sự
+    # KHÔNG bao giờ là căn cứ — HĐLĐ, CCCD, bằng đại học của nhân viên nằm rất
+    # gần vector với câu hỏi về BLLĐ/LTM nên chiếm top-k và được model dẫn
+    # làm [Nguồn]; (2) bảo đảm kệ luật/án lệ có mặt: định tuyến thư mục có thể
+    # đưa câu "hủy bỏ hợp đồng theo BLDS" vào ngăn hợp đồng mẫu, kết quả là
+    # hai bản mẫu và không một điều luật nào (chạy thử 06/09/2026: TD1, BC2,
+    # NGAN2, THU8). Chỉ chèn thêm + bỏ ho_so_ns, không đụng thứ khác.
+    # Dùng chốt _legal_or_scenario_question chứ KHÔNG dùng is_staff_query: câu
+    # "thời giờ làm thêm của NGƯỜI LAO ĐỘNG theo BLLĐ" có từ khoá nhân sự nên
+    # is_staff_query bật, mà đó vẫn là câu hỏi luật — chạy thử 06/09 lượt hai,
+    # HĐLĐ của nhân viên vẫn chen vào nguồn vì chốt này bị bỏ qua.
+    if (channel == "internal" and _la_cau_hoi_phap_ly(question)
+            and company_context._legal_or_scenario_question(_fold_text(question))):
+        truoc = len(kept)
+        kept = [c for c in kept if c.get("doc_type") != "ho_so_ns"]
+        if truoc != len(kept):
+            timings["bo_ho_so_ns"] = truoc - len(kept)
+        luat_extra = retrieve(
+            search_question, channel, client_id, dept_ids=dept_ids,
+            is_banqt=is_banqt, top_k=6, can_finance=can_finance,
+            doc_types=["law", "an_le", "ban_an", "advisory"],
+            document_ids=source_document_ids, query_vector=query_vector,
+        )
+        seen_ids = {c["chunk_id"] for c in kept}
+        luat_them = [c for c in luat_extra
+                     if c["chunk_id"] not in seen_ids and c["score"] >= min_score]
+        if luat_them:
+            kept = luat_them + kept
+            timings["kho_luat_them"] = len(luat_them)
+
     # CHẾ ĐỘ KIỂM TRA PHÁP LÝ: hồ sơ khách nằm ở file đính kèm (temp_chunks),
     # còn CĂN CỨ để soi đúng/sai phải đến từ kệ luật/án lệ/bản án/quan điểm.
     # Vector so câu lệnh "kiểm tra hợp đồng này" với toàn kho dễ vớ về hồ sơ
@@ -2274,6 +2517,12 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         chunks = list(temp_chunks) + list(chunks)
         temp_chunks = None
 
+    # Văn bản người hỏi NÊU ĐÍCH DANH mà không có trong nguồn → nói cho model
+    # biết, không thì nó điền từ trí nhớ và dẫn hồ sơ nội bộ làm căn cứ.
+    van_ban_thieu = _van_ban_thieu_trong_kho(question, chunks)
+    if van_ban_thieu:
+        timings["van_ban_thieu"] = [v["hien_thi"] for v in van_ban_thieu]
+
     # Truyền thẳng ngân sách đã đọc từ `cfg` — để build_prompt tự đọc lại thì
     # mỗi câu hỏi phải mở thêm hai kết nối CSDL cho hai con số.
     #
@@ -2316,7 +2565,7 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     prompt = build_prompt(question, chunks, temp_chunks, method,
                           company=company, history=history, summary=summary,
                           chunk_chars=_num("chunk_char_limit", CHUNK_CHARS, int),
-                          budget=budget_eff)
+                          budget=budget_eff, van_ban_thieu=van_ban_thieu)
     timings["so_doan"] = len(chunks)
     note(f"Đã chọn {len(chunks)} nguồn — model đang đọc và soạn câu trả lời…")
     answer_mode = "mixed" if company and chunks else ("grounded" if chunks else "operational")
@@ -2341,14 +2590,83 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         "evidence": format_sources(chunks),
         "state": state_update,
         "strict_grounding": strict,
+        "van_ban_thieu": van_ban_thieu,
     }
+
+
+_RE_TRANG_MOC = re.compile(r"\[Trang\s+(\d+)\]")
+_RE_KY_TU_VO_HINH = re.compile("[\ufeff\u200b\u200c\u200d\u2060]")
+_RE_CHAM_DAI = re.compile(r"(?:\.\s?){3,}|…(?:\s?…)+")
+_RE_CUM_DAU = re.compile(r"(?<!\S)([^\w\s]{2,})(?!\S)", re.UNICODE)
+# Ký tự gần như chỉ xuất hiện khi OCR đọc nhầm lề/vết bẩn trên bản scan.
+_DAU_RAC = set("~¬^`|¦¤°¨´ˆ˜•·")
+
+
+def _la_cum_rac(tok):
+    """Cụm toàn dấu có phải rác OCR không. "--", "——", "..": gạch/chấm thật của
+    văn bản — giữ. ".~.", "..—", "¬—-": rác — bỏ. ")." hay "," + ")" là dấu câu
+    bị OCR tách rời khỏi chữ — cũng giữ, mất chúng câu đọc sai nghĩa."""
+    chars = set(tok)
+    if len(chars) == 1:
+        return False
+    if chars & _DAU_RAC:
+        return True
+    return len(tok) >= 3 and chars <= set(".-—–_,;:")
+
+
+def lam_sach_trich(text):
+    """Đoạn trích hiện ở panel nguồn: bỏ mốc [Trang n], ký tự vô hình, cụm dấu
+    rác, dòng chấm điền tay "......" (→ "…").
+
+    Người đọc thấy ".~. ..— MẪU HỢP ĐỒNG" trong ô "căn cứ" thì mất tin cả nguồn
+    tốt bên cạnh (phản hồi 06/09/2026). Chỉ làm sạch BẢN HIỆN; nội dung đưa
+    cho model và lưu kho vẫn nguyên.
+    """
+    s = _RE_KY_TU_VO_HINH.sub("", text or "")
+    s = _RE_TRANG_MOC.sub(" ", s)
+    s = _RE_CHAM_DAI.sub("… ", s)
+    s = _RE_CUM_DAU.sub(lambda m: " " if _la_cum_rac(m.group(1)) else m.group(1), s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _trang_cua_doan(content):
+    """'3' hoặc '1–2' từ các mốc [Trang n] trong đoạn; None nếu không có mốc."""
+    so = [int(x) for x in _RE_TRANG_MOC.findall(content or "")]
+    if not so:
+        return None
+    return str(so[0]) if so[0] == so[-1] else f"{so[0]}–{so[-1]}"
+
+
+_TIEN_TO_LOAI = (("[Tóm tắt file: ", "attachment", True),
+                 ("[File: ", "attachment", False))
+
+
+def phan_loai_nguon(c):
+    """(kind, attachment_name, is_summary) của một chunk.
+
+    Ưu tiên `kind` gắn sẵn (get_temp_context, _can_cu_nguoi_dung_dan); còn lại
+    đoán từ tiền tố tiêu đề để đường cũ — tin nhắn lưu từ trước, test — vẫn ra
+    đúng loại. Mặc định: tài liệu trong kho.
+    """
+    kind = c.get("kind")
+    if kind:
+        return kind, c.get("attachment_name"), bool(c.get("is_summary"))
+    title = c.get("title") or ""
+    for tien_to, loai, tom_tat in _TIEN_TO_LOAI:
+        if title.startswith(tien_to) and title.endswith("]"):
+            return loai, title[len(tien_to):-1], tom_tat
+    if title == NGUOI_DUNG_DAN_TITLE:
+        return "user_provided", None, False
+    return "document", None, False
 
 
 def format_sources(chunks):
     """Nguồn kiểm chứng đủ để mở đúng đoạn, không chỉ là tên file chung chung."""
     out = []
     for i, c in enumerate(chunks, 1):
-        quote = re.sub(r"\s+", " ", (c.get("content") or "")).strip()
+        kind, ten_file, tom_tat = phan_loai_nguon(c)
+        noi_dung = c.get("content") or ""
+        quote = lam_sach_trich(noi_dung)
         # Không đổ chữ OCR hỏng vào panel trích dẫn: người đọc thấy một khối ký
         # tự vô nghĩa được gọi là "căn cứ" thì mất tin cả những nguồn tốt bên cạnh.
         if looks_like_ocr_garbage(quote):
@@ -2362,15 +2680,21 @@ def format_sources(chunks):
         title = c.get("title") or "(không tiêu đề)"
         if (c.get("client_name") or "").strip():
             title = f"[KH: {c['client_name'].strip()}] {title}"
+        # File đính kèm không có page_number riêng — lấy từ mốc [Trang n] mà
+        # bộ đọc PDF/OCR để lại trong đoạn. Kho tài liệu đã có cột riêng, không đè.
+        page = c.get("page_number")
+        if page is None and kind == "attachment":
+            page = _trang_cua_doan(noi_dung)
         out.append({
-            "n": i, "kind": "document", "chunk_id": c.get("chunk_id"),
+            "n": i, "kind": kind, "chunk_id": c.get("chunk_id"),
+            "attachment_name": ten_file, "is_summary": tom_tat,
             "title": title,
             "doc_type": c.get("doc_type"),
             "client_name": c.get("client_name"),
             "document_id": c.get("document_id"),
             "drive_file_id": c.get("drive_file_id"),
             "source_version": c.get("source_version"),
-            "page_number": c.get("page_number"),
+            "page_number": page,
             "section_title": c.get("section_title"),
             "source_locator": c.get("source_locator"),
             # Danh tính + hiệu lực văn bản pháp lý — ngày đổi sang chuỗi ISO vì
@@ -2491,8 +2815,38 @@ def relevant_sources(text, evidence):
     if any(e.get("kind") == "system" for e in evidence):
         return evidence
     cited = {int(n) for n in re.findall(r"\[Nguồn\s*(\d+)\]", text or "")}
-    kept = [e for e in evidence
-            if e.get("n") in cited or float(e.get("score") or 0) >= 0.5]
+    # Lời nhắn cho model (file chưa kịp tóm tắt) không phải căn cứ — bỏ hẳn.
+    evidence = [e for e in evidence if e.get("kind") != "notice"]
+
+    # File đính kèm / đoạn người dùng dán: điểm 1.0 nghĩa là "người dùng đưa cho
+    # bot", không phải độ liên quan — giữ theo ngưỡng điểm thì 55 đoạn của một
+    # file PDF lọt hết xuống panel (phản hồi 06/09/2026). Chỉ giữ đoạn được
+    # trích dẫn thật.
+    kept, file_da_hien = [], set()
+    for e in evidence:
+        kind = e.get("kind") or "document"
+        if e.get("n") in cited:
+            kept.append(e)
+            if kind == "attachment":
+                file_da_hien.add(e.get("attachment_name"))
+        elif kind not in ("attachment", "user_provided") \
+                and float(e.get("score") or 0) >= 0.5:
+            kept.append(e)
+
+    # File không được dẫn dòng nào (tóm tắt thường không đánh số nguồn) vẫn
+    # hiện MỘT lần để người đọc biết bot đã đọc file đó — ưu tiên bản tóm tắt.
+    for e in evidence:
+        ten = e.get("attachment_name")
+        if e.get("kind") != "attachment" or not ten or ten in file_da_hien:
+            continue
+        dai_dien = next((x for x in evidence
+                         if x.get("kind") == "attachment"
+                         and x.get("attachment_name") == ten
+                         and x.get("is_summary")), e)
+        kept.append(dai_dien)
+        file_da_hien.add(ten)
+
+    kept.sort(key=lambda e: e.get("n") or 0)
     return kept or evidence
 
 
@@ -2746,6 +3100,7 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
                              timings=timings, llm_stats=llm_stats)
         text, grounding_status = validate_grounding(
             text, chunks, p["answer_mode"], p["strict_grounding"], channel)
+        text = _canh_bao_kho_thieu(text, p.get("van_ban_thieu"))
         timings["ai_ms"] = latency
         timings.update({k: v for k, v in llm_stats.items()
                         if k in ("prompt_tokens", "gen_tokens", "load_ms",
@@ -2878,6 +3233,7 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
                              timings=timings, llm_stats=llm_stats)
     text, grounding_status = validate_grounding(
         reviewed, chunks, p["answer_mode"], p["strict_grounding"], channel)
+    text = _canh_bao_kho_thieu(text, p.get("van_ban_thieu"))
     if text != raw_text:
         # Giao diện thay toàn bộ nội dung đã stream khi bot đọc lại chỉnh câu
         # trả lời, hoặc khi bộ kiểm chứng bỏ citation giả/chặn câu không nguồn.

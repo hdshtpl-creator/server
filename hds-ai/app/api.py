@@ -1074,7 +1074,7 @@ def review_content_put(doc_id: int, body: ContentIn, user=Depends(current_user))
     title, doc_type, access_level, client_id, department_id = doc
     extraction = ExtractionResult(text=text, format="manual", method="manual_edit",
                                   warnings=[], metadata={})
-    pieces = split_document_with_metadata(extraction, doc_type)
+    pieces = split_document_with_metadata(extraction, doc_type, ten_file=title)
     if not pieces:
         raise HTTPException(422, "Không chia được nội dung thành đoạn")
     pieces = apply_context_headers(pieces, title, doc_type,
@@ -1101,7 +1101,7 @@ def review_content_put(doc_id: int, body: ContentIn, user=Depends(current_user))
             # lên số hiệu người duyệt đã gõ tay là xoá lặng lẽ công của họ —
             # mà quan hệ văn bản khoá theo số hiệu nên mất số là đứt hết liên kết.
             if doc_type in ("law", "an_le", "ban_an"):
-                vb_meta = van_ban.boc_metadata(text)
+                vb_meta = van_ban.boc_metadata(text, ten_file=title)
                 cot = [(c, vb_meta.get(c)) for c in
                        ("so_hieu", "loai_van_ban", "trich_yeu",
                         "ngay_ban_hanh", "ngay_hieu_luc")
@@ -1187,7 +1187,7 @@ def review_approve(doc_id: int, body: LabelIn, user=Depends(current_user)):
             # Văn bản luật vừa được duyệt có thể chính là bản thay thế một văn
             # bản đang trong kho (hoặc ngược lại) — soi lại trạng thái đôi bên.
             if body.doc_type in ("law", "an_le", "ban_an"):
-                cur.execute("SELECT so_hieu FROM documents WHERE id=%s", (doc_id,))
+                cur.execute("SELECT so_hieu, title FROM documents WHERE id=%s", (doc_id,))
                 row = cur.fetchone()
                 if not (row and row[0]):
                     # Tài liệu nạp với nhãn khác (mặc định 'other') rồi người
@@ -1201,7 +1201,7 @@ def review_approve(doc_id: int, body: LabelIn, user=Depends(current_user)):
                                             ORDER BY chunk_index LIMIT 4) t""",
                                 (doc_id,))
                     noi_dung = (cur.fetchone() or [None])[0] or ""
-                    vb_meta = van_ban.boc_metadata(noi_dung)
+                    vb_meta = van_ban.boc_metadata(noi_dung, ten_file=(row[1] if row else None))
                     cot = [(c, vb_meta.get(c)) for c in
                            ("so_hieu", "loai_van_ban", "trich_yeu",
                             "ngay_ban_hanh", "ngay_hieu_luc")

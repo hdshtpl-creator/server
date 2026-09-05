@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { ChangePasswordModal } from './auth/ChangePasswordModal';
 import { ROLE_META, canAccessAdmin, isClientRole } from '../constants';
+import { BUILD_ID } from '../banMoi';
 import {
   MessageSquare,
   ShieldCheck,
@@ -108,7 +109,7 @@ export const Header: React.FC = () => {
           )}
 
           {/* Thương hiệu */}
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-3 shrink-0" title={`Bản giao diện ${BUILD_ID}`}>
             <div className="bg-white rounded px-2 py-1 flex items-center gap-1.5 shadow-sm border border-hds-gold/70">
               <span className="text-hds-navy text-lg font-black tracking-tight leading-none">
                 HDS
@@ -407,6 +408,11 @@ export const Header: React.FC = () => {
                   <p className="text-[11px] opacity-80">
                     Backend xác thực bằng JWT, quyền hạn lấy từ token nên không thể đổi vai bằng
                     cách sửa header.
+                  </p>
+                  <p className="text-[11px] opacity-80">
+                    Bản giao diện đang chạy:{' '}
+                    <span className="font-mono font-bold">{BUILD_ID}</span> — khác với bản vừa
+                    deploy thì bấm Ctrl+Shift+R để tải lại bỏ cache.
                   </p>
                 </div>
               </div>

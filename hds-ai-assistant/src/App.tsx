@@ -1,6 +1,7 @@
 import React from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/Header';
+import { BanMoiBanner } from './components/BanMoiBanner';
 import { ToastContainer } from './components/ToastContainer';
 import { ChatLayout } from './components/chat/ChatLayout';
 import { AdminLayout } from './components/admin/AdminLayout';
@@ -49,6 +50,8 @@ const MainContent: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-hds-soft dark:bg-slate-950 flex flex-col text-slate-900 dark:text-slate-100 font-sans antialiased">
+      {/* Deploy bản mới mà tab này còn chạy bản cũ → dải vàng mời tải lại */}
+      <BanMoiBanner />
       <Header />
       <div className="flex-1 flex flex-col min-h-0">
         {showAdmin ? (

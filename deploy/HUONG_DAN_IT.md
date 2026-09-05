@@ -299,6 +299,30 @@ phục vụ). Máy chỉ tự đánh dấu chiều xấu đi (hết hiệu lực
 "còn hiệu lực" là xác nhận tay của người duyệt trong nút **Chi tiết** ở
 Kho tri thức, và giá trị người đặt tay không bị máy ghi đè.
 
+**Bài học 06/09/2026 — backfill chưa từng được chạy.** Kiểm kho thấy 65/65 văn
+bản luật `so_hieu = NULL`, bảng quan hệ trống, đoạn vẫn khuôn cũ: toàn bộ cơ chế
+hiệu lực đứng im một tuần mà không ai biết. `update.sh` nay **đếm và nhắc** khi
+còn văn bản luật thiếu danh tính. Lần này chạy **bắt buộc cả `--lam-lai-doan`**:
+nhãn đoạn cũ mang số hiệu SAI (Nghị định 96/2026 bị gắn "Nghị Định số
+63/2025/QH15", Luật 143/2025 bị gắn "203/2025/QH15") — bot "bịa số hiệu" thực
+ra là chép đúng nhãn sai này. Chỉ cắt lại đoạn mới sửa được.
+
+**Tên file là danh tính.** File .docx tải từ thuvienphapluat/chinhphu.vn không
+có dòng "Số: …" ở đầu, nên số hiệu được lấy **ưu tiên từ tên file**. Đặt tên
+theo một trong hai khuôn, hệ thống tự đọc số hiệu, loại, và ngày ban hành:
+
+| Khuôn | Ví dụ | Hệ thống hiểu |
+|---|---|---|
+| `<Loại>-<số>-<năm>-<ký hiệu>` | `Nghị-định-96-2026-NĐ-CP.docx` | Nghị định số 96/2026/NĐ-CP |
+| `<số>-<năm>-<ký hiệu>_ddmmyyyy` | `58-2026-ND-CP_13022026.pdf` | Nghị định số 58/2026/NĐ-CP, ban hành 13/02/2026 |
+| Không có năm | `09-CD-TTg_03022025.pdf`, `Văn-bản-hợp-nhất-67-VBHN-VPQH.docx` | 09/CĐ-TTg; 67/VBHN-VPQH (giữ thêm số luật gốc đọc trong chữ) |
+
+Tên kiểu "Luat DN moi.docx" thì hệ thống chỉ còn dựa vào chữ trong văn bản —
+đúng khi file có dòng "Số:", còn không thì văn bản vô danh. Kho đang có hai bản
+Bộ luật Dân sự (`.docx` và `.doc` cùng tên) và hai bản Luật Doanh nghiệp (bản
+gốc + văn bản hợp nhất 67/VBHN-VPQH): chúng chiếm chỗ top-k của nhau — nên giữ
+một bản cho mỗi văn bản (với luật đã sửa đổi, giữ bản hợp nhất).
+
 ### 4.6 Đẩy tài liệu từ máy cá nhân lên kho (qua SSH)
 
 Ngoài ổ mạng Samba (4.2), có thể đẩy thẳng qua SSH — tiện khi IT nạp một lô lớn.
@@ -490,6 +514,16 @@ Gặp lỗi:
 | `Backend test thất bại` | chạy tay `cd hds-ai && .venv/bin/python -m unittest discover -s tests -v`; cần thì `git checkout <commit cũ>` rồi update lại |
 | `Build frontend thất bại` | giao diện cũ vẫn đang được phục vụ; xem log npm |
 | `Backend lỗi` | `journalctl -u hds-ai-backend -n 40 --no-pager` |
+
+### Update xong mà người dùng bảo "vẫn lỗi cũ"
+
+Gần như luôn là **trình duyệt còn chạy bản cũ**, không phải mã chưa lên. Tab mở sẵn từ trước không tải gì cả; tab mở mới vẫn có thể lấy `index.html` trong cache (Cloudflare gắn `max-age` 4 giờ cho file JS). Từ 06/09/2026 có ba lớp chống:
+
+1. **nginx** trả `Cache-Control: no-cache` cho `index.html` (update.sh tự chèn vào cấu hình cũ) — mở tab mới là thấy bản mới.
+2. **Dải vàng "HDS AI vừa có bản cập nhật — Tải lại ngay"** tự hiện trên tab đang mở: giao diện cứ 5 phút và mỗi lần quay lại tab lại đối chiếu tên bundle với `index.html` trên máy chủ.
+3. **Dấu bản build** in ở chân khung chat (`HDS Law Firm — … · a1b2c3d-0609.0227`), tooltip logo và hộp *Cấu hình kết nối*. `update.sh` in cùng dấu đó (`Đã build bản …`). Hai dấu khác nhau → bấm **Ctrl+Shift+R**.
+
+Ảnh chụp lỗi mà cả thanh địa chỉ lẫn DevTools cũng mờ là mờ ở tầng máy/công cụ chụp — trang web không thể làm mờ khung trình duyệt.
 
 ---
 
@@ -774,6 +808,7 @@ Ba script đầu **chỉ đọc, không sửa gì**, chạy lúc nào cũng an t
 | **Đăng nhập được nhưng hỏi AI lỗi** | `curl -s http://localhost:11434/api/tags` — Ollama tắt hoặc chưa `ollama pull` |
 | **Chậm / lỗi 524** | `bash deploy/kiem-tra-toc-do.sh` |
 | **Chữ hiện một cục thay vì chảy dần** | `grep -n "proxy_buffering" /etc/nginx/sites-available/hds-ai` — thiếu thì thêm `proxy_buffering off;` vào `location /api/` |
+| **Update xong mà "vẫn lỗi cũ"** | So dấu bản build ở chân khung chat với dòng `Đã build bản …` của update.sh; khác nhau → Ctrl+Shift+R (mục 6) |
 | **Bot không trả lời từ bất kỳ tài liệu nào** | `sudo bash deploy/kiem-tra-vector.sh` |
 | **Tài liệu có nhưng bot không dùng** | Xem **Quản trị → Duyệt nhãn tài liệu** — gần như luôn là chưa duyệt |
 | **File trong kho không được học** | **Quản trị → Kho tài liệu đã học** → thẻ đỏ/vàng, kèm lý do từng file |

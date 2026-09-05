@@ -1340,8 +1340,11 @@ def clean(text: str) -> str:
 RE_DIEU = re.compile(r"^\s*(Điều\s+\d+[a-z]?)\s*[.:]?", re.MULTILINE | re.IGNORECASE)
 
 
-def document_citation(text: str) -> str:
+def document_citation(text: str, ten_file=None) -> str:
     """Đọc SỐ HIỆU VĂN BẢN ở đầu văn bản luật, ví dụ 'Thông tư 01/2021/TT-BXD'.
+
+    ``ten_file``: tên file gốc — với bản .docx không có dòng "Số: …", đó là
+    nơi duy nhất có số hiệu đúng (xem van_ban.danh_tinh_tu_ten_file).
 
     Không có dòng này thì mọi đoạn cắt ra đều là 'Điều 5' trơ trọi — người đọc
     không biết Điều 5 của văn bản nào, và câu trả lời của bot không dẫn nguồn
@@ -1355,7 +1358,7 @@ def document_citation(text: str) -> str:
     — van_ban.trich_dan bóc thêm trích yếu khi tìm được; logic cũ giữ làm
     lưới đỡ cho văn bản trình bày lạ.
     """
-    day_du = van_ban.trich_dan(text)
+    day_du = van_ban.trich_dan(text, ten_file=ten_file)
     if day_du:
         return day_du
     head = text[:4000]
@@ -1419,7 +1422,7 @@ def _page_at(text: str, position: int):
     return page
 
 
-def chunk_law_structured(text: str) -> list[ChunkPiece]:
+def chunk_law_structured(text: str, ten_file=None) -> list[ChunkPiece]:
     """Cắt văn bản luật theo ĐIỀU, giữ nguyên đường dẫn trích dẫn của từng điều.
 
     Mỗi đoạn trả về đều tự mang đủ thông tin để trích dẫn: số hiệu văn bản,
@@ -1429,7 +1432,10 @@ def chunk_law_structured(text: str) -> list[ChunkPiece]:
     Điều quá dài vẫn phải cắt nhỏ, nhưng mỗi phần đều lặp lại nhãn để không có
     mảnh nào mất danh tính.
     """
-    citation = document_citation(text)
+    # Word đặt từng Điều là Heading → "[Mục: Điều 6. …]" — mở nhãn ra, không
+    # thì RE_DIEU không thấy điều nào (xem van_ban.mo_nhan_muc).
+    text = van_ban.mo_nhan_muc(text)
+    citation = document_citation(text, ten_file=ten_file)
     marks = [(m.start(), m.group(1).strip()) for m in RE_DIEU.finditer(text)]
     if not marks:
         return [ChunkPiece(content=piece,
@@ -1778,8 +1784,12 @@ def client_display_name(client_id):
         return None
 
 
-def split_document_with_metadata(extraction: ExtractionResult, doc_type):
-    """Chia đoạn nhưng không làm mất trang/mục/sheet dùng cho trích dẫn chính xác."""
+def split_document_with_metadata(extraction: ExtractionResult, doc_type, ten_file=None):
+    """Chia đoạn nhưng không làm mất trang/mục/sheet dùng cho trích dẫn chính xác.
+
+    ``ten_file``: tên file gốc, để nhãn từng đoạn luật mang đúng số hiệu ngay cả
+    khi chữ trong văn bản không có dòng "Số: …" (xem document_citation).
+    """
     output = []
     # Văn bản luật phải được cắt trên TOÀN VĂN, không cắt theo từng trang PDF:
     # một Điều thường vắt qua hai trang, và Chương/Mục thì nằm cách đó vài chục
@@ -1787,7 +1797,7 @@ def split_document_with_metadata(extraction: ExtractionResult, doc_type):
     if doc_type == "law":
         full_text = clean(extraction.text)
         if full_text:
-            for piece in chunk_law_structured(full_text):
+            for piece in chunk_law_structured(full_text, ten_file=ten_file):
                 output.append(piece)
         return output
 
@@ -1821,7 +1831,7 @@ def ingest_file(path: Path, doc_type="other", access_level="internal", client_id
     print(f"  Trích xuất bằng {extraction.method}; {len(text):,} ký tự.")
     for warning in extraction.warnings:
         print(f"  [CẢNH BÁO] {warning}")
-    pieces = split_document_with_metadata(extraction, doc_type)
+    pieces = split_document_with_metadata(extraction, doc_type, ten_file=path.name)
     if not pieces:
         print("  [BỎ QUA] không chia được đoạn.")
         return None
@@ -1843,7 +1853,7 @@ def ingest_file(path: Path, doc_type="other", access_level="internal", client_id
     # None hết — KHÔNG thêm warning (warning làm safe_approved chặn duyệt).
     # Bản án/án lệ cũng có số hiệu theo cùng khuôn; quan hệ + hiệu lực thì
     # chỉ áp cho 'law' (van_ban.xu_ly_sau_hoc tự gác).
-    vb_meta = (van_ban.boc_metadata(text)
+    vb_meta = (van_ban.boc_metadata(text, ten_file=path.name)
                if doc_type in ("law", "an_le", "ban_an") else {})
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:

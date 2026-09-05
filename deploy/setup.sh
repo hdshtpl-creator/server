@@ -300,7 +300,9 @@ fi
 
 # ---------- 7. Build frontend ----------
 c_info "7/8  Build giao diện (npm)"
-run_as "cd '$FRONTEND_DIR' && { [ -f package-lock.json ] && npm ci || npm install; } && npm run build"
+# Dấu bản build in vào giao diện — xem giải thích trong deploy/update.sh.
+BUILD_ID="$(run_as "git -C '$REPO_ROOT' rev-parse --short HEAD" 2>/dev/null || echo tay)-$(date +%d%m.%H%M)"
+run_as "cd '$FRONTEND_DIR' && { [ -f package-lock.json ] && npm ci || npm install; } && VITE_BUILD_ID='$BUILD_ID' npm run build"
 [ -f "$FRONTEND_DIR/dist/index.html" ] || die "Build frontend thất bại — không thấy dist/index.html"
 c_ok "Đã build vào $FRONTEND_DIR/dist"
 
@@ -337,6 +339,17 @@ server {
         # sạch tác dụng của streaming. Tắt đệm để chữ tới trình duyệt ngay.
         proxy_buffering off;
         proxy_cache off;
+    }
+
+    # index.html KHÔNG cache: deploy xong là trình duyệt thấy ngay bản mới.
+    # File trong /assets/ có mã băm nội dung trong tên nên giữ được cả năm.
+    # (update.sh tự chèn khối này cho máy cài từ bản cũ — giữ hai bên khớp nhau.)
+    location = /index.html {
+        add_header Cache-Control "no-cache, must-revalidate";
+    }
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
     }
 
     # SPA: mọi đường dẫn khác trả về index.html để React tự định tuyến.

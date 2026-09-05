@@ -1594,9 +1594,15 @@ async function mockChatStream(payload, onEvent) {
 
   onEvent?.({
     type: 'meta',
+    // Đúng hình dạng máy chủ thật: nguồn kho có số hiệu/điểm khớp, file đính
+    // kèm có nhiều đoạn cùng tên (panel phải gom thành một thẻ), một đoạn bot
+    // đọc mà không dẫn (phải thu gọn dưới "Xem thêm").
     sources: [
-      { n: 1, title: 'Luật Doanh nghiệp số 59/2020/QH14 (Điều 12, Điều 15)', score: 0.94, document_id: 1, drive_file_id: '1AbCdEfGhIjKmock' },
-      { n: 2, title: 'Nghị định 01/2021/NĐ-CP về Đăng ký Doanh nghiệp', score: 0.89, document_id: 9 },
+      { n: 1, kind: 'document', title: 'Luật Doanh nghiệp số 59/2020/QH14', so_hieu: '59/2020/QH14', loai_van_ban: 'Luật', trich_yeu: 'Doanh nghiệp', section_title: 'Điều 12', score: 0.94, document_id: 1, drive_file_id: '1AbCdEfGhIjKmock', quote: 'Doanh nghiệp phải thông báo với Cơ quan đăng ký kinh doanh khi thay đổi một trong các nội dung sau: ngành, nghề kinh doanh; cổ đông sáng lập và cổ đông là nhà đầu tư nước ngoài…' },
+      { n: 2, kind: 'document', title: 'Nghị định 01/2021/NĐ-CP về Đăng ký Doanh nghiệp', so_hieu: '01/2021/NĐ-CP', loai_van_ban: 'Nghị định', section_title: 'Điều 15', score: 0.89, document_id: 9, quote: 'Trường hợp thay đổi nội dung đăng ký doanh nghiệp, doanh nghiệp nộp hồ sơ tới Phòng Đăng ký kinh doanh nơi doanh nghiệp đặt trụ sở chính…' },
+      { n: 3, kind: 'attachment', attachment_name: 'HĐ mua bán căn hộ 005_2024.pdf', title: '[File: HĐ mua bán căn hộ 005_2024.pdf]', page_number: '1–2', score: 1, quote: 'Điều 3. Thời hạn bàn giao: Bên bán bàn giao căn hộ cho Bên mua trong vòng 30 ngày kể từ ngày Bên mua thanh toán đủ đợt 3…' },
+      { n: 4, kind: 'attachment', attachment_name: 'HĐ mua bán căn hộ 005_2024.pdf', title: '[File: HĐ mua bán căn hộ 005_2024.pdf]', page_number: 3, score: 1, quote: 'Điều 7. Phạt vi phạm: Bên nào vi phạm nghĩa vụ thanh toán hoặc bàn giao phải chịu phạt 0,05%/ngày trên số tiền chậm…' },
+      { n: 5, kind: 'attachment', attachment_name: 'HĐ mua bán căn hộ 005_2024.pdf', title: '[File: HĐ mua bán căn hộ 005_2024.pdf]', page_number: 5, score: 1, quote: 'Điều 12. Giải quyết tranh chấp: hai bên thương lượng, không được thì đưa ra Toà án có thẩm quyền…' },
     ],
     used_method: null,
   });
@@ -1608,7 +1614,13 @@ async function mockChatStream(payload, onEvent) {
     'tới Cơ quan Đăng ký Kinh doanh trong thời hạn luật định [Nguồn 1].\n\n' +
     '**Căn cứ pháp lý:**\n' +
     '- khoản 1 Điều 12 Luật Doanh nghiệp số 59/2020/QH14 [Nguồn 1]\n' +
-    '- Điều 15 Nghị định 01/2021/NĐ-CP về Đăng ký Doanh nghiệp [Nguồn 2]\n\n' +
+    '- Điều 15 Nghị định 01/2021/NĐ-CP về Đăng ký Doanh nghiệp [Nguồn 2]\n' +
+    '- Điều 3 hợp đồng anh/chị đính kèm quy định thời hạn bàn giao 30 ngày [Nguồn 3]\n\n' +
+    '| Tiêu chí | Theo luật | Theo hợp đồng đính kèm |\n' +
+    '|---|---|---|\n' +
+    '| Thời hạn | 10 ngày làm việc [Nguồn 1] | 30 ngày [Nguồn 3] |\n' +
+    '| Cơ quan nhận | Phòng Đăng ký kinh doanh [Nguồn 2] | Không quy định |\n' +
+    '| Chế tài | Phạt hành chính | Phạt 0,05%/ngày [Nguồn 4] |\n\n' +
     '**Lưu ý thực tiễn:** cần rà soát biên bản họp và quyết định của Hội đồng ' +
     'thành viên trước khi nộp hồ sơ [Nguồn 2].\n\n' +
     '---\n' +

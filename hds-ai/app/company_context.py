@@ -1391,6 +1391,9 @@ _COMPOUND_NEXT = {
     "hang", "sach", "quy", "khoan", "dong", "khoa", "nhap", "hoi", "toan",
     "ninh", "hoat", "vien", "te", "sau", "truoc", "nay", "kia", "mot",
 }
+# Từ đứng NGAY TRƯỚC tên một tiếng biến nó thành từ ghép: thương MẠI, ngày MAI,
+# sáng MAI, hôm SAU/MAI, tương LAI… (bỏ dấu thì "mại" = "mai").
+_COMPOUND_PREV = {"thuong", "ngay", "sang", "chieu", "toi", "hom", "tuong", "sau"}
 
 # Cụm thời gian nuốt trọn tên người: "ngày mai", "sáng mai"… Bỏ đi trước khi dò.
 _TIME_PHRASES = ("ngay mai", "sang mai", "chieu mai", "toi mai", "mai mot",
@@ -1424,9 +1427,14 @@ def detect_staff_person(question, names) -> list[str]:
                 continue
             if len(name_tokens) == 1:
                 # Tên một tiếng: cần tín hiệu hồ sơ cá nhân và không được là
-                # nửa đầu của một từ ghép thông dụng.
+                # nửa đầu HAY nửa sau của một từ ghép thông dụng. "Luật Thương
+                # MẠI" bỏ dấu thành "mai" — 06/09/2026 câu hỏi về Luật Thương
+                # mại kéo nguyên bộ hồ sơ (CCCD, bằng đại học, HĐLĐ) của nhân
+                # viên Mai vào nguồn.
                 after = tokens[start + 1] if start + 1 < len(tokens) else ""
-                if not has_context or after in _COMPOUND_NEXT:
+                before = tokens[start - 1] if start > 0 else ""
+                if (not has_context or after in _COMPOUND_NEXT
+                        or before in _COMPOUND_PREV):
                     continue
             if name not in found:
                 found.append(name)

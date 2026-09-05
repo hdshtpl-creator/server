@@ -72,7 +72,7 @@ LOAI_QUAN_HE_VN = {
 # dẫn được là "Bản án số …".
 _LOAI = ("VĂN BẢN HỢP NHẤT", "BỘ LUẬT", "THÔNG TƯ LIÊN TỊCH", "PHÁP LỆNH",
          "NGHỊ ĐỊNH", "NGHỊ QUYẾT", "THÔNG TƯ", "QUYẾT ĐỊNH", "CHỈ THỊ",
-         "CÔNG VĂN", "BẢN ÁN", "LUẬT")
+         "CÔNG ĐIỆN", "CÔNG VĂN", "BẢN ÁN", "LUẬT")
 _LOAI_RX = "|".join(re.escape(x) for x in _LOAI)
 
 # Số hiệu văn bản QPPL: 45/2019/QH14, 15/2020/NĐ-CP, 01/2021/TT-BXD…
@@ -87,7 +87,77 @@ _RE_NGAY_SO = re.compile(r"ngày\s+(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})",
 # Số hiệu dạng KHÔNG có năm ở giữa: công văn (1234/BTC-TCT), quyết định cá biệt
 # (05/QĐ-UBND). Chỉ nhận sau chữ "Số:" — dạng này quá lỏng để quét tự do.
 _RE_SO_KHAC = re.compile(
-    r"\bS[ốô]\s*:?\s*(\d{1,5}\s*/\s*[A-ZĐ][A-ZĐ0-9\-]*(?:\s*/\s*[A-ZĐ][A-ZĐ0-9\-]*)?)")
+    r"\bS[ốô]\s*:\s*(\d{1,5}\s*/\s*[A-ZĐ][A-ZĐ0-9\-]*(?:\s*/\s*[A-ZĐ][A-ZĐ0-9\-]*)?)")
+
+# ---- Danh tính từ TÊN FILE ------------------------------------------------
+# Bản .docx tải từ thuvienphapluat/chinhphu.vn thường KHÔNG có dòng "Số: …":
+# phần đầu bắt đầu thẳng "NGHỊ ĐỊNH / Quy định chi tiết… / Căn cứ Luật … số
+# 63/2025/QH15". Kiểm 65 văn bản trong kho 06/09/2026: 9/15 văn bản cốt lõi
+# bóc từ chữ ra None, 2 bóc NHẦM số của văn bản dẫn chiếu, và nhãn đoạn cũ
+# ghi "Nghị Định số 63/2025/QH15" cho Nghị định 96/2026 — bot dẫn sai số hiệu
+# là chép đúng nhãn sai này. Tên file do người quản trị đặt ("Nghị-định-96-
+# 2026-NĐ-CP", "58-2026-ND-CP_13022026") lại mang đúng số hiệu, đôi khi cả
+# ngày ban hành — với văn bản luật, đó là nguồn danh tính đáng tin nhất.
+_RE_TEN_FILE_SO = re.compile(
+    r"(?<![\dA-Za-z])(\d{1,4})-(\d{4})-([A-ZĐ][A-ZĐ0-9]*(?:-[A-ZĐ][A-ZĐ0-9]*)*)")
+# Số hiệu không có năm ở giữa: "09-CD-TTg_03022025", "67-VBHN-VPQH".
+_RE_TEN_FILE_SO_KHONG_NAM = re.compile(
+    r"(?<![\dA-Za-z])(\d{1,5})-([A-ZĐ]{2,}[A-ZĐ0-9]*(?:-[A-ZĐ][A-ZĐa-z0-9]*)*)(?=[_.\s]|$)")
+_RE_TEN_FILE_NGAY = re.compile(r"_(\d{2})(\d{2})(\d{4})(?:\D|$)")
+# Tên file gõ không dấu ("ND-CP") → ký hiệu chuẩn ("NĐ-CP") để khoá quan hệ
+# khớp với số hiệu bóc từ chữ của văn bản khác.
+_ASCII_SANG_DAU = {"ND": "NĐ", "QD": "QĐ", "CD": "CĐ", "HDTP": "HĐTP",
+                   "HDND": "HĐND", "BKHDT": "BKHĐT", "BGDDT": "BGDĐT", "BTP": "BTP"}
+_LOAI_TU_TIEN_TO = (("van ban hop nhat", "Văn bản hợp nhất"), ("bo luat", "Bộ luật"),
+                    ("phap lenh", "Pháp lệnh"), ("nghi dinh", "Nghị định"),
+                    ("thong tu lien tich", "Thông tư liên tịch"), ("thong tu", "Thông tư"),
+                    ("nghi quyet", "Nghị quyết"), ("quyet dinh", "Quyết định"),
+                    ("chi thi", "Chỉ thị"), ("cong dien", "Công điện"), ("luat", "Luật"))
+_LOAI_TU_DUOI = (("VBHN", "Văn bản hợp nhất"), ("NĐ-CP", "Nghị định"), ("TTLT", "Thông tư liên tịch"),
+                 ("TT-", "Thông tư"), ("NQ-", "Nghị quyết"), ("QĐ-", "Quyết định"),
+                 ("CĐ-", "Công điện"), ("CT-", "Chỉ thị"), ("QH", "Luật"))
+
+
+def _chuan_ky_hieu(ky_hieu: str) -> str:
+    return "-".join(_ASCII_SANG_DAU.get(p, p) for p in ky_hieu.split("-"))
+
+
+def danh_tinh_tu_ten_file(ten_file) -> dict:
+    """{so_hieu, loai_van_ban, loai_tin_cay, ngay_ban_hanh} đọc từ tên file.
+
+    Không đọc được thì mọi khoá là None — KHÔNG raise. `loai_tin_cay`:
+    'tien_to' khi tên file mở đầu bằng loại ("Nghị-định-…"), 'duoi' khi chỉ
+    đoán từ ký hiệu ("…-NĐ-CP"); tiền tố là người đặt tay, đáng tin hơn chữ
+    trong văn bản; đuôi thì chỉ dùng khi chữ không nói gì.
+    """
+    out = {"so_hieu": None, "loai_van_ban": None, "loai_tin_cay": None,
+           "ngay_ban_hanh": None}
+    ten = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", (ten_file or "").strip())
+    if not ten:
+        return out
+    m = _RE_TEN_FILE_SO.search(ten)
+    if m:
+        out["so_hieu"] = f"{m.group(1)}/{m.group(2)}/{_chuan_ky_hieu(m.group(3).upper())}"
+    else:
+        m = _RE_TEN_FILE_SO_KHONG_NAM.search(ten)
+        if m:
+            out["so_hieu"] = f"{m.group(1)}/{_chuan_ky_hieu(m.group(2))}"
+    dau = _fold(ten).replace("-", " ").replace("_", " ")
+    for tien_to, loai in _LOAI_TU_TIEN_TO:
+        if dau.startswith(tien_to + " "):
+            out["loai_van_ban"], out["loai_tin_cay"] = loai, "tien_to"
+            break
+    if not out["loai_van_ban"] and out["so_hieu"]:
+        duoi = out["so_hieu"].split("/", 1)[1] if "/" in out["so_hieu"] else ""
+        duoi = duoi.split("/", 1)[-1] if duoi[:4].isdigit() else duoi
+        for ky, loai in _LOAI_TU_DUOI:
+            if duoi.startswith(ky) or (ky == "QH" and re.match(r"QH\d", duoi)):
+                out["loai_van_ban"], out["loai_tin_cay"] = loai, "duoi"
+                break
+    d = _RE_TEN_FILE_NGAY.search(ten)
+    if d:
+        out["ngay_ban_hanh"] = _lam_ngay(d.group(1), d.group(2), d.group(3))
+    return out
 
 # Dòng dẫn chiếu văn bản KHÁC — số hiệu trên các dòng này không bao giờ là số
 # hiệu của chính văn bản đang đọc.
@@ -95,6 +165,18 @@ _DONG_DAN_CHIEU = re.compile(r"^\s*(Căn\s+cứ|Theo\s+đề\s+nghị|Xét\s+đ�
                              r"Thực\s+hiện|Để\s+thực\s+hiện)\b", re.IGNORECASE)
 
 HEAD_CHARS = 4000       # cùng cửa sổ với document_citation — danh tính nằm ở đầu
+
+# Bộ đọc Word bọc đoạn kiểu Heading thành "[Mục: …]" (ingest._extract_docx).
+# Bộ luật Dân sự .docx đặt TỪNG ĐIỀU là Heading → "[Mục: Điều 6. Áp dụng tương
+# tự pháp luật]": bộ cắt theo Điều chỉ nhận 1/917 điều, cả Bộ luật thành 229
+# mảnh vô danh mang nhãn "Điều 274 — phần k/229" (kiểm kho 06/09/2026). Với
+# văn bản luật, nhãn Heading chỉ là cách trình bày — mở ra trước khi bóc/cắt.
+_RE_NHAN_MUC_WORD = re.compile(r"^[ \t]*\[Mục:\s*(.+?)\]\s*$", re.MULTILINE | re.IGNORECASE)
+
+
+def mo_nhan_muc(text: str) -> str:
+    """'[Mục: Điều 6. Áp dụng tương tự pháp luật]' → 'Điều 6. Áp dụng tương tự pháp luật'."""
+    return _RE_NHAN_MUC_WORD.sub(lambda m: m.group(1), text or "")
 
 
 def chuan_hoa_so_hieu(so: str) -> str:
@@ -155,20 +237,28 @@ _DUNG_TRICH_YEU = re.compile(
     r"Điều\s+\d|Chương\s+[IVXLCDM\d]|Số\s*:|_{3,}|-{3,})", re.IGNORECASE)
 
 
-def boc_metadata(text: str) -> dict:
+def boc_metadata(text: str, ten_file=None) -> dict:
     """Danh tính văn bản từ phần mở đầu + ngày hiệu lực từ điều khoản thi hành.
 
     Trả dict với các khoá: so_hieu, loai_van_ban, trich_yeu, ngay_ban_hanh,
     ngay_hieu_luc (date hoặc None). Không thấy gì thì mọi khoá là None —
     KHÔNG raise, KHÔNG warning.
+
+    ``ten_file`` (nếu có) là nguồn danh tính ƯU TIÊN cho số hiệu: xem chú
+    thích trên danh_tinh_tu_ten_file. Khi chữ trong văn bản nêu một số KHÁC
+    (văn bản hợp nhất: chữ mang số của luật gốc, tên file mang số VBHN) thì
+    số trong chữ giữ ở ``so_hieu_trong_van_ban`` để trích dẫn và ghi quan hệ
+    hợp nhất.
     """
-    text = text or ""
+    text = mo_nhan_muc(text or "")
     head = text[:HEAD_CHARS]
     out = {"so_hieu": None, "loai_van_ban": None, "trich_yeu": None,
            "ngay_ban_hanh": None, "ngay_hieu_luc": None}
 
-    # --- Số hiệu: ưu tiên dòng "Số: …" (chắc chắn là của CHÍNH văn bản) ---
-    m = re.search(r"\bS[ốô]\s*:?\s*(\d{1,4}\s*/\s*\d{4}\s*/\s*[A-ZĐ][A-ZĐ0-9\-]*)",
+    # --- Số hiệu: ưu tiên dòng "Số: …" (chắc chắn là của CHÍNH văn bản). Bắt
+    # buộc có dấu hai chấm: "Thông tư số 03/2021/TT-BKHĐT" giữa câu là văn bản
+    # KHÁC được nhắc tới (ca thật: Thông tư 55/2026 bị gán số 03/2021). ---
+    m = re.search(r"\bS[ốô]\s*:\s*(\d{1,4}\s*/\s*\d{4}\s*/\s*[A-ZĐ][A-ZĐ0-9\-]*)",
                   head)
     if not m:
         # Công văn / quyết định cá biệt không có năm ở giữa (1234/BTC-TCT).
@@ -177,13 +267,23 @@ def boc_metadata(text: str) -> dict:
         # MỘT VĂN BẢN KHÁC vào chính nó, mà quan hệ lại khoá theo số hiệu.
         m = _RE_SO_KHAC.search(head)
     if not m:
-        # Lưới cuối: quét tự do nhưng BỎ các dòng dẫn chiếu.
+        # Lưới cuối: quét tự do nhưng BỎ các dòng dẫn chiếu, và chỉ nhận số
+        # đứng GẦN ĐẦU DÒNG (dòng tiêu đề "Luật Doanh nghiệp số 59/2020/QH14").
+        # Số nằm sâu trong câu ("Thông tư này thay thế Thông tư số 03/2021/…")
+        # là văn bản KHÁC — ca thật 06/09/2026: Thông tư 55/2026 bị gán số
+        # 03/2021/TT-BKHĐT của thông tư nó thay thế.
         for line in head.split("\n"):
             if _DONG_DAN_CHIEU.match(line):
                 continue
             m = RE_SO_HIEU.search(line)
-            if m:
-                break
+            if not m:
+                continue
+            truoc = _c(line[:m.start()])
+            if m.start() > 25 or re.search(r"thay thế|bãi bỏ|sửa đổi|hướng dẫn|hợp nhất",
+                                           truoc):
+                m = None
+                continue
+            break
     if m:
         out["so_hieu"] = chuan_hoa_so_hieu(m.group(1))
 
@@ -270,6 +370,27 @@ def boc_metadata(text: str) -> dict:
             if pos > len(text) * 0.5:
                 out["ngay_hieu_luc"] = ngay
                 break
+
+    # --- Tên file: số hiệu thắng chữ; loại thắng khi là tiền tố đặt tay hoặc
+    # khi chữ chỉ đoán được giữa dòng; ngày ban hành bù khi chữ không có. ---
+    tf = danh_tinh_tu_ten_file(ten_file)
+    if tf["so_hieu"]:
+        if out["so_hieu"] and out["so_hieu"] != tf["so_hieu"]:
+            out["so_hieu_trong_van_ban"] = out["so_hieu"]
+        out["so_hieu"] = tf["so_hieu"]
+    if tf["loai_van_ban"]:
+        hop_nhat = tf["loai_van_ban"] == "Văn bản hợp nhất"
+        if hop_nhat:
+            # Loại hiển thị vẫn là loại của văn bản gốc ("Luật Doanh nghiệp…"),
+            # chỉ đánh dấu để trích dẫn ghi thêm "(văn bản hợp nhất …)".
+            out["hop_nhat"] = True
+            if not out["loai_van_ban"]:
+                out["loai_van_ban"] = tf["loai_van_ban"]
+        elif (not out["loai_van_ban"] or tf["loai_tin_cay"] == "tien_to"
+              or vi_tri is None):
+            out["loai_van_ban"] = tf["loai_van_ban"]
+    if not out["ngay_ban_hanh"] and tf["ngay_ban_hanh"]:
+        out["ngay_ban_hanh"] = tf["ngay_ban_hanh"]
     return out
 
 
@@ -278,7 +399,20 @@ def _c(s: str) -> str:
     return unicodedata.normalize("NFC", s or "").lower()
 
 
-def trich_dan(text: str) -> str:
+def _phan_so_hieu(meta: dict, so_hieu=None) -> list:
+    """Phần số hiệu của tên/trích dẫn. Văn bản hợp nhất: số của văn bản gốc
+    đứng trước, số VBHN trong ngoặc — đúng cách luật sư dẫn ("Luật Doanh
+    nghiệp số 59/2020/QH14 (văn bản hợp nhất 67/VBHN-VPQH)")."""
+    so = so_hieu or meta.get("so_hieu")
+    goc = meta.get("so_hieu_trong_van_ban")
+    if goc and so and goc != so:
+        return ["số " + goc, f"(văn bản hợp nhất {so})"]
+    if meta.get("hop_nhat") and so:
+        return [f"(văn bản hợp nhất {so})"]
+    return ["số " + so] if so else []
+
+
+def trich_dan(text: str, ten_file=None) -> str:
     """Trích dẫn đầy đủ theo chuẩn hành nghề: 'Bộ luật Lao động số 45/2019/QH14'.
 
     Đây là chuỗi được gắn vào TỪNG đoạn (nằm trong content, được embed) — vì
@@ -290,14 +424,13 @@ def trich_dan(text: str) -> str:
     (ingest.document_citation) còn dùng lưới đỡ cũ: một trích dẫn cụt kiểu
     "số 15/2020/NĐ-CP" trông như có kết quả nhưng lại chặn mất đường lùi.
     """
-    meta = boc_metadata(text)
+    meta = boc_metadata(text, ten_file=ten_file)
     if not meta["loai_van_ban"]:
         return ""
     parts = [meta["loai_van_ban"]]
     if meta["trich_yeu"] and len(meta["trich_yeu"]) <= 60:
         parts.append(meta["trich_yeu"])
-    if meta["so_hieu"]:
-        parts.append("số " + meta["so_hieu"])
+    parts += _phan_so_hieu(meta)
     return " ".join(parts).strip()
 
 
@@ -308,9 +441,7 @@ def ten_day_du(meta: dict, so_hieu=None) -> str:
         parts.append(meta["loai_van_ban"])
     if meta.get("trich_yeu"):
         parts.append(meta["trich_yeu"])
-    so = so_hieu or meta.get("so_hieu")
-    if so:
-        parts.append("số " + so)
+    parts += _phan_so_hieu(meta, so_hieu)
     return " ".join(parts).strip()
 
 
@@ -368,7 +499,7 @@ def boc_quan_he(text: str, so_hieu_minh=None) -> list:
     đứng trong cửa sổ ngay sau cụm động từ ("thay thế", "bãi bỏ", "sửa đổi,
     bổ sung một số điều của…") và có TÊN LOẠI văn bản đứng trước mới được nhặt.
     """
-    text = text or ""
+    text = mo_nhan_muc(text or "")
     head = text[:HEAD_CHARS]
     ra, da_co = [], set()
 
@@ -564,6 +695,11 @@ def xu_ly_sau_hoc(cur, doc_type: str, text: str, meta: dict):
     if doc_type != "law" or not (meta or {}).get("so_hieu"):
         return 0, 0
     quan_he = boc_quan_he(text, so_hieu_minh=meta["so_hieu"])
+    # Văn bản hợp nhất: tên file mang số VBHN, chữ mang số luật gốc → ghi quan
+    # hệ hợp nhất để tra "67/VBHN-VPQH là bản hợp nhất của luật nào".
+    goc = meta.get("so_hieu_trong_van_ban")
+    if goc and goc != meta["so_hieu"]:
+        quan_he.append({"loai": "hop_nhat", "so_hieu_dich": goc, "ten_dich": None})
     n_qh = ghi_quan_he(cur, meta["so_hieu"], ten_day_du(meta), quan_he)
     dich = [q["so_hieu_dich"] for q in quan_he if q.get("so_hieu_dich")]
     n_ha = cap_nhat_hieu_luc(cur, dich) if dich else 0

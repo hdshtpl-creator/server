@@ -87,7 +87,9 @@ def buoc_metadata(dry_run=False, doc_id=None, tat_ca=False):
         if not text.strip():
             print(f"  [{did}] {str(title)[:45]:45s} — KHÔNG CÓ CHỮ, bỏ qua")
             continue
-        meta = van_ban.boc_metadata(text)
+        # Tên file gốc là nguồn số hiệu đáng tin nhất (docx tải về không có
+        # dòng "Số: …"); file mất trên đĩa thì tiêu đề (= tên file bỏ đuôi).
+        meta = van_ban.boc_metadata(text, ten_file=(Path(spath).name if spath else title))
         if not meta.get("so_hieu") and not meta.get("loai_van_ban"):
             print(f"  [{did}] {str(title)[:45]:45s} — không bóc được gì ({nguon_chu})")
             continue
@@ -168,7 +170,7 @@ def buoc_lam_lai_doan(dry_run=False, doc_id=None):
             continue
         try:
             extraction = extract_text_with_metadata(path)
-            pieces = split_document_with_metadata(extraction, dtype)
+            pieces = split_document_with_metadata(extraction, dtype, ten_file=path.name)
             if not pieces:
                 print(f"  [{did}] {str(title)[:45]:45s} — không chia được đoạn")
                 continue

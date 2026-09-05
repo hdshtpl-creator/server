@@ -166,6 +166,13 @@ export interface Source {
   trang_thai_hieu_luc?: string | null;
   /** Tên văn bản đã thay thế/sửa đổi văn bản này (nếu có trong kho). */
   thay_the_boi?: string | null;
+  /** document (kho) · attachment (file đính kèm) · user_provided (dán vào chat)
+   *  · notice (lời nhắn cho model, không hiện) · system (dữ liệu vận hành). */
+  kind?: string;
+  /** Tên file đính kèm — các đoạn cùng tên gom thành một thẻ trong panel nguồn. */
+  attachment_name?: string | null;
+  /** Đoạn này là bản tóm tắt cả file (file dài), không phải trích nguyên văn. */
+  is_summary?: boolean;
 }
 
 export type GroundingStatus = 'grounded' | 'partial' | 'uncited' | 'insufficient' | string;

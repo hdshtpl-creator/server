@@ -470,7 +470,8 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
     print(f"     Trích xuất bằng {extraction.method}; {len(text):,} ký tự.")
     for warning in extraction.warnings:
         print(f"     [CẢNH BÁO] {warning}")
-    pieces = split_document_with_metadata(extraction, labels["doc_type"])
+    pieces = split_document_with_metadata(extraction, labels["doc_type"],
+                                          ten_file=path.name)
     if not pieces:
         error = ExtractionError("no_chunks", "Không chia được nội dung thành đoạn.",
                                 "Kiểm tra nội dung trích xuất trước khi học lại.")
@@ -502,7 +503,7 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
     # None, không warning, không chặn học. Quan hệ thay_thế/sửa_đổi ghi ở
     # van_ban.xu_ly_sau_hoc, khoá theo SỐ HIỆU nên sống qua vòng DELETE+INSERT
     # ngay bên dưới (documents.id đổi mỗi lần học lại là hành vi có sẵn).
-    vb_meta = (van_ban.boc_metadata(text)
+    vb_meta = (van_ban.boc_metadata(text, ten_file=path.name)
                if labels["doc_type"] in ("law", "an_le", "ban_an") else {})
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:

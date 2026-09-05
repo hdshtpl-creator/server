@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "hds-ai-assistant", "run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "preview-dist",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "hds-ai-assistant", "run", "preview", "--", "--port", "4173", "--strictPort"],
+      "port": 4173
     }
   ]
 }

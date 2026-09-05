@@ -21,7 +21,13 @@ interface Props {
   validSources?: Set<number>;
 }
 
-const CITE_RE = /\[\s*Nguồn\s+(\d+)\s*\]/gi;
+export const CITE_RE = /\[\s*Nguồn\s+(\d+)\s*\]/gi;
+
+/** Tách một dòng bảng markdown "| a | b |" thành ô, bỏ hai vạch biên. */
+const tachOBang = (line: string): string[] =>
+  line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+/** Dòng "|---|:--:|" ngăn tiêu đề với thân — không phải dữ liệu. */
+const laDongNgan = (cells: string[]) => cells.length > 0 && cells.every((c) => /^:?-{2,}:?$/.test(c));
 // **đậm** trước, *nghiêng* sau — thứ tự regex quyết định đúng sai.
 const BOLD_RE = /\*\*(.+?)\*\*/g;
 const ITALIC_RE = /(?<!\*)\*(?!\*)([^*\n]+)\*(?!\*)/g;
@@ -107,9 +113,53 @@ export const MessageMarkdown: React.FC<Props> = ({ text, onCitationClick, validS
     listItems = [];
   };
 
+  // Bảng markdown: model được dặn trả lời so sánh bằng bảng (7729476), nên
+  // renderer phải vẽ được bảng — không thì người đọc thấy một rừng vạch "|".
+  let tableRows: string[][] = [];
+  const flushTable = (key: string) => {
+    if (!tableRows.length) return;
+    const [head, ...body] = tableRows;
+    const cellCls = 'px-2.5 py-1.5 align-top border-b border-slate-100 dark:border-slate-800';
+    rendered.push(
+      <div key={key} className="my-2 overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+        <table className="min-w-full text-xs border-collapse">
+          <thead className="bg-slate-50 dark:bg-slate-800/70">
+            <tr>
+              {head.map((c, i) => (
+                <th key={i} className={`${cellCls} text-left font-semibold text-slate-800 dark:text-slate-100 border-b-slate-200 dark:border-b-slate-700`}>
+                  {renderInline(c, `${key}-h${i}`, onCitationClick, validSources)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {body.map((row, r) => (
+              <tr key={r} className="even:bg-slate-50/60 dark:even:bg-slate-800/30">
+                {head.map((_, i) => (
+                  <td key={i} className={cellCls}>
+                    {renderInline(row[i] ?? '', `${key}-r${r}c${i}`, onCitationClick, validSources)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>,
+    );
+    tableRows = [];
+  };
+
   blocks.forEach((line, idx) => {
     const key = `l${idx}`;
     const trimmed = line.trim();
+
+    if (trimmed.startsWith('|') && trimmed.length > 1) {
+      flushList(`${key}-tl`);
+      const cells = tachOBang(trimmed);
+      if (!laDongNgan(cells)) tableRows.push(cells);
+      return;
+    }
+    flushTable(`${key}-t`);
 
     // Gạch đầu dòng: -, ·, • và danh sách số "1." — gom vào một <ul>/<ol>.
     const bullet = trimmed.match(/^[-·•]\s+(.*)$/);
@@ -164,6 +214,7 @@ export const MessageMarkdown: React.FC<Props> = ({ text, onCitationClick, validS
     );
   });
   flushList('tail');
+  flushTable('tail-t');
 
   return <div className="text-sm leading-relaxed break-words">{rendered}</div>;
 };
