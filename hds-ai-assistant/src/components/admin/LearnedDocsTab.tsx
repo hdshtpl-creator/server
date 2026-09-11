@@ -7,6 +7,7 @@ import { BookOpen, Search, Filter, RefreshCw, Building2, Download, Eye, Info, Up
 import { DriveSyncStatusCard } from './DriveSyncStatusCard';
 import { UploadToKnowledgeModal } from './UploadToKnowledgeModal';
 import { DocumentDetailModal } from './DocumentDetailModal';
+import { KhoTaiLieuCard } from './KhoTaiLieuCard';
 import { HIEU_LUC_BADGE_CLASS, HIEU_LUC_LABELS } from '../../constants';
 
 export const LearnedDocsTab: React.FC = () => {
@@ -117,6 +118,10 @@ export const LearnedDocsTab: React.FC = () => {
 
       {/* Trạng thái đồng bộ Drive — file nào đã học, file nào chờ xử lý và vì sao */}
       <DriveSyncStatusCard />
+
+      {/* Cây thư mục thật của kho (cũng có ở Tổng quan) — người dùng tìm nó ở
+          tab này trước tiên, nên đặt cả hai nơi. */}
+      <KhoTaiLieuCard />
 
       {/* Tìm kiếm và lọc */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col md:flex-row items-stretch md:items-center gap-3 text-xs">

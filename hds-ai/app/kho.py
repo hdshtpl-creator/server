@@ -17,7 +17,10 @@ thư mục + learn_one) nên tài liệu nhận nhãn y như khi thả file vào
 import os
 import re
 import shutil
+import subprocess
+import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app import auto_learn, db
@@ -463,3 +466,95 @@ def tao_thu_muc(rel_cha: str, ten: str, user_id=None) -> dict:
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user_id, "kho_tao_thu_muc", None, None, {"path": rel_cua(moi, root)})
     return {"ok": True, "path": rel_cua(moi, root), "ten": ten}
+
+
+# ---------------------------------------------------------------------------
+# Quét lại cả kho từ giao diện (nút "Quét lại" trên thẻ trạng thái quét)
+# ---------------------------------------------------------------------------
+# Máy chủ không có lịch quét (hds-ai-quet-kho.timer chưa cài), nên ngoài SSH
+# đây là cách duy nhất để học file nhân viên thả qua Samba. Bộ quét chạy như
+# tiến trình con của backend (python -m app.local_learn, phiên riêng để sống
+# qua lúc backend khởi động lại), nhật ký ghi ra data/quet_kho.log; hai lượt
+# quét KHÔNG được chạy song song (cùng scanner, cùng bảng — bài học 07/09).
+_QUET: dict = {}
+
+
+def _log_quet() -> Path:
+    return library_root().parent / "quet_kho.log"
+
+
+def duoi_log(path: Path, n: int = 6) -> list:
+    """n dòng cuối có nghĩa của nhật ký (bỏ cảnh báo thư viện, dòng trống)."""
+    try:
+        data = path.read_bytes()[-8000:].decode("utf-8", "replace")
+    except OSError:
+        return []
+    bo = ("warnings.warn", "RequestsDependencyWarning", "urllib3")
+    lines = [l.rstrip() for l in data.splitlines()
+             if l.strip() and not any(x in l for x in bo)]
+    return lines[-n:]
+
+
+def la_lenh_quet(cmdline: bytes) -> bool:
+    """/proc/<pid>/cmdline là một bộ quét thật (không phải --dry-run)."""
+    return b"app.local_learn" in cmdline and b"--dry-run" not in cmdline
+
+
+def _tien_trinh_quet_khac():
+    """pid của bộ quét đang chạy ngoài tầm theo dõi (khởi động từ SSH/nohup)."""
+    proc_dir = Path("/proc")
+    if not proc_dir.is_dir():
+        return None
+    me = os.getpid()
+    for p in proc_dir.iterdir():
+        if not p.name.isdigit() or int(p.name) == me:
+            continue
+        try:
+            cmd = (p / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if la_lenh_quet(cmd):
+            return int(p.name)
+    return None
+
+
+def trang_thai_quet() -> dict:
+    """Đang quét không, ai khởi động, đuôi nhật ký; và kết quả lượt web gần nhất."""
+    q = _QUET
+    proc = q.get("proc")
+    if proc is not None:
+        rc = proc.poll()
+        if rc is None:
+            return {"dang_chay": True, "started_at": q["started_at"], "pid": proc.pid,
+                    "nguon": "web", "log_tail": duoi_log(q["log"]), "ket_thuc": None}
+        q["ket_thuc"] = {"started_at": q["started_at"],
+                         "finished_at": datetime.now(timezone.utc).isoformat(),
+                         "ma_thoat": rc, "log_tail": duoi_log(q["log"])}
+        q["proc"] = None
+        quen_dem()
+    pid = _tien_trinh_quet_khac()
+    if pid:
+        return {"dang_chay": True, "started_at": None, "pid": pid, "nguon": "ngoai",
+                "log_tail": duoi_log(_log_quet()), "ket_thuc": None}
+    return {"dang_chay": False, "started_at": None, "pid": None, "nguon": None,
+            "log_tail": [], "ket_thuc": q.get("ket_thuc")}
+
+
+def bat_dau_quet(user_id) -> dict:
+    if trang_thai_quet()["dang_chay"]:
+        raise LoiKho("Đang có một lượt quét chạy — đợi xong rồi bấm lại")
+    log = _log_quet()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    backend_dir = Path(__file__).resolve().parent.parent
+    with log.open("wb") as fh:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "app.local_learn"],
+            cwd=str(backend_dir), stdout=fh, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, start_new_session=True,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    started_at = datetime.now(timezone.utc).isoformat()
+    _QUET.update({"proc": proc, "started_at": started_at, "log": log,
+                  "user_id": user_id, "ket_thuc": None})
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user_id, "kho_quet", None, None, {"pid": proc.pid})
+    return {"ok": True, "pid": proc.pid, "started_at": started_at}

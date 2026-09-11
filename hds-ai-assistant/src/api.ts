@@ -471,6 +471,8 @@ export const hocFileKho = ApiJs.hocFileKho as (params: {
   auto_approve?: boolean;
 }) => Promise<KhoHocKetQua>;
 
+export const quetKho = ApiJs.quetKho as () => Promise<{ ok: boolean; pid: number; started_at: string }>;
+
 export const taoThuMucKho = ApiJs.taoThuMucKho as (params: {
   path?: string;
   ten: string;

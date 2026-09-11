@@ -1517,6 +1517,9 @@ def drive_sync_status(user=Depends(current_user)):
         # vốn chỉ là ảnh chụp lần quét cuối: file hỏng từ lần trước không được
         # quét lại (nội dung không đổi) nên sẽ vắng mặt ở đó và không ai biết.
         "failures": _open_ingest_failures(),
+        # Lượt quét đang chạy (bấm "Quét lại" trên web, hoặc ai đó chạy từ SSH)
+        # và kết quả lượt web gần nhất — thẻ trạng thái thăm dò mỗi 10 giây.
+        "quet": kho.trang_thai_quet(),
     }
 
 
@@ -1648,6 +1651,14 @@ def kho_hoc(body: KhoHocBody, user=Depends(current_user)):
     require_reviewer(user)
     return _kho_hoac_400(kho.hoc_file, body.path, user["id"],
                          auto_approve=bool(body.auto_approve))
+
+
+@app.post("/kho/quet")
+def kho_quet(user=Depends(current_user)):
+    """Khởi động bộ quét cả kho (python -m app.local_learn) chạy nền; chính
+    sách duyệt như mọi lượt quét thường (không cờ tự duyệt)."""
+    require_reviewer(user)
+    return _kho_hoac_400(kho.bat_dau_quet, user["id"])
 
 
 class KhoThuMucBody(BaseModel):

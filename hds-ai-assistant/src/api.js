@@ -773,6 +773,12 @@ export async function hocFileKho({ path, auto_approve = false }) {
   });
 }
 
+// POST /kho/quet — khởi động bộ quét cả kho chạy nền (theo dõi qua /drive/sync-status)
+export async function quetKho() {
+  if (useMockBackend) return { ok: true, pid: 0, started_at: new Date().toISOString() };
+  return request('/kho/quet', { method: 'POST' });
+}
+
 // POST /kho/thu-muc — tạo thư mục con trong kho
 export async function taoThuMucKho({ path = '', ten }) {
   if (useMockBackend) return { ok: true, path: path ? `${path}/${ten}` : ten, ten };

@@ -697,6 +697,26 @@ export interface DriveSyncStatus {
   last_run: DriveSyncRun | null;
   /** Lỗi tích luỹ, KHÁC last_run.error_items vốn chỉ là ảnh chụp lần quét cuối. */
   failures: IngestFailure[];
+  /** Lượt quét đang chạy / kết quả lượt bấm "Quét lại" gần nhất (POST /kho/quet). */
+  quet?: KhoQuetTrangThai | null;
+}
+
+export interface KhoQuetKetThuc {
+  started_at?: string | null;
+  finished_at?: string | null;
+  /** 0 = xong bình thường; khác 0 = bộ quét dừng vì chốt an toàn hoặc lỗi. */
+  ma_thoat: number;
+  log_tail: string[];
+}
+
+export interface KhoQuetTrangThai {
+  dang_chay: boolean;
+  started_at?: string | null;
+  pid?: number | null;
+  /** 'web' = bấm từ giao diện; 'ngoai' = ai đó chạy từ SSH. */
+  nguon?: 'web' | 'ngoai' | null;
+  log_tail?: string[];
+  ket_thuc?: KhoQuetKetThuc | null;
 }
 
 /* --------------------------------------------------------------

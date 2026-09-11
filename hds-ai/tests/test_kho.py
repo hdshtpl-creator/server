@@ -210,5 +210,33 @@ class LietKe(unittest.TestCase):
                     kho.cho_tai_len(thu_muc, ten)
 
 
+class QuetLai(unittest.TestCase):
+    def test_nhan_ra_lenh_quet(self):
+        self.assertTrue(kho.la_lenh_quet(b".venv/bin/python\x00-m\x00app.local_learn\x00"))
+        self.assertFalse(kho.la_lenh_quet(b"python\x00-m\x00app.local_learn\x00--dry-run\x00"))
+        self.assertFalse(kho.la_lenh_quet(b"bash\x00-c\x00tail -f /tmp/x.log\x00"))
+
+    def test_duoi_log_bo_canh_bao(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / "quet.log"
+            p.write_text("a\n\n/x/requests/__init__.py: RequestsDependencyWarning: urllib3\n"
+                         "  warnings.warn(\nb\nc\n", encoding="utf-8")
+            self.assertEqual(kho.duoi_log(p, n=2), ["b", "c"])
+            self.assertEqual(kho.duoi_log(Path(t) / "khong-co.log"), [])
+
+    def test_trang_thai_khi_khong_co_gi(self):
+        with unittest.mock.patch.object(kho, "_tien_trinh_quet_khac", lambda: None):
+            kho._QUET.clear()
+            tt = kho.trang_thai_quet()
+            self.assertFalse(tt["dang_chay"])
+            self.assertIsNone(tt["ket_thuc"])
+        with unittest.mock.patch.object(kho, "_tien_trinh_quet_khac", lambda: 4242):
+            tt = kho.trang_thai_quet()
+            self.assertTrue(tt["dang_chay"])
+            self.assertEqual((tt["pid"], tt["nguon"]), (4242, "ngoai"))
+            with self.assertRaises(kho.LoiKho):
+                kho.bat_dau_quet(1)
+
+
 if __name__ == "__main__":
     unittest.main()

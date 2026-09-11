@@ -473,6 +473,13 @@ cây thư mục `data/raw` trên máy chủ, đọc trực tiếp từ đĩa —
   Đặt `DATA_DA_GO` trong `.env` nếu muốn thùng đã gỡ nằm chỗ khác.
 - **Thư mục con**: tạo ngăn con trong thư mục đang xem (không đặt tên bắt đầu
   bằng `.` hoặc `~$`, không dùng `uploads`).
+- **Quét lại** (nút trên thẻ *Quét kho tài liệu trên máy chủ*, tab Kho tài liệu
+  đã học): khởi động `python -m app.local_learn` chạy nền ngay trên máy chủ —
+  học file mới thả qua Samba, nhận file đổi/đổi tên, báo file mất — với chính
+  sách duyệt thường (không cờ tự duyệt). Thẻ thăm dò mỗi 10 giây, hiện đuôi
+  nhật ký (`data/quet_kho.log`) và báo khi xong; cả kho 35.000 file mất
+  khoảng 10 phút. Không bao giờ chạy hai lượt song song: đang có lượt quét
+  (kể cả do IT chạy từ SSH) thì nút bị khoá.
 
 Mọi thao tác ghi vào `audit_log` (`kho_hoc`, `kho_go`, `kho_tao_thu_muc`).
 API tương ứng: `GET /kho/cay`, `GET /kho/tim`, `POST /kho/tai-len`, `POST

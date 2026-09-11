@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { DriveSyncStatus } from '../../types';
 import {
   RefreshCw,
+  ScanSearch,
   CloudOff,
   Clock,
   FilePlus2,
@@ -52,15 +53,17 @@ export const DriveSyncStatusCard: React.FC = () => {
   const [showSkipped, setShowSkipped] = useState(false);
   const [showFailures, setShowFailures] = useState(false);
   const [showMissing, setShowMissing] = useState(false);
+  const [dangBamQuet, setDangBamQuet] = useState(false);
+  const daChayRef = useRef(false);
 
-  const load = async () => {
-    setIsLoading(true);
+  const load = async (silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
       setStatus(await api.getDriveSyncStatus());
     } catch (err: any) {
-      showToast(err?.message || 'Không tải được trạng thái đồng bộ Drive.', 'error');
+      if (!silent) showToast(err?.message || 'Không tải được trạng thái đồng bộ Drive.', 'error');
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
@@ -68,6 +71,63 @@ export const DriveSyncStatusCard: React.FC = () => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Bộ quét chạy nền trên máy chủ (POST /kho/quet): trong lúc chạy, thăm dò
+  // trạng thái mỗi 10 giây; lúc xong thì báo và số liệu bên dưới đã là của
+  // lượt vừa rồi.
+  const quet = status?.quet ?? null;
+  const dangChay = Boolean(quet?.dang_chay);
+  useEffect(() => {
+    if (!dangChay) return;
+    const id = window.setInterval(() => load(true), 10000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dangChay]);
+  useEffect(() => {
+    if (daChayRef.current && !dangChay) {
+      const kt = quet?.ket_thuc;
+      if (kt && kt.ma_thoat !== 0) showToast('Lượt quét dừng với lỗi — xem dòng cuối nhật ký trong thẻ.', 'error');
+      else showToast('Quét kho xong.', 'success');
+    }
+    daChayRef.current = dangChay;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dangChay]);
+
+  const quetLai = async () => {
+    setDangBamQuet(true);
+    try {
+      await api.quetKho();
+      showToast('Đã khởi động lượt quét kho — theo dõi ngay tại đây.', 'info');
+      await load(true);
+    } catch (err: any) {
+      showToast(err?.message || 'Không khởi động được lượt quét.', 'error');
+    } finally {
+      setDangBamQuet(false);
+    }
+  };
+
+  const nutQuet = dangChay ? (
+    <span className="flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-50 dark:bg-blue-950 text-hds-blue dark:text-blue-300 font-semibold text-[11px] rounded-lg border border-blue-200 dark:border-blue-900">
+      <RefreshCw className="w-3 h-3 animate-spin" />
+      Đang quét
+      {quet?.started_at
+        ? ` từ ${new Date(quet.started_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`
+        : quet?.nguon === 'ngoai'
+          ? ' (khởi động từ máy chủ)'
+          : ''}
+      …
+    </span>
+  ) : (
+    <button
+      onClick={quetLai}
+      disabled={dangBamQuet}
+      title="Quét cả kho trên máy chủ ngay: học file mới thả vào, nhận file đổi/đổi tên, báo file mất"
+      className="flex items-center gap-1.5 px-3 py-1.5 bg-hds-navy hover:bg-hds-navy-light text-white font-bold text-[11px] rounded-lg transition-colors disabled:opacity-60"
+    >
+      {dangBamQuet ? <RefreshCw className="w-3 h-3 animate-spin" /> : <ScanSearch className="w-3 h-3" />}
+      Quét lại
+    </button>
+  );
 
   if (isLoading) {
     return (
@@ -84,17 +144,20 @@ export const DriveSyncStatusCard: React.FC = () => {
 
   if (!status?.configured) {
     return (
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex items-start gap-3 text-xs">
-        <CloudOff className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
-        <div>
-          <p className="font-bold text-slate-700 dark:text-slate-200">
-            Chưa quét kho tài liệu lần nào
-          </p>
-          <p className="text-slate-500 dark:text-slate-400 mt-0.5">
-            Chạy trên máy chủ: <code className="font-mono">bash deploy/hoc-tu-thu-muc.sh</code>, hoặc bật lịch 15 phút bằng{' '}
-            <code className="font-mono">sudo bash deploy/hoc-tu-thu-muc.sh --install-timer</code>.
-          </p>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex items-start justify-between gap-3 text-xs">
+        <div className="flex items-start gap-3">
+          <CloudOff className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold text-slate-700 dark:text-slate-200">
+              Chưa quét kho tài liệu lần nào
+            </p>
+            <p className="text-slate-500 dark:text-slate-400 mt-0.5">
+              Bấm <b>Quét lại</b> để bot đọc thư mục kho trên máy chủ, hoặc bật lịch 15 phút bằng{' '}
+              <code className="font-mono">sudo bash deploy/hoc-tu-thu-muc.sh --install-timer</code>.
+            </p>
+          </div>
         </div>
+        {nutQuet}
       </div>
     );
   }
@@ -118,17 +181,31 @@ export const DriveSyncStatusCard: React.FC = () => {
             <Clock className="w-3 h-3" />
             {run?.finished_at
               ? `Quét lần cuối: ${timeAgo(run.finished_at)} (${new Date(run.finished_at).toLocaleString('vi-VN')})`
-              : `Chưa quét lần nào — bot tự chạy mỗi 15 phút, hoặc chạy tay: bash deploy/${isDrive ? 'auto-learn.sh' : 'hoc-tu-thu-muc.sh'}`}
+              : 'Chưa quét lần nào — bấm Quét lại.'}
           </p>
         </div>
-        <button
-          onClick={load}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-[11px] rounded-lg transition-colors"
-        >
-          <RefreshCw className="w-3 h-3" />
-          Tải lại
-        </button>
+        {nutQuet}
       </div>
+
+      {/* Đuôi nhật ký lúc đang quét — thấy bộ quét đang ở file nào, không phải
+          nhìn vòng xoay mù mờ suốt 10 phút. */}
+      {dangChay && (quet?.log_tail?.length ?? 0) > 0 && (
+        <pre className="text-[10px] font-mono text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap max-h-24">
+          {quet!.log_tail!.slice(-3).join('\n')}
+        </pre>
+      )}
+      {!dangChay && quet?.ket_thuc && quet.ket_thuc.ma_thoat !== 0 && (
+        <div className="text-[11px] bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-200 border border-red-200 dark:border-red-900 rounded-lg px-3 py-2">
+          <p className="font-semibold">
+            Lượt quét vừa rồi dừng với lỗi (mã {quet.ket_thuc.ma_thoat}) — chưa ghi kết quả, số liệu bên dưới là của lượt trước.
+          </p>
+          {quet.ket_thuc.log_tail.length > 0 && (
+            <pre className="mt-1 text-[10px] font-mono whitespace-pre-wrap overflow-x-auto">
+              {quet.ket_thuc.log_tail.slice(-4).join('\n')}
+            </pre>
+          )}
+        </div>
+      )}
 
       {run && (() => {
         // Hai con số CHÍNH XÁC cho phần "chưa học được" — lấy từ counts.
