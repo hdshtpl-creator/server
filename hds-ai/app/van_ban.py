@@ -445,6 +445,50 @@ def ten_day_du(meta: dict, so_hieu=None) -> str:
     return " ".join(parts).strip()
 
 
+# Tên file bản án tải về từ cổng công bố: "01463_2112066_số 03 ngày 26022026
+# của Tòa án nhân dân khu vực 1 - Đồng Nai, tỉnh Đồng Nai (08.05.2026)" — mã
+# đánh số tải về đứng đầu, ngày tuyên dính liền, ngày đăng cổng trong ngoặc.
+_RE_MA_TAI_VE = re.compile(r"^\d{3,6}_\d{4,}_")
+_RE_NGAY_DINH = re.compile(r"\bngày\s+(\d{2})(\d{2})((?:19|20)\d{2})\b", re.IGNORECASE)
+_RE_NGAY_DANG = re.compile(r"\s*\(\d{2}\.\d{2}\.\d{4}\)\s*$")
+_RE_SO_DAU = re.compile(r"^số\s+\S+", re.IGNORECASE)
+
+
+def loai_ban_an(so_hieu=None, loai=None) -> str:
+    """'Bản án' / 'Quyết định' / 'Án lệ' — đọc ký hiệu trong số hiệu trước, vì
+    `loai_van_ban` bóc từ nội dung bản án hay trúng 'Bộ luật' ở dòng căn cứ."""
+    if loai in ("Bản án", "Quyết định", "Án lệ"):
+        return loai
+    s = (so_hieu or "").upper()
+    if s.endswith("/AL"):
+        return "Án lệ"
+    if "QĐ" in s or "QD" in s:
+        return "Quyết định"
+    return "Bản án"
+
+
+def ten_hien_thi_ban_an(title, so_hieu=None, loai=None) -> str:
+    """Tên pháp lý của bản án từ tên file tải về.
+
+    '01463_2112066_số 03 ngày 26022026 của TAND khu vực 1 - Đồng Nai (08.05.2026)'
+    → 'Bản án số 03/2026/KDTM-ST ngày 26/02/2026 của TAND khu vực 1 - Đồng Nai'.
+    Model đọc tên file nguyên xi thì chép luôn mã tải về vào câu trả lời
+    ("Bản án số 01463_2112066_số 03…", chạy thử 08/09/2026). Số hiệu lấy từ
+    metadata vì tên file mất dấu '/'. Tên không theo khuôn thì trả nguyên,
+    chỉ bỏ mã tải về nếu có."""
+    t = _RE_MA_TAI_VE.sub("", (title or "").strip())
+    t = _RE_NGAY_DANG.sub("", t)
+    t = _RE_NGAY_DINH.sub(r"ngày \1/\2/\3", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return title or ""
+    if _RE_SO_DAU.match(t):
+        if so_hieu:
+            t = _RE_SO_DAU.sub(lambda _m: f"số {so_hieu}", t, count=1)
+        t = f"{loai_ban_an(so_hieu, loai)} {t}"
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Quan hệ giữa các văn bản
 # ---------------------------------------------------------------------------

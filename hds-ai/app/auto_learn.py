@@ -95,6 +95,12 @@ AUTO_APPROVE = auto_approve_from_env()
 # chạy (AUTO_LEARN_APPROVE_PDF=1 bash deploy/hoc-tu-thu-muc.sh), đừng ghi vào
 # .env — xem decide_approval.
 APPROVE_PDF = _env_bool(os.getenv("AUTO_LEARN_APPROVE_PDF"), default=False)
+# Lô rất lớn (26 nghìn bản án 07/09/2026): bản tóm tắt mỗi tài liệu là một lượt
+# LLM ~8 giây — riêng bước này đã 2-3 ngày, trong khi tóm tắt chỉ hiện ở danh
+# sách Kho tài liệu (không dùng để tra cứu). Đặt trước lệnh chạy:
+#   AUTO_LEARN_BO_TOM_TAT=1 bash deploy/hoc-tu-thu-muc.sh
+# Đừng ghi vào .env — tài liệu lẻ nhân viên thả vào vẫn nên có tóm tắt.
+BO_TOM_TAT = _env_bool(os.getenv("AUTO_LEARN_BO_TOM_TAT"), default=False)
 try:
     MAX_DOWNLOAD_BYTES = int(os.getenv("DRIVE_MAX_DOWNLOAD_BYTES", str(MAX_SOURCE_BYTES)))
     if MAX_DOWNLOAD_BYTES <= 0:
@@ -498,7 +504,7 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
     diagnostics["was_live"] = bool(prev_approved)
     diagnostics["forced_review"] = (path.suffix.lower() == ".pdf")
     vecs = embed([piece.content for piece in pieces])
-    summary = summarize(text, title)
+    summary = "" if BO_TOM_TAT else summarize(text, title)
     # Danh tính văn bản pháp lý (số hiệu/loại/trích yếu/ngày) — bóc trượt trả
     # None, không warning, không chặn học. Quan hệ thay_thế/sửa_đổi ghi ở
     # van_ban.xu_ly_sau_hoc, khoá theo SỐ HIỆU nên sống qua vòng DELETE+INSERT

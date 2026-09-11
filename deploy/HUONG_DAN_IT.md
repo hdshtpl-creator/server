@@ -359,6 +359,40 @@ ssh pc@<IP máy chủ> "find ~/hds-ai-full/hds-ai/data/raw -type f | wc -l"
 
 Chép xong vẫn phải chạy bộ quét (4.3) thì bot mới học; tài liệu vào hàng chờ duyệt.
 
+**Cách 3 — thả cả lô vào một thư mục rồi để `nap-van-ban.sh` chia ngăn** (từ
+06/09/2026). Đỡ phải nhớ văn bản nào thuộc ngăn nào, và chặn ngay tên file không
+mang số hiệu — thứ sinh ra "văn bản vô danh" trong kho luật:
+
+```bash
+bash deploy/nap-van-ban.sh ~/van-ban-moi --dry-run   # xem sẽ vào ngăn nào
+bash deploy/nap-van-ban.sh ~/van-ban-moi             # chép + gọi bộ quét học luôn
+bash deploy/nap-van-ban.sh ~/van-ban-moi --khong-hoc # chép, để học sau
+```
+
+Nó đọc danh tính bằng chính hàm bộ học dùng (`van_ban.danh_tinh_tu_ten_file`),
+nên đặt tên đúng khuôn ở 4.5b là đủ. Tệp báo `✗` **không** được chép — sửa tên
+rồi chạy lại. Tệp trùng tên trong kho bị ghi đè và bot học lại bản mới, script
+cảnh báo trước khi làm.
+
+**Lô rất lớn (hàng nghìn file, ví dụ kho bản án 07/09/2026):** hai cờ đặt
+*trước* lệnh chạy, đừng ghi vào `.env`:
+
+```bash
+AUTO_LEARN_AUTO_APPROVE=1 AUTO_LEARN_APPROVE_PDF=1 AUTO_LEARN_BO_TOM_TAT=1 bash deploy/hoc-tu-thu-muc.sh
+```
+
+- `AUTO_LEARN_BO_TOM_TAT=1` bỏ bước tóm tắt bằng LLM (~8 giây/tài liệu; 26
+  nghìn bản án riêng bước này đã 2–3 ngày). Tóm tắt chỉ hiện ở danh sách Kho
+  tài liệu, không dùng để trả lời.
+- `AUTO_LEARN_APPROVE_PDF=1` (kèm `AUTO_LEARN_AUTO_APPROVE=1`) duyệt luôn cả
+  PDF — chỉ cho lô văn bản **công khai** (bản án đã công bố, văn bản luật),
+  tuyệt đối không cho hồ sơ khách. Không có cờ này thì 26 nghìn file rơi vào
+  hàng chờ duyệt tay.
+
+Tài liệu đã **gỡ** (`active=false`) nên chuyển file gốc ra ngoài kho
+(`hds-ai/data/_da_go/`): bộ quét không báo "mất tệp" cho tài liệu đã gỡ, nhưng
+file còn nằm trong kho thì lần quét sau nó học lại thành tài liệu mới.
+
 ### 4.7 Bộ quét nguồn văn bản trên mạng
 
 Từ 30/08/2026. Theo dõi vài trang nguồn đã chọn, tải file mới về đúng thư mục

@@ -164,8 +164,13 @@ def known_local_keys():
     """{danh tính: (doc_id, tiêu đề, checksum)} của tài liệu gắn với kho local."""
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
+            # Tài liệu đã GỠ (active=false: bản trùng, bản án mẫu đã xoá file)
+            # không tính là "đã biết": không báo "mất tệp" cho nó nữa, và nếu
+            # ai thả lại file cùng tên thì học như tài liệu mới — thay vì ghép
+            # vào bản ghi đã gỡ rồi nằm im không ai thấy (07/09/2026).
             cur.execute("""SELECT drive_file_id, id, title, checksum FROM documents
-                            WHERE drive_file_id LIKE %s""", (LOCAL_PREFIX + "%",))
+                            WHERE drive_file_id LIKE %s
+                              AND coalesce(active, true)""", (LOCAL_PREFIX + "%",))
             return {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
 
 

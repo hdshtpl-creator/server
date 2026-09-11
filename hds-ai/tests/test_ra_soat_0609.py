@@ -131,6 +131,27 @@ class VanBanThieuTrongKho(unittest.TestCase):
         self.assertEqual(["Bộ luật Lao động 2019"],
                          self._thieu("Bộ luật Lao động 2019 quy định gì?", kho))
 
+    def test_kho_da_backfill_khong_khop_yeu_nua(self):
+        """07/09/2026 — sau backfill, khớp yếu tắt nhầm cảnh báo.
+
+        "Bộ luật Tố tụng Dân sự 2015" trúng Bộ luật DÂN SỰ 91/2015 (cùng loại,
+        cùng năm) và "Luật Trọng tài Thương mại 2010" trúng bất kỳ văn bản nào
+        có chữ "luật" kèm 2010 trong đoạn — cả hai đều không có trong kho.
+        """
+        kho = [{"doc_type": "law", "so_hieu": "91/2015/QH13", "loai_van_ban": "Bộ luật",
+                "trich_yeu": "Dân sự", "title": "Bộ-luật-91-2015-QH13",
+                "content": "Điều 6. Áp dụng tương tự pháp luật…"}]
+        self.assertEqual(["Bộ luật Tố tụng Dân sự 2015"],
+                         self._thieu("tư cách đương sự theo Bộ luật Tố tụng Dân sự 2015", kho))
+        self.assertEqual([], self._thieu("Điều 6 Bộ luật Dân sự 2015", kho))
+
+    def test_nam_trong_noi_dung_khong_lam_kho_co_luat(self):
+        kho = [{"doc_type": "law", "so_hieu": "59/2020/QH14", "loai_van_ban": "Luật",
+                "trich_yeu": "Doanh nghiệp", "title": "Luật-59-2020-QH14",
+                "content": "Căn cứ Luật Trọng tài thương mại ngày 17 tháng 6 năm 2010…"}]
+        self.assertEqual(["Luật Trọng tài Thương mại 2010"], self._thieu(
+            "thỏa thuận trọng tài vô hiệu theo Luật Trọng tài Thương mại 2010", kho))
+
     def test_nguoi_dung_dan_dieu_luat_thi_coi_nhu_co(self):
         kho = [{"kind": "user_provided", "title": rag.NGUOI_DUNG_DAN_TITLE,
                 "content": DAN_DIEU_107}]

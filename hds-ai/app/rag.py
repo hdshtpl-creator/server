@@ -59,6 +59,38 @@ def _tokens(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]+", _fold(text)) if len(t) > 1}
 
 
+# Dòng tiêu đề điều luật ở đầu đoạn (sau nhãn [Văn bản — Chương — Điều n]):
+# "Điều 423. Hủy bỏ hợp đồng" — tên điều dừng ở xuống dòng hoặc "1." mở khoản.
+_RE_TIEU_DE_DIEU = re.compile(
+    r"^\s*(?:\[[^\]\n]*\]\s*)?Điều\s+(\d{1,4})[a-zA-Z]?\s*[.:]\s*"
+    r"(.{3,120}?)(?=\s+1\s*[.)]\s|\n|$)",
+    re.IGNORECASE | re.MULTILINE)
+_RE_SO_DIEU_HOI = re.compile(r"\bdieu\s+(\d{1,4})\b")
+
+
+def _diem_dieu_luat(item, qfold: str, so_dieu_hoi=()) -> float:
+    """1.0 khi câu hỏi gọi đúng TÊN ĐIỀU hoặc SỐ ĐIỀU của đoạn luật này.
+
+    Luật sư hỏi bằng thuật ngữ trùng tên điều: "so sánh hủy bỏ hợp đồng và đơn
+    phương chấm dứt thực hiện hợp đồng" là tên hai Điều 423 và 428 BLDS. Vector
+    xếp Điều 423 thứ 10 trong chính BLDS, sau các điều "chấm dứt" của hợp đồng
+    dịch vụ / vận chuyển / gia công (08/09/2026); từ khoá OR càng tệ vì "chấm
+    dứt" dày đặc khắp bộ luật. Tên điều nằm NGUYÊN trong câu hỏi là tín hiệu
+    mạnh và rẻ — "hủy bỏ hợp đồng do chậm thực hiện nghĩa vụ" (Điều 424) hay
+    "đơn phương chấm dứt thực hiện hợp đồng dịch vụ" (Điều 520) không nằm trong
+    câu nên không được thưởng. Chỉ gọi cho đoạn doc_type='law'.
+    """
+    m = _RE_TIEU_DE_DIEU.search((item.get("content") or "")[:400])
+    if not m:
+        return 0.0
+    if m.group(1) in so_dieu_hoi:
+        return 1.0
+    ten = _fold(m.group(2)).strip(" .;:,")
+    if len(ten) >= 8 and f" {ten} " in f" {qfold} ":
+        return 1.0
+    return 0.0
+
+
 def _title_coverage(qtokens: set, title: str | None) -> float:
     """Phần từ của câu hỏi xuất hiện trong TÊN tài liệu (0..1).
 
@@ -73,8 +105,11 @@ def _title_coverage(qtokens: set, title: str | None) -> float:
     return len(qtokens & ttokens) / len(qtokens)
 
 
-def _or_tsquery(question: str) -> str | None:
+def _or_tsquery(question: str, gioi_han: bool = True) -> str | None:
     """Chuỗi to_tsquery dạng 'sơ | yếu | ngân' cho lượt tìm từ khoá NỚI LỎNG.
+
+    `gioi_han=False`: bỏ trần độ dài câu — dùng khi phạm vi tìm đã khoanh vào
+    một vài văn bản (vài trăm đoạn), lúc đó OR không còn đắt.
 
     plainto_tsquery đòi khớp TẤT CẢ các từ — một chữ lệch chính tả là nhánh từ
     khoá chết cả lượt. Ca thật 19/08/2026: "sơ yếu LÍ lịch CỬA Ngân" (i ngắn +
@@ -88,10 +123,16 @@ def _or_tsquery(question: str) -> str | None:
     chỉ mục có dấu; fold ở đây là tự tay làm hỏng phép khớp.
     """
     tokens = re.findall(r"[0-9a-zà-ỹ]+", (question or "").lower())
-    tokens = [t for t in dict.fromkeys(tokens) if len(t) >= 2][:12]
-    if not tokens:
+    tokens = [t for t in dict.fromkeys(tokens)
+              if len(t) >= 2 and t not in _TU_PHO_THONG_OR]
+    # Chỉ dành cho câu tra cứu NGẮN ("sơ yếu lí lịch cửa Ngân"). Câu hỏi dài
+    # OR mười mấy từ là quét tuần tự cả kho rồi xếp theo số từ khớp được —
+    # gần 10 giây trên 540.000 đoạn (08/09/2026) mà không ra đoạn nào đáng
+    # giá hơn vector. "Điều 428 BLDS 2015 quy định gì" chỉ còn "428 | blds |
+    # 2015": đúng ba từ phân biệt, GIN trả về trong chớp mắt.
+    if not tokens or (gioi_han and len(tokens) > _OR_TOI_DA_TU):
         return None
-    return " | ".join(tokens)
+    return " | ".join(tokens[:12])
 
 
 def resolve_search_question(question, history=None, state=None) -> str:
@@ -170,11 +211,65 @@ def uu_tien_hieu_luc(items, san=None):
     return items
 
 
+# Trần thời gian (ms) cho nhánh từ khoá trong retrieve(); quá trần thì chỉ
+# còn vector. 4 giây đủ cho lượt AND thường (1–1,5 giây) và chặn lượt OR quét
+# cả kho (gần 10 giây) nếu nó lọt qua _or_tsquery.
+LEXICAL_TIMEOUT_MS = 4000
+# Lượt từ khoá NỚI LỎNG (OR) chỉ chạy cho câu ngắn — xem _or_tsquery.
+_OR_TOI_DA_TU = 8
+# Từ phổ thông bỏ khỏi lượt OR: có mặt trong đa số đoạn nên không phân biệt
+# được gì mà lại kéo cả kho vào xếp hạng (GIN bitmap của "hợp"/"đồng" là
+# 400.000 đoạn). Giữ dấu vì chỉ mục 'simple' lưu token có dấu.
+_TU_PHO_THONG_OR = frozenset("""
+và của các là có cho được về với để này đó những một từ khi đã sẽ bị do tại
+như thì mà hay hoặc gì nào bao nhiêu theo trong không người việc điều khoản
+điểm quy định luật bộ số năm hợp đồng công ty bên tôi xem giúp hỏi muốn cần
+biết nếu thế ra sao đến trên dưới ngày tháng phải vào lại còn đối hiện thực
+hành văn bản
+""".split())
+# Máy chủ có hnsw.iterative_scan (pgvector ≥ 0.8) không; None = chưa dò.
+_HNSW_LAP_HO_TRO = None
+
+
+def _chinh_hnsw(cur, candidate_k):
+    """Cho chỉ mục HNSW trả ĐỦ ứng viên trong phiên hiện tại.
+
+    hnsw.ef_search mặc định 40 → chỉ mục trả tối đa 40 đoạn dù LIMIT 300:
+    `candidate_k` là số ảo, bộ xếp hạng lại chỉ được chọn trong 40 đoạn gần
+    nhất của CẢ KHO (đo 08/09/2026 trên 540.000 đoạn: lượt vector trả 40
+    dòng; lọc theo kệ bản án chỉ còn 12 vì 33 trong 45 ứng viên bị lọc rớt).
+    iterative_scan (pgvector ≥ 0.8) để lượt có lọc theo kệ / RLS quét tiếp
+    cho đủ LIMIT thay vì trả về ít hơn. Máy chủ cũ không có tham số thì bỏ
+    qua êm — dò một lần cho cả tiến trình.
+    """
+    global _HNSW_LAP_HO_TRO
+    ef = max(40, min(int(candidate_k or 40), 1000))
+    try:
+        cur.execute("SAVEPOINT hnsw_cfg")
+        cur.execute(f"SET LOCAL hnsw.ef_search = {ef}")
+        if _HNSW_LAP_HO_TRO is not False:
+            cur.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+            _HNSW_LAP_HO_TRO = True
+        cur.execute("RELEASE SAVEPOINT hnsw_cfg")
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT hnsw_cfg")
+        if _HNSW_LAP_HO_TRO is None:
+            _HNSW_LAP_HO_TRO = False
+
+
 def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
              top_k=None, can_finance=False, doc_types=None, document_ids=None,
              candidate_k=None, max_per_document=None, query_vector=None,
-             neighbours=True):
+             neighbours=True, lexical=True):
     """Hybrid retrieval: vector + từ khoá chính xác rồi xếp hạng lại.
+
+    `lexical=False`: chỉ nhánh vector — cho các lượt tìm THÊM theo kệ sau khi
+    lượt chính đã chạy nhánh từ khoá (mỗi lượt từ khoá tốn 1–10 giây trên kho
+    540.000 đoạn, đo 08/09/2026). `lexical="or"`: bỏ lượt AND, chạy thẳng lượt
+    OR không trần độ dài — chỉ dùng khi `document_ids` đã khoanh vào vài văn
+    bản: trong BLDS, "so sánh hủy bỏ và đơn phương chấm dứt hợp đồng" xếp
+    Điều 423 (Hủy bỏ hợp đồng) thứ 10 theo vector, sau bốn điều "chấm dứt"
+    của hợp đồng dịch vụ/vận chuyển/gia công; từ khoá "hủy bỏ" mới kéo nó lên.
 
     RLS vẫn là ranh giới bảo mật. `document_ids` chỉ THU HẸP bộ nguồn người dùng
     đã chọn; nó không thể mở rộng quyền. Lấy nhiều ứng viên để mã hồ sơ/Điều luật
@@ -262,21 +357,32 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
     with db.session(role=level, client_id=client_id, dept_ids=dept_ids,
                     is_banqt=is_banqt, can_finance=can_finance) as conn:
         with conn.cursor() as cur:
+            _chinh_hnsw(cur, candidate_k)
             cur.execute(vector_sql, vector_params)
             rows = cur.fetchall()
-            try:
-                cur.execute(lexical_sql, lexical_params)
-                lex_rows = cur.fetchall()
-                if not lex_rows:
-                    or_query = _or_tsquery(question)
-                    if or_query:
-                        cur.execute(lexical_or_sql,
-                                    [or_query, qjson, *filter_params, candidate_k])
+            if lexical:
+                try:
+                    # Trần thời gian cho nhánh từ khoá: GIN với mười mấy từ
+                    # phổ thông ("hợp", "đồng", "và"…) trên 540.000 đoạn mất
+                    # hơn một giây, lượt OR quét tuần tự cả kho gần 10 giây
+                    # (đo 08/09/2026). Quá trần thì bỏ nhánh này — vector
+                    # vẫn đủ.
+                    cur.execute(f"SET LOCAL statement_timeout = {int(LEXICAL_TIMEOUT_MS)}")
+                    lex_rows = []
+                    if lexical != "or":
+                        cur.execute(lexical_sql, lexical_params)
                         lex_rows = cur.fetchall()
-                rows += lex_rows
-            except Exception:
-                # Kho cũ chưa có chỉ mục FTS vẫn phải phục vụ được bằng vector.
-                conn.rollback()
+                    if not lex_rows:
+                        or_query = _or_tsquery(question, gioi_han=(lexical != "or"))
+                        if or_query:
+                            cur.execute(lexical_or_sql,
+                                        [or_query, qjson, *filter_params, candidate_k])
+                            lex_rows = cur.fetchall()
+                    rows += lex_rows
+                except Exception:
+                    # Kho cũ chưa có chỉ mục FTS (hoặc quá trần thời gian)
+                    # vẫn phải phục vụ được bằng vector.
+                    conn.rollback()
 
     merged = {}
     for r in rows:
@@ -299,6 +405,7 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
     max_lex = max((x["lexical_score"] for x in merged.values()), default=0.0)
     qtokens = _tokens(question)
     qfold = _fold(question)
+    so_dieu_hoi = set(_RE_SO_DIEU_HOI.findall(qfold))
     for item in merged.values():
         ctokens = _tokens(item["content"])
         coverage = len(qtokens & ctokens) / max(1, len(qtokens))
@@ -310,8 +417,14 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
         # gì, của ai. Cho nó một phần điểm để câu hỏi nêu đúng tên ("sơ yếu lý
         # lịch của Ngân") kéo đúng file lên, thay vì phó mặc cho vector.
         title_cov = _title_coverage(qtokens, item.get("title"))
+        # Tên điều / số điều trùng câu hỏi: +0.20 — đủ để Điều 423 (0.50) vượt
+        # bốn điều "chấm dứt" của hợp đồng chuyên biệt (0.53–0.56) nhưng không
+        # đè được một đoạn thật sự khớp nghĩa (0.73+).
+        dieu = (_diem_dieu_luat(item, qfold, so_dieu_hoi)
+                if item.get("doc_type") == "law" else 0.0)
         item["score"] = min(1.0, 0.70 * semantic + 0.15 * lexical
-                            + 0.08 * coverage + 0.05 * title_cov + 0.02 * exact)
+                            + 0.08 * coverage + 0.05 * title_cov + 0.02 * exact
+                            + 0.20 * dieu)
 
     uu_tien_hieu_luc(merged.values())
     ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
@@ -930,6 +1043,11 @@ _TU_DUNG_TEN = {
 # "dan" là từ dừng ("luật dân sự"?) — KHÔNG: "dân sự", "dân chủ" là tên thật.
 _TU_DUNG_TEN.discard("dan")
 _TU_DUNG_TEN.discard("thuong")   # "thương mại"
+# Từ DỪNG khi đứng một mình nhưng LÀ TÊN khi đi cùng từ kế tiếp. "Trọng" bỏ dấu
+# thành "trong", trùng giới từ "trong" ("quy định trong hợp đồng") — không chừa
+# thì "Luật Trọng tài Thương mại 2010" không được nhận là văn bản nào, và cảnh
+# báo "kho chưa có" im lặng vì không có gì để cảnh báo (07/09/2026).
+_GHEP_GIU_TEN = {("trong", "tai")}
 _RE_TOKEN_VB = re.compile(r"[^\W_]+(?:[/\-][^\W_]+)*|[,.;:?!()]", re.UNICODE)
 _LOAI_KHO_LUAT = {"law", "an_le", "ban_an", "advisory"}
 
@@ -979,6 +1097,13 @@ def _van_ban_nhac_trong_cau_hoi(question: str) -> list:
                 break
             if not re.fullmatch(r"[a-z]+", f):
                 break
+            ke = fold[k + 1] if k + 1 < len(fold) else ""
+            if (f, ke) in _GHEP_GIU_TEN:
+                # Nuốt CẢ CỤM: tiếng thứ hai cũng là từ dừng ("tài" → "tai" =
+                # "tại"), dừng ở đó thì tên còn trơ mỗi "Luật Trọng".
+                ten.extend([f, ke])
+                k += 2
+                continue
             if f in _TU_DUNG_TEN and not (f == "su" and ten):
                 break
             ten.append(f)
@@ -999,27 +1124,46 @@ def _van_ban_thieu_trong_kho(question: str, chunks) -> list:
     Điều 107 BLLĐ vào thì BLLĐ "có mặt". Hồ sơ nhân sự, hợp đồng mẫu KHÔNG
     tính: dòng "Căn cứ Bộ luật Lao động" trong một HĐLĐ không làm kho có luật.
 
-    Kho cũ chưa backfill danh tính (tên file "Bộ-luật-91-2015-QH13", nhãn đoạn
-    không có tên) thì khớp yếu: đúng LOẠI + đúng NĂM cũng coi là có, thà bỏ sót
-    cảnh báo còn hơn bảo model "kho không có BLDS" khi nó đang ở ngay đó.
+    Đoạn CHƯA có danh tính (kho cũ chưa backfill: chỉ có tên file
+    "Bộ-luật-91-2015-QH13", nhãn đoạn không mang tên văn bản) được khớp yếu —
+    đúng LOẠI + đúng NĂM cũng coi là có — vì thà bỏ sót cảnh báo còn hơn bảo
+    model "kho không có BLDS" khi nó đang nằm ngay đó.
+
+    Khớp yếu CHỈ áp cho những đoạn đó. Đoạn đã có số hiệu thì so tên chặt:
+    ngày 07/09/2026, sau khi backfill xong, "Bộ luật Tố tụng Dân sự 2015" khớp
+    yếu trúng Bộ luật DÂN SỰ 91/2015 (cùng loại, cùng năm) và "Luật Trọng tài
+    Thương mại 2010" trúng bất kỳ văn bản nào có chữ "luật" kèm số 2010 trong
+    đoạn — cả hai đều KHÔNG có trong kho mà cảnh báo bị tắt, đúng cái van an
+    toàn dựng lên để chặn bịa điều luật.
     """
     nhac = _van_ban_nhac_trong_cau_hoi(question)
     if not nhac:
         return []
-    chu_ky = []
+    chu_ky, chu_ky_vo_danh = [], []
     for c in chunks or []:
         kind = c.get("kind") or ""
         # CHỈ văn bản luật (và đoạn người dùng dán/file đính kèm) mới chứng
         # minh "kho có luật này". Án lệ, bản án nhắc "Bộ luật Lao động" trong
         # lập luận không làm kho có BLLĐ — lượt chạy ba 06/09: án lệ lao động
         # 071/2018 lọt vào nguồn, chốt tưởng kho có BLLĐ, bot lại bịa Điều 35.
-        if kind not in ("user_provided", "attachment") \
-                and (c.get("doc_type") or "") != "law":
+        nguoi_dua = kind in ("user_provided", "attachment")
+        if not nguoi_dua and (c.get("doc_type") or "") != "law":
             continue
         s = " ".join(str(c.get(k) or "") for k in
                      ("so_hieu", "loai_van_ban", "trich_yeu", "title", "section_title"))
-        s = _fold_text(s + " " + (c.get("content") or "")[:300])
-        chu_ky.append(" " + s.replace("-", " ").replace("_", " ") + " ")
+        # NỘI DUNG đoạn chỉ tính khi người dùng tự đưa vào (họ dán nguyên văn
+        # điều luật, hoặc đính kèm chính văn bản đó). Với tài liệu trong kho thì
+        # KHÔNG: phần mở đầu mỗi văn bản đầy tên văn bản KHÁC ở các dòng "Căn cứ
+        # Luật Trọng tài thương mại ngày 17 tháng 6 năm 2010…" — đọc nó là kết
+        # luận kho có Luật Trọng tài trong khi kho chỉ có Luật Doanh nghiệp
+        # (07/09/2026). Danh tính tài liệu nằm ở metadata + tên file + nhãn đoạn.
+        if nguoi_dua:
+            s += " " + (c.get("content") or "")[:2000]
+        s = _fold_text(s)
+        s = " " + s.replace("-", " ").replace("_", " ") + " "
+        chu_ky.append(s)
+        if not (c.get("so_hieu") or "").strip():
+            chu_ky_vo_danh.append(s)
     thieu = []
     for v in nhac:
         if v["so_hieu"]:
@@ -1031,10 +1175,96 @@ def _van_ban_thieu_trong_kho(question: str, chunks) -> list:
             nam = f" {v['nam']} " if v["nam"] else ""
             co = any(f" {v['ten']} " in k and (not nam or nam in k) for k in chu_ky)
             if not co and v["nam"]:
-                co = any(nam in k and f" {v['loai']} " in k for k in chu_ky)
+                co = any(nam in k and f" {v['loai']} " in k for k in chu_ky_vo_danh)
         if not co and all(v["hien_thi"] != t["hien_thi"] for t in thieu):
             thieu.append(v)
     return thieu
+
+
+def _ten_nguon(c) -> str:
+    """Tên tài liệu đưa vào prompt và panel nguồn.
+
+    Bản án trong kho mang tên file tải về ('01463_2112066_số 03 ngày 26022026
+    của TAND…') → model chép nguyên mã tải về vào câu trả lời: "Bản án số
+    01463_2112066_số 03…" (chạy thử 08/09/2026 sau khi nạp 25.130 bản án).
+    Đổi sang tên pháp lý; tài liệu khác giữ nguyên tên."""
+    title = c.get("title") or ""
+    if c.get("doc_type") in ("ban_an", "an_le"):
+        return van_ban.ten_hien_thi_ban_an(
+            title, c.get("so_hieu"), c.get("loai_van_ban")) or title
+    return title
+
+
+def _nam_van_ban(so_hieu, ngay_ban_hanh=None):
+    """Năm của văn bản: từ số hiệu '91/2015/QH13'; không có thì từ ngày ban hành."""
+    m = re.search(r"/((?:19|20)\d{2})/", so_hieu or "")
+    if m:
+        return m.group(1)
+    m = re.match(r"((?:19|20)\d{2})", str(ngay_ban_hanh or ""))
+    return m.group(1) if m else None
+
+
+def _khop_van_ban_nhac(nhac, docs, toi_da=4) -> list:
+    """id các văn bản LUẬT trong kho ứng với văn bản câu hỏi nêu đích danh.
+
+    Sau khi nạp 25.130 bản án (08/09/2026), vector của câu "so sánh hủy bỏ và
+    đơn phương chấm dứt hợp đồng theo BLDS 2015" khớp toàn bản án; không một
+    đoạn BLDS nào lọt top-k dù kho có, và bot kết luận "BLDS 2015 không quy
+    định hủy bỏ hợp đồng". Người hỏi đã NÊU TÊN văn bản thì đoạn của chính văn
+    bản đó phải có mặt — hàm này chỉ tìm id, prepare tự kéo đoạn.
+
+    `docs`: [{id, so_hieu, loai_van_ban, trich_yeu, title, ngay_ban_hanh}].
+    Chữ ký so khớp cùng khuôn với _van_ban_thieu_trong_kho để hai chốt không
+    cãi nhau. Ưu tiên: trúng số hiệu → trúng tên + năm → trúng tên mà văn bản
+    không mang năm (bản hợp nhất) → trúng tên khác năm (kho chỉ có bản khác;
+    vẫn kéo vào để bot có gì đó thật để đọc, dòng "kho chưa có bản <năm>" do
+    chốt kia lo).
+    """
+    ra = []
+    for v in nhac or []:
+        trung_so, ten_nam, vo_nam, khac_nam = [], [], [], []
+        so = _fold_text(v["so_hieu"]).replace("-", " ") if v.get("so_hieu") else ""
+        for d in docs or []:
+            s = " ".join(str(d.get(k) or "") for k in
+                         ("so_hieu", "loai_van_ban", "trich_yeu", "title"))
+            s = " " + _fold_text(s).replace("-", " ").replace("_", " ") + " "
+            if so:
+                if so in s:
+                    trung_so.append(d["id"])
+                continue
+            if not v.get("ten") or f" {v['ten']} " not in s:
+                continue
+            nam_d = _nam_van_ban(d.get("so_hieu"), d.get("ngay_ban_hanh"))
+            if not v.get("nam") or nam_d == v["nam"]:
+                ten_nam.append(d["id"])
+            elif nam_d is None or " vbhn " in s:
+                vo_nam.append(d["id"])
+            else:
+                khac_nam.append(d["id"])
+        for i in trung_so or ten_nam or vo_nam or khac_nam:
+            if i not in ra:
+                ra.append(i)
+    return ra[:toi_da]
+
+
+def _tai_lieu_luat_trong_kho(level, client_id=None, dept_ids=None,
+                             is_banqt=False, can_finance=False):
+    """Danh tính mọi văn bản luật người dùng được xem (RLS lọc), để so với tên
+    văn bản trong câu hỏi. Kệ luật nhỏ (vài trăm bản) nên tải cả kệ rẻ hơn
+    một câu SQL so chuỗi mờ."""
+    with db.session(role=level, client_id=client_id, dept_ids=dept_ids,
+                    is_banqt=is_banqt, can_finance=can_finance) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, so_hieu, loai_van_ban, trich_yeu, title,
+                                  ngay_ban_hanh
+                             FROM documents
+                            WHERE doc_type='law' AND approved AND label_verified
+                              AND coalesce(active,true)
+                            LIMIT 5000""")
+            rows = cur.fetchall()
+    return [{"id": r[0], "so_hieu": r[1], "loai_van_ban": r[2],
+             "trich_yeu": r[3], "title": r[4], "ngay_ban_hanh": r[5]}
+            for r in rows]
 
 
 def build_prompt(question, chunks, temp_chunks=None, method=None,
@@ -1080,9 +1310,9 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                 # Chữ hỏng không mang dữ kiện nào — thay hẳn, đừng bắt model
                 # đọc mấy nghìn ký tự vô nghĩa rồi tự suy ra điều gì đó.
                 content = _UNREADABLE_NOTE
-                originals.append((i, owner, c.get("title") or "", "chua doc duoc"))
+                originals.append((i, owner, _ten_nguon(c), "chua doc duoc"))
             elif status == "warning":
-                originals.append((i, owner, c.get("title") or "", "doc chua chac"))
+                originals.append((i, owner, _ten_nguon(c), "doc chua chac"))
                 caveat = ("\n(LƯU Ý: file này là bản scan/trích xuất CÓ CẢNH BÁO — "
                           "nội dung bên dưới có thể thiếu trang hoặc sai ký tự. Nếu "
                           "không thấy thông tin cần trả lời, hãy nói rõ: kho CÓ file "
@@ -1108,7 +1338,7 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                                + " — điều khoản trích dưới đây có thể đã đổi. "
                                "Đối chiếu văn bản sửa đổi trước khi dùng làm "
                                "căn cứ, hoặc nói rõ là chưa đối chiếu được.)")
-            parts.append(f"[Nguồn {i}] {owner}{c.get('title','')}{label}{caveat}\n{content}\n")
+            parts.append(f"[Nguồn {i}] {owner}{_ten_nguon(c)}{label}{caveat}\n{content}\n")
         # Chỉ dẫn phân biệt chủ thể — chỉ chèn khi thật sự có hồ sơ khách trong
         # bộ nguồn, để câu hỏi thuần pháp lý không phải cõng thêm chữ thừa.
         # TÀI LIỆU GỐC NÊN MỞ — yêu cầu của chủ dự án 21/08/2026: khi nguồn khó
@@ -2328,15 +2558,51 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         kept = [c for c in kept if c.get("doc_type") != "ho_so_ns"]
         if truoc != len(kept):
             timings["bo_ho_so_ns"] = truoc - len(kept)
-        luat_extra = retrieve(
-            search_question, channel, client_id, dept_ids=dept_ids,
-            is_banqt=is_banqt, top_k=6, can_finance=can_finance,
-            doc_types=["law", "an_le", "ban_an", "advisory"],
-            document_ids=source_document_ids, query_vector=query_vector,
-        )
         seen_ids = {c["chunk_id"] for c in kept}
-        luat_them = [c for c in luat_extra
-                     if c["chunk_id"] not in seen_ids and c["score"] >= min_score]
+        luat_them = []
+        # (a) Văn bản NÊU ĐÍCH DANH mà kho có → kéo đoạn từ chính văn bản đó,
+        # không qua ngưỡng điểm: người hỏi đã chỉ tên, đoạn khớp nhất của nó
+        # phải có mặt dù vector thích bản án hơn. Chạy thử 08/09/2026 sau khi
+        # nạp 25.130 bản án: hỏi "theo BLDS 2015" mà 10 nguồn đều là bản án,
+        # bot kết luận BLDS không quy định hủy bỏ hợp đồng (Điều 423 có).
+        nhac = _van_ban_nhac_trong_cau_hoi(question)
+        if nhac:
+            try:
+                ke_luat = _tai_lieu_luat_trong_kho(
+                    CHANNEL_LEVEL[channel], client_id=client_id,
+                    dept_ids=dept_ids, is_banqt=is_banqt, can_finance=can_finance)
+            except Exception:
+                ke_luat = []
+            id_nhac = _khop_van_ban_nhac(nhac, ke_luat)
+            if source_document_ids is not None:
+                cho_phep = set(source_document_ids)
+                id_nhac = [i for i in id_nhac if i in cho_phep]
+            if id_nhac:
+                dich_danh = retrieve(
+                    search_question, channel, client_id, dept_ids=dept_ids,
+                    is_banqt=is_banqt, top_k=6, can_finance=can_finance,
+                    document_ids=id_nhac, max_per_document=6,
+                    query_vector=query_vector, lexical="or")
+                for c in dich_danh:
+                    if c["chunk_id"] not in seen_ids:
+                        seen_ids.add(c["chunk_id"])
+                        luat_them.append(c)
+                timings["van_ban_neu_them"] = len(luat_them)
+        # (b) Kệ LUẬT tìm riêng, rồi (c) án lệ / bản án / quan điểm. Gộp bốn
+        # kệ vào một lượt là kệ bản án (436.000 đoạn) nuốt hết chỗ của kệ
+        # luật (4.300 đoạn) — điều luật mới là căn cứ, bản án là minh hoạ.
+        # Chỉ vector: nhánh từ khoá đã chạy ở lượt chính, chạy lại theo từng
+        # kệ là tốn thêm vài giây mỗi kệ mà không ra gì mới.
+        for ke, k in ((["law"], 3), (["an_le", "ban_an", "advisory"], 3)):
+            extra = retrieve(
+                search_question, channel, client_id, dept_ids=dept_ids,
+                is_banqt=is_banqt, top_k=k, can_finance=can_finance,
+                doc_types=ke, document_ids=source_document_ids,
+                query_vector=query_vector, lexical=False)
+            for c in extra:
+                if c["chunk_id"] not in seen_ids and c["score"] >= min_score:
+                    seen_ids.add(c["chunk_id"])
+                    luat_them.append(c)
         if luat_them:
             kept = luat_them + kept
             timings["kho_luat_them"] = len(luat_them)
@@ -2354,6 +2620,7 @@ def prepare(question, channel, client_id=None, conversation_id=None,
             is_banqt=is_banqt, top_k=8, can_finance=can_finance,
             doc_types=["law", "an_le", "ban_an", "advisory"],
             document_ids=source_document_ids, query_vector=query_vector,
+            lexical=False,
         )
         seen_ids = {c["chunk_id"] for c in kept}
         legal_added = [c for c in legal_extra if c["chunk_id"] not in seen_ids]
@@ -2677,7 +2944,7 @@ def format_sources(chunks):
         # Tên khách đứng ngay trong tiêu đề nguồn: người đọc panel trích dẫn
         # phải thấy được '1. Giấy đề nghị' là hồ sơ của khách nào mà không cần
         # mở file gốc.
-        title = c.get("title") or "(không tiêu đề)"
+        title = _ten_nguon(c) or "(không tiêu đề)"
         if (c.get("client_name") or "").strip():
             title = f"[KH: {c['client_name'].strip()}] {title}"
         # File đính kèm không có page_number riêng — lấy từ mốc [Trang n] mà

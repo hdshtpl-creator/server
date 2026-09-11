@@ -741,13 +741,20 @@ def docx_sang_pdf(du_lieu_docx: bytes) -> bytes:
     import shutil
     import tempfile
     tmp = Path(tempfile.mkdtemp(prefix="hds_pdf_"))
+    ra = None
     try:
         nguon = tmp / "ban_nhap.docx"
         nguon.write_bytes(du_lieu_docx)
-        ra = _convert_with_libreoffice(nguon, "pdf")
-        return Path(ra).read_bytes()
+        # 07/09/2026: bản đầu gọi nhầm tên hàm (_convert_WITH_libreoffice, không
+        # tồn tại) — nút "Tải PDF" trên máy chủ trả 500 suốt từ lúc deploy mà
+        # không test nào bắt được vì chưa có test cho hàm này. Hàm thật trả về
+        # file trong một thư mục tạm RIÊNG, người gọi phải dọn thư mục cha đó.
+        ra = _convert_via_libreoffice(nguon, "pdf")
+        return ra.read_bytes()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        if ra is not None:
+            shutil.rmtree(ra.parent, ignore_errors=True)
 
 
 def _extract_via_libreoffice(path: Path, target: str):

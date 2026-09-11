@@ -83,15 +83,18 @@ class LexicalFallbackTests(unittest.TestCase):
 
     def test_or_query_drops_short_and_duplicate_tokens(self):
         from app import rag
-        self.assertEqual(rag._or_tsquery("a hợp đồng hợp đồng b"), "hợp | đồng")
+        # "hợp đồng" là từ phổ thông (bị bỏ) — dùng cụm hiếm hơn để soi việc
+        # gộp trùng và bỏ token một ký tự.
+        self.assertEqual(rag._or_tsquery("a lãi suất lãi suất b"), "lãi | suất")
+        self.assertIsNone(rag._or_tsquery("hợp đồng của công ty"))
         self.assertIsNone(rag._or_tsquery("a b ."))
         self.assertIsNone(rag._or_tsquery(""))
 
     def test_or_query_strips_tsquery_operators(self):
         from app import rag
         # Ký tự điều khiển tsquery (&, |, !, :, *) không được lọt vào chuỗi.
-        q = rag._or_tsquery("điều 35 & khoản! 2:*")
-        self.assertEqual(q, "điều | 35 | khoản")
+        q = rag._or_tsquery("mục 35 & phụ lục! 2:*")
+        self.assertEqual(q, "mục | 35 | phụ | lục")
 
 
 class FolderScopeTests(unittest.TestCase):

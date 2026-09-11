@@ -281,6 +281,10 @@ CREATE INDEX IF NOT EXISTS idx_chunks_vec ON chunks USING hnsw (embedding vector
 CREATE INDEX IF NOT EXISTS idx_chunks_access ON chunks(access_level, client_id, department_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_fts ON chunks USING gin(search_vector);
 CREATE INDEX IF NOT EXISTS idx_chunks_content_trgm ON chunks USING gin(lower(content) gin_trgm_ops);
+-- Tìm trong MỘT văn bản (câu hỏi nêu đích danh luật, hồ sơ một người, đoạn
+-- liền kề): không có chỉ mục này là quét tuần tự cả kho 540.000 đoạn cho
+-- mỗi lượt (08/09/2026).
+CREATE INDEX IF NOT EXISTS idx_chunks_doc_idx ON chunks(document_id, chunk_index);
 CREATE INDEX IF NOT EXISTS idx_documents_title_trgm ON documents USING gin(lower(title) gin_trgm_ops);
 
 CREATE OR REPLACE FUNCTION sync_chunk_labels() RETURNS TRIGGER AS $$
