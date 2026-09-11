@@ -18,6 +18,7 @@ import {
   MessageSquareWarning,
 } from 'lucide-react';
 import { MatterAlertsCard } from './MatterAlertsCard';
+import { KhoTaiLieuCard } from './KhoTaiLieuCard';
 
 type IconType = React.ComponentType<{ className?: string }>;
 
@@ -315,6 +316,10 @@ export const OverviewTab: React.FC = () => {
           onClick={() => setAdminTab('methods')}
         />
       </div>
+
+      {/* Kho tài liệu trên máy chủ: cây thư mục thật, trạng thái học từng file,
+          tìm, gỡ, tải lên, học ngay — kiểm soát kho không cần SSH (11/09/2026) */}
+      <KhoTaiLieuCard />
     </div>
   );
 };

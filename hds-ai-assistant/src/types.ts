@@ -698,3 +698,94 @@ export interface DriveSyncStatus {
   /** Lỗi tích luỹ, KHÁC last_run.error_items vốn chỉ là ảnh chụp lần quét cuối. */
   failures: IngestFailure[];
 }
+
+/* --------------------------------------------------------------
+   Cây thư mục kho trên máy chủ — GET /kho/cay, /kho/tim (app/kho.py).
+   Trạng thái từng file suy từ bản ghi documents theo đúng luật của bộ quét.
+-------------------------------------------------------------- */
+export type KhoTrangThai =
+  | 'da_hoc'
+  | 'canh_bao'
+  | 'cho_duyet'
+  | 'chua_hoc'
+  | 'loi'
+  | 'khong_ho_tro';
+
+export interface KhoThuMuc {
+  ten: string;
+  /** Đường dẫn tương đối trong kho, dấu / xuôi. */
+  path: string;
+  /** Số file trên đĩa (đệ quy), kể cả file chưa học. */
+  so_file: number;
+  da_hoc: number;
+  cho_duyet: number;
+  tong_ban_ghi: number;
+}
+
+export interface KhoLoiHoc {
+  code?: string | null;
+  message?: string | null;
+  hint?: string | null;
+}
+
+export interface KhoTapTin {
+  ten: string;
+  path: string;
+  kich_thuoc: number;
+  sua_luc: string;
+  trang_thai: KhoTrangThai;
+  document_id: number | null;
+  title: string | null;
+  doc_type: string | null;
+  access_level: string | null;
+  so_hieu: string | null;
+  client_name: string | null;
+  so_doan: number | null;
+  loi: KhoLoiHoc | null;
+}
+
+export interface KhoTang {
+  path: string;
+  ten: string;
+  root: string;
+  thu_muc: KhoThuMuc[];
+  tap_tin: KhoTapTin[];
+  tong_tap_tin: number;
+  offset: number;
+  limit: number;
+}
+
+export interface KhoKetQuaTim {
+  document_id: number;
+  title: string;
+  doc_type: string;
+  access_level: string;
+  so_hieu: string | null;
+  client_name: string | null;
+  /** null khi tài liệu không có file trong kho (nạp từ hội thoại). */
+  path: string | null;
+  thu_muc: string;
+  ten: string | null;
+  trang_thai: KhoTrangThai;
+}
+
+export interface KhoHocKetQua {
+  ok: boolean;
+  document_id?: number;
+  title?: string;
+  trang_thai?: KhoTrangThai;
+  warnings?: string[];
+  note?: string;
+  filename?: string;
+  bytes?: number;
+  path?: string;
+  /** Lý do khi ok=false. */
+  loi?: string;
+  /** File đã nằm trong kho dù học hỏng — bộ quét sẽ thử lại. */
+  da_luu?: boolean;
+}
+
+export interface KhoTaiLenKetQua {
+  ok: boolean;
+  ket_qua: KhoHocKetQua[];
+}

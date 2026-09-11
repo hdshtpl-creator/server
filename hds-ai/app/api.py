@@ -38,7 +38,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app import company_context, db, rag, auth, settings, van_ban
+from app import company_context, db, kho, rag, auth, settings, van_ban
 from app.admin_ui import ADMIN_HTML
 
 app = FastAPI(title="HDS AI", version="1.0")
@@ -1593,6 +1593,122 @@ def documents_browse(user=Depends(current_user), q: str = "", limit: int = 300):
             "trang_thai_hieu_luc": r[12] if can_open else None,
         })
     return out
+
+
+# ---------- 7a-ter. CÂY THƯ MỤC KHO TRÊN TRANG TỔNG QUAN (app/kho.py) ----------
+# Admin duyệt kho theo đúng cây thư mục trên máy chủ, tìm, gỡ, tải lên và học
+# ngay — không cần SSH. Đường dẫn nhận vào là TƯƠNG ĐỐI trong kho; kho.py nhốt
+# nó trong library_root nên không mở được gì bên ngoài.
+def _kho_hoac_400(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except kho.LoiKho as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/kho/cay")
+def kho_cay(user=Depends(current_user), path: str = "", q: str = "",
+            offset: int = 0, limit: int = 200):
+    """Một tầng cây: thư mục con (kèm số đã học) + file trong thư mục."""
+    require_reviewer(user)
+    return _kho_hoac_400(kho.liet_ke, path, q=(q or "")[:200],
+                         offset=max(0, offset), limit=max(1, min(limit, 500)))
+
+
+@app.get("/kho/tim")
+def kho_tim(user=Depends(current_user), q: str = "", limit: int = 100):
+    """Tìm tài liệu đã có bản ghi theo tên / số hiệu / đường dẫn."""
+    require_reviewer(user)
+    q = (q or "").strip()[:200]
+    if len(q) < 2:
+        return []
+    return kho.tim(q, limit=max(1, min(limit, 300)))
+
+
+class KhoGoBody(BaseModel):
+    document_id: int
+
+
+@app.post("/kho/go")
+def kho_go(body: KhoGoBody, user=Depends(current_user)):
+    """Gỡ tài liệu khỏi kho: chỉ admin — bot ngừng dùng ngay, file chuyển sang
+    thùng đã gỡ (không xoá hẳn)."""
+    require(user, {"admin"})
+    return _kho_hoac_400(kho.go_tai_lieu, body.document_id, user["id"])
+
+
+class KhoHocBody(BaseModel):
+    path: str
+    auto_approve: bool = False
+
+
+@app.post("/kho/hoc")
+def kho_hoc(body: KhoHocBody, user=Depends(current_user)):
+    """Học ngay một file đang nằm trong kho (chưa học / lỗi / nội dung đổi)."""
+    require_reviewer(user)
+    return _kho_hoac_400(kho.hoc_file, body.path, user["id"],
+                         auto_approve=bool(body.auto_approve))
+
+
+class KhoThuMucBody(BaseModel):
+    path: str = ""
+    ten: str
+
+
+@app.post("/kho/thu-muc")
+def kho_thu_muc(body: KhoThuMucBody, user=Depends(current_user)):
+    require_reviewer(user)
+    return _kho_hoac_400(kho.tao_thu_muc, body.path, body.ten, user["id"])
+
+
+@app.post("/kho/tai-len")
+async def kho_tai_len(
+    files: list[UploadFile] = File(...),
+    path: str = Form(""),
+    auto_approve: bool = Form(False),
+    user=Depends(current_user),
+):
+    """Tải một hay nhiều file vào ĐÚNG thư mục trong kho rồi học ngay từng
+    file. Mỗi file một kết quả riêng — một file hỏng không chặn các file khác."""
+    require_reviewer(user)
+    if len(files) > 20:
+        raise HTTPException(400, "Mỗi lần tối đa 20 file")
+    gioi_han = MAX_UPLOAD_MB * 1024 * 1024
+    ket_qua = []
+    for f in files:
+        safe = _safe_filename(f.filename)
+        try:
+            dest = kho.cho_tai_len(path, safe)
+        except kho.LoiKho as e:
+            await f.close()
+            ket_qua.append({"filename": safe, "ok": False, "loi": str(e)})
+            continue
+        size, qua_co = 0, False
+        try:
+            with dest.open("wb") as out:
+                while chunk := await f.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > gioi_han:
+                        qua_co = True
+                        break
+                    out.write(chunk)
+        finally:
+            await f.close()
+        if qua_co:
+            dest.unlink(missing_ok=True)
+            ket_qua.append({"filename": safe, "ok": False,
+                            "loi": f"Tệp vượt quá {MAX_UPLOAD_MB} MB"})
+            continue
+        try:
+            r = kho.hoc_file(kho.rel_cua(dest), user["id"], auto_approve=bool(auto_approve))
+            r.update({"filename": safe, "bytes": size, "path": kho.rel_cua(dest)})
+        except kho.LoiKho as e:
+            # File vẫn nằm trong kho để admin thấy trạng thái "lỗi" trên cây và
+            # quyết định gỡ hay sửa; bộ quét lần sau cũng sẽ thử lại.
+            r = {"filename": safe, "ok": False, "loi": str(e), "bytes": size,
+                 "path": kho.rel_cua(dest), "da_luu": True}
+        ket_qua.append(r)
+    return {"ok": all(x.get("ok") for x in ket_qua), "ket_qua": ket_qua}
 
 
 # ---------- 7a-bis. CHI TIẾT MỘT TÀI LIỆU + QUAN HỆ VĂN BẢN ----------

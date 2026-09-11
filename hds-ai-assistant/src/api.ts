@@ -18,6 +18,10 @@ import type {
   AppSettings,
   FeedbackItem,
   UploadResult,
+  KhoTang,
+  KhoKetQuaTim,
+  KhoHocKetQua,
+  KhoTaiLenKetQua,
   DriveSyncStatus,
   MatterAlerts,
   ModelInfo,
@@ -447,3 +451,34 @@ export const downloadDocument = ApiJs.downloadDocument as (
   docId: number,
   filename?: string
 ) => Promise<void>;
+
+/* ---------- Cây thư mục kho (Tổng quan) ---------- */
+export const getKhoTang = ApiJs.getKhoTang as (params?: {
+  path?: string;
+  q?: string;
+  offset?: number;
+  limit?: number;
+}) => Promise<KhoTang>;
+
+export const timTrongKho = ApiJs.timTrongKho as (q: string) => Promise<KhoKetQuaTim[]>;
+
+export const goTaiLieuKho = ApiJs.goTaiLieuKho as (
+  documentId: number
+) => Promise<{ ok: boolean; document_id: number; title?: string; da_chuyen_toi: string | null }>;
+
+export const hocFileKho = ApiJs.hocFileKho as (params: {
+  path: string;
+  auto_approve?: boolean;
+}) => Promise<KhoHocKetQua>;
+
+export const taoThuMucKho = ApiJs.taoThuMucKho as (params: {
+  path?: string;
+  ten: string;
+}) => Promise<{ ok: boolean; path: string; ten: string }>;
+
+export const taiLenKho = ApiJs.taiLenKho as (params: {
+  path: string;
+  files: File[] | FileList;
+  auto_approve?: boolean;
+  onProgress?: (percent: number) => void;
+}) => Promise<KhoTaiLenKetQua>;

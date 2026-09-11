@@ -252,6 +252,7 @@ Bộ quét **tự dừng** trong ba tình huống nguy hiểm, đọc kỹ thôn
 | Đường | Thao tác | Duyệt |
 |---|---|---|
 | **Ổ mạng (kho)** | Thả file vào đúng thư mục, chờ ≤15 phút | Chờ duyệt nhãn (PDF **luôn luôn** phải duyệt) |
+| **Trang Tổng quan → Kho tài liệu** | Chọn thư mục → *Tải lên vào đây* (học ngay, không đợi quét) | Chờ duyệt, trừ khi người có quyền tick "Duyệt luôn" (xem 4.8) |
 | **Tải lên web** | Chat → Tải tài liệu → *Lưu vào kho* | Chờ duyệt, trừ khi người có quyền tick "Duyệt luôn" |
 | **Từ hội thoại** | Người dùng 👎 → admin sửa → *Đạt — nạp học* | Chính admin là bước duyệt |
 
@@ -445,6 +446,37 @@ Internet, gỡ chốt nào là mở đúng cửa đó:
 
 Không làm được: trang dựng danh sách bằng JavaScript (dùng RSS/sitemap của chính
 trang đó thay thế), và trang cần đăng nhập.
+
+### 4.8 Quản lý kho từ trang Tổng quan (11/09/2026)
+
+Thẻ **Kho tài liệu trên máy chủ** ở cuối trang Quản trị → Tổng quan là chính
+cây thư mục `data/raw` trên máy chủ, đọc trực tiếp từ đĩa — admin không cần SSH.
+
+- **Cây bên trái** tải từng tầng khi mở; mỗi ngăn hiện `đã học/tổng file` và
+  số chờ duyệt. Chênh lệch hai số = file chưa học, lỗi, hoặc định dạng không
+  hỗ trợ — bấm vào ngăn để thấy từng file với trạng thái: *Đã học*, *Đã học ·
+  cảnh báo* (scan/OCR), *Chờ duyệt*, *Chưa học*, *Lỗi học* (kèm lý do), *Không
+  hỗ trợ*.
+- **Tìm trong cả kho** so từng từ với tên, số hiệu, loại + trích yếu và đường
+  dẫn ("Bộ luật Dân sự", "168/2025", "Hop dong mau bao hiem" đều ra); văn bản
+  luật xếp trước bản án. Chỉ tìm được tài liệu ĐÃ có bản ghi.
+- **Tải lên vào đây** (người có quyền duyệt): file vào đúng thư mục đang xem và
+  được học ngay, nhãn lấy theo thư mục y như bộ quét (`resolve_labels`), nên
+  KHÔNG tải vào gốc kho — chọn một ngăn. Tối đa 20 file/lần, mỗi file mất
+  khoảng 10–20 giây (embedding + tóm tắt). Trùng tên file trong thư mục thì bị
+  từ chối: gỡ bản cũ trước nếu muốn thay.
+- **Học ngay**: file đang *Chưa học* hoặc *Lỗi học* (ví dụ vừa được thả qua
+  Samba) được học tức thì; nội dung không đổi thì không học lại.
+- **Bỏ** (chỉ admin): `active=false` + chuyển file gốc sang `data/_da_go/<đường
+  dẫn cũ>`. Bot ngừng dùng ngay, bộ quét không học lại. File không bị xoá hẳn —
+  muốn khôi phục thì chuyển file về chỗ cũ rồi bấm *Học ngay* (bản ghi mới).
+  Đặt `DATA_DA_GO` trong `.env` nếu muốn thùng đã gỡ nằm chỗ khác.
+- **Thư mục con**: tạo ngăn con trong thư mục đang xem (không đặt tên bắt đầu
+  bằng `.` hoặc `~$`, không dùng `uploads`).
+
+Mọi thao tác ghi vào `audit_log` (`kho_hoc`, `kho_go`, `kho_tao_thu_muc`).
+API tương ứng: `GET /kho/cay`, `GET /kho/tim`, `POST /kho/tai-len`, `POST
+/kho/hoc`, `POST /kho/go`, `POST /kho/thu-muc` (`hds-ai/app/kho.py`).
 
 ## 5. TÊN MIỀN VÀ HTTPS
 

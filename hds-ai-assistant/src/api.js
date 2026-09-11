@@ -714,6 +714,109 @@ export async function getDriveSyncStatus() {
   return request('/drive/sync-status', { method: 'GET' });
 }
 
+// ==================== 9b. CÂY THƯ MỤC KHO TRÊN TRANG TỔNG QUAN ====================
+// Backend: app/kho.py — đường dẫn là TƯƠNG ĐỐI trong kho, dấu / xuôi.
+
+function mockKhoTang(path) {
+  const goc = {
+    path: '', ten: 'Kho tài liệu', root: '/home/pc/hds-ai-full/hds-ai/data/raw',
+    thu_muc: [
+      { ten: '1. VĂN BẢN LUẬT', path: '1. VĂN BẢN LUẬT', so_file: 63, da_hoc: 63, cho_duyet: 0, tong_ban_ghi: 63 },
+      { ten: '2. BẢN ÁN - ÁN LỆ', path: '2. BẢN ÁN - ÁN LỆ', so_file: 32895, da_hoc: 32895, cho_duyet: 0, tong_ban_ghi: 32895 },
+    ],
+    tap_tin: [], tong_tap_tin: 0, offset: 0, limit: 200,
+  };
+  if (!path) return goc;
+  return {
+    path, ten: path.split('/').pop(), root: goc.root, thu_muc: [], offset: 0, limit: 200, tong_tap_tin: 2,
+    tap_tin: [
+      { ten: 'Bộ-luật-91-2015-QH13.docx', path: `${path}/Bộ-luật-91-2015-QH13.docx`, kich_thuoc: 812345,
+        sua_luc: '2026-09-01 10:00', trang_thai: 'da_hoc', document_id: 399, title: 'Bộ-luật-91-2015-QH13',
+        doc_type: 'law', access_level: 'public', so_hieu: '91/2015/QH13', client_name: null, so_doan: 690, loi: null },
+      { ten: 'ghi-chu.pdf', path: `${path}/ghi-chu.pdf`, kich_thuoc: 12345, sua_luc: '2026-09-10 08:00',
+        trang_thai: 'chua_hoc', document_id: null, title: null, doc_type: null, access_level: null,
+        so_hieu: null, client_name: null, so_doan: null, loi: null },
+    ],
+  };
+}
+
+// GET /kho/cay — một tầng: thư mục con (kèm số đã học) + file trong thư mục
+export async function getKhoTang({ path = '', q = '', offset = 0, limit = 200 } = {}) {
+  if (useMockBackend) return mockKhoTang(path);
+  const params = new URLSearchParams({ path, offset: String(offset), limit: String(limit) });
+  if (q) params.append('q', q);
+  return request(`/kho/cay?${params.toString()}`, { method: 'GET' });
+}
+
+// GET /kho/tim?q= — tìm tài liệu đã có bản ghi, trả kèm thư mục chứa
+export async function timTrongKho(q) {
+  if (useMockBackend) return [];
+  const params = new URLSearchParams({ q });
+  return request(`/kho/tim?${params.toString()}`, { method: 'GET' });
+}
+
+// POST /kho/go — gỡ tài liệu (admin): bot ngừng dùng, file sang thùng đã gỡ
+export async function goTaiLieuKho(documentId) {
+  if (useMockBackend) return { ok: true, document_id: documentId, da_chuyen_toi: null };
+  return request('/kho/go', {
+    method: 'POST',
+    body: JSON.stringify({ document_id: toIntOrNull(documentId) }),
+  });
+}
+
+// POST /kho/hoc — học ngay một file đang nằm trong kho
+export async function hocFileKho({ path, auto_approve = false }) {
+  if (useMockBackend) return { ok: true, document_id: Date.now(), trang_thai: 'cho_duyet', warnings: [], note: 'Đã học (giả lập).' };
+  return request('/kho/hoc', {
+    method: 'POST',
+    body: JSON.stringify({ path, auto_approve: Boolean(auto_approve) }),
+  });
+}
+
+// POST /kho/thu-muc — tạo thư mục con trong kho
+export async function taoThuMucKho({ path = '', ten }) {
+  if (useMockBackend) return { ok: true, path: path ? `${path}/${ten}` : ten, ten };
+  return request('/kho/thu-muc', {
+    method: 'POST',
+    body: JSON.stringify({ path, ten }),
+  });
+}
+
+// POST /kho/tai-len — tải một hay nhiều file vào đúng thư mục rồi học ngay từng file
+export async function taiLenKho({ path, files, auto_approve = false, onProgress }) {
+  if (useMockBackend) {
+    await new Promise((r) => setTimeout(r, 300));
+    if (onProgress) onProgress(100);
+    return {
+      ok: true,
+      ket_qua: Array.from(files).map((f) => ({
+        ok: true, filename: f.name, bytes: f.size, trang_thai: auto_approve ? 'da_hoc' : 'cho_duyet',
+        note: auto_approve ? 'Đã học, bot dùng được ngay.' : 'Đã học, đang chờ duyệt nhãn.',
+      })),
+    };
+  }
+  const form = new FormData();
+  form.append('path', path);
+  form.append('auto_approve', String(Boolean(auto_approve)));
+  Array.from(files).forEach((f) => form.append('files', f));
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${apiBaseUrl}/kho/tai-len`);
+    if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+    xhr.upload.onprogress = (e) => {
+      if (onProgress && e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* rơi xuống nhánh lỗi */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(parseErrorBody(xhr.responseText, xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error('Không kết nối được máy chủ khi tải tệp lên.'));
+    xhr.send(form);
+  });
+}
+
 // ==================== 10. BÁO CÁO CHẤT LƯỢNG ====================
 
 export async function sendFeedback({ message_id, rating, note }) {
