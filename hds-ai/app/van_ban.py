@@ -206,6 +206,11 @@ def _tim_ngay(doan: str):
     return _lam_ngay(*m.groups()) if m else None
 
 
+def _la_lenh_cong_bo(so: str) -> bool:
+    """'21/2015/L-CTN' — số Lệnh công bố luật của Chủ tịch nước."""
+    return chuan_hoa_so_hieu(so).endswith("/L-CTN")
+
+
 def _dong_loai(head: str):
     """(vị trí, loại hiển thị, phần còn lại trên dòng) của DÒNG tiêu đề loại văn bản.
 
@@ -236,6 +241,28 @@ _DUNG_TRICH_YEU = re.compile(
     r"^\s*(Căn cứ|Theo đề nghị|Quốc hội ban hành|Chính phủ ban hành|"
     r"Điều\s+\d|Chương\s+[IVXLCDM\d]|Số\s*:|_{3,}|-{3,})", re.IGNORECASE)
 
+# Câu định danh mở đầu MỌI văn bản hợp nhất: "Luật Sở hữu trí tuệ số
+# 50/2005/QH11 ngày 29 tháng 11 năm 2005 của Quốc hội, có hiệu lực kể từ …,
+# được sửa đổi, bổ sung bởi:". Bản Công báo đặt dòng "VĂN BẢN HỢP NHẤT - VĂN
+# PHÒNG QUỐC HỘI" lên trước tiêu đề, _dong_loai vớ phải nó và trích yếu thành
+# "Văn phòng quốc hội" (ba luật nạp 11/09/2026) — câu này đáng tin hơn.
+_RE_CAU_DINH_DANH_VBHN = re.compile(
+    r"^[ \t]*(Bộ luật|Luật|Pháp lệnh|Nghị định|Nghị quyết|Thông tư liên tịch|Thông tư)"
+    r"\s+([^\n]{2,90}?)\s+số\s+(\d{1,4}/\d{4}/[A-ZĐ][A-ZĐ0-9\-]*)\s+ngày\s+\d",
+    re.MULTILINE | re.IGNORECASE)
+
+
+def _dinh_danh_hop_nhat(head: str):
+    """(loại, trích yếu, số hiệu văn bản gốc) từ câu định danh của bản hợp nhất,
+    hoặc (None, None, None)."""
+    m = _RE_CAU_DINH_DANH_VBHN.search(head)
+    if not m:
+        return None, None, None
+    loai = re.sub(r"\s+", " ", m.group(1)).strip()
+    loai = loai[0].upper() + loai[1:].lower()
+    ten = re.sub(r"\s+", " ", m.group(2)).strip(" ,.")
+    return loai, ten, chuan_hoa_so_hieu(m.group(3))
+
 
 def boc_metadata(text: str, ten_file=None) -> dict:
     """Danh tính văn bản từ phần mở đầu + ngày hiệu lực từ điều khoản thi hành.
@@ -260,6 +287,11 @@ def boc_metadata(text: str, ten_file=None) -> dict:
     # KHÁC được nhắc tới (ca thật: Thông tư 55/2026 bị gán số 03/2021). ---
     m = re.search(r"\bS[ốô]\s*:\s*(\d{1,4}\s*/\s*\d{4}\s*/\s*[A-ZĐ][A-ZĐ0-9\-]*)",
                   head)
+    # Lệnh công bố của Chủ tịch nước ("Lệnh số 21/2015/L-CTN về việc công bố
+    # Luật") in trước luật trong Công báo: số của Lệnh không phải số của luật
+    # (BLTTDS 92/2015/QH13 bị dẫn thành "số 21/2015/L-CTN", 11/09/2026).
+    if m and _la_lenh_cong_bo(m.group(1)):
+        m = None
     if not m:
         # Công văn / quyết định cá biệt không có năm ở giữa (1234/BTC-TCT).
         # Không có nhánh này thì văn bản như vậy rơi xuống lưới quét tự do và
@@ -278,6 +310,9 @@ def boc_metadata(text: str, ten_file=None) -> dict:
             m = RE_SO_HIEU.search(line)
             if not m:
                 continue
+            if _la_lenh_cong_bo(m.group(1)):
+                m = None
+                continue
             truoc = _c(line[:m.start()])
             if m.start() > 25 or re.search(r"thay thế|bãi bỏ|sửa đổi|hướng dẫn|hợp nhất",
                                            truoc):
@@ -289,6 +324,13 @@ def boc_metadata(text: str, ten_file=None) -> dict:
 
     # --- Loại + trích yếu: dòng tiêu đề loại và (các) dòng ngay sau nó ---
     vi_tri, loai, cung_dong = _dong_loai(head)
+    # Bản hợp nhất (Công báo): tiêu đề "VĂN BẢN HỢP NHẤT - VĂN PHÒNG QUỐC HỘI"
+    # đứng trước tên luật — lấy loại/trích yếu/số gốc từ câu định danh.
+    vbhn_loai, vbhn_ten, vbhn_so = (None, None, None)
+    if loai == "Văn bản hợp nhất" or re.search(r"VĂN BẢN HỢP NHẤT", head[:1500]):
+        vbhn_loai, vbhn_ten, vbhn_so = _dinh_danh_hop_nhat(head)
+    if vbhn_loai:
+        loai, cung_dong, vi_tri = vbhn_loai, vbhn_ten, None
     if loai:
         out["loai_van_ban"] = loai
         dong_sau = []
@@ -299,7 +341,9 @@ def boc_metadata(text: str, ten_file=None) -> dict:
             cung_dong = RE_SO_HIEU.sub("", cung_dong)
             cung_dong = re.sub(r"\bs[ốô]\s*:?\s*$", "", cung_dong.strip(),
                                flags=re.IGNORECASE).strip(" -–—:,.")
-        if cung_dong and not _DUNG_TRICH_YEU.match(cung_dong):
+        if vbhn_ten:
+            dong_sau.append(vbhn_ten)
+        elif cung_dong and not _DUNG_TRICH_YEU.match(cung_dong):
             dong_sau.append(cung_dong)
         elif vi_tri is None:
             pass          # nhận loại từ giữa dòng: vị trí dòng không đáng tin
@@ -374,6 +418,12 @@ def boc_metadata(text: str, ten_file=None) -> dict:
     # --- Tên file: số hiệu thắng chữ; loại thắng khi là tiền tố đặt tay hoặc
     # khi chữ chỉ đoán được giữa dòng; ngày ban hành bù khi chữ không có. ---
     tf = danh_tinh_tu_ten_file(ten_file)
+    if vbhn_so:
+        # Số của luật gốc trong câu định danh THẮNG lưới quét tự do: "Luật Cán
+        # bộ, công chức số 22/2008/QH12" dài quá 25 ký tự nên lưới bỏ qua rồi
+        # vớ "1. Luật số 36/2009/QH12" ở danh sách sửa đổi ngay dưới. Trích
+        # dẫn phải là "Luật … số 22/2008/QH12 (văn bản hợp nhất 25/VBHN-VPQH)".
+        out["so_hieu"] = vbhn_so
     if tf["so_hieu"]:
         if out["so_hieu"] and out["so_hieu"] != tf["so_hieu"]:
             out["so_hieu_trong_van_ban"] = out["so_hieu"]
@@ -405,7 +455,10 @@ def _phan_so_hieu(meta: dict, so_hieu=None) -> list:
     nghiệp số 59/2020/QH14 (văn bản hợp nhất 67/VBHN-VPQH)")."""
     so = so_hieu or meta.get("so_hieu")
     goc = meta.get("so_hieu_trong_van_ban")
-    if goc and so and goc != so:
+    # Chỉ ghi "(văn bản hợp nhất …)" khi tên file THẬT là VBHN; số trong chữ
+    # khác số tên file vì lý do khác (Công báo in số Lệnh công bố, dẫn chiếu)
+    # thì tên file thắng, không bịa ra một bản hợp nhất.
+    if goc and so and goc != so and meta.get("hop_nhat"):
         return ["số " + goc, f"(văn bản hợp nhất {so})"]
     if meta.get("hop_nhat") and so:
         return [f"(văn bản hợp nhất {so})"]

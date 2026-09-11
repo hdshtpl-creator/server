@@ -285,6 +285,9 @@ CREATE INDEX IF NOT EXISTS idx_chunks_content_trgm ON chunks USING gin(lower(con
 -- liền kề): không có chỉ mục này là quét tuần tự cả kho 540.000 đoạn cho
 -- mỗi lượt (08/09/2026).
 CREATE INDEX IF NOT EXISTS idx_chunks_doc_idx ON chunks(document_id, chunk_index);
+-- Lọc theo kệ (doc_type=ANY) trước khi so từ khoá: không có thì lượt OR trên
+-- kệ luật 4.000 đoạn vẫn quét cả 540.000 đoạn (11/09/2026).
+CREATE INDEX IF NOT EXISTS idx_chunks_doc_type ON chunks(doc_type);
 CREATE INDEX IF NOT EXISTS idx_documents_title_trgm ON documents USING gin(lower(title) gin_trgm_ops);
 
 CREATE OR REPLACE FUNCTION sync_chunk_labels() RETURNS TRIGGER AS $$

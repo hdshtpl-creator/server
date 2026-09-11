@@ -130,6 +130,34 @@ class KhopVanBanNhac(unittest.TestCase):
         self.assertEqual(rag._nam_van_ban("67/VBHN-VPQH", "2025-06-30"), "2025")
         self.assertIsNone(rag._nam_van_ban("67/VBHN-VPQH", None))
 
+    def test_bac_khop_kho_co_hay_chua(self):
+        # LDN 2020 ↔ bản hợp nhất (vo_nam) = kho CÓ; Luật Đầu tư 2020 ↔ kho chỉ có
+        # bản 2025 (khac_nam) = chưa có đúng bản; BLTTDS = không có gì.
+        ct = {k["v"]["hien_thi"]: k["bac"] for k in rag._khop_van_ban_nhac_chi_tiet(
+            rag._van_ban_nhac_trong_cau_hoi(
+                "Đối chiếu Luật Doanh nghiệp 2020, Luật Đầu tư 2020, Bộ luật Dân sự 2015, "
+                "Bộ luật Tố tụng Dân sự 2015 và Nghị định 168/2025/NĐ-CP"), self.KE)}
+        self.assertEqual(ct["Luật Doanh nghiệp 2020"], "vo_nam")
+        self.assertEqual(ct["Luật Đầu tư 2020"], "khac_nam")
+        self.assertEqual(ct["Bộ luật Dân sự 2015"], "ten_nam")
+        self.assertIsNone(ct["Bộ luật Tố tụng Dân sự 2015"])
+        self.assertEqual(ct["Nghị định 168/2025/NĐ-CP"], "so_hieu")
+        self.assertIn("vo_nam", rag._BAC_KHO_CO)
+        self.assertNotIn("khac_nam", rag._BAC_KHO_CO)
+
+    def test_phap_luat_khong_phai_ten_van_ban(self):
+        # 40 kịch bản 11/09/2026: ba câu bị đọc ra "luật kiêm Chủ tịch", "luật
+        # sang cho A", "luật nộp lên Phòng Đăng ký kinh" từ cụm "pháp luật".
+        for cau in ("Giám đốc làm Người đại diện theo pháp luật kiêm Chủ tịch Hội đồng thành viên",
+                    "ký hồ sơ thay đổi Người đại diện theo pháp luật sang cho A",
+                    "bộ hồ sơ đăng ký thay đổi Người đại diện theo pháp luật nộp lên Phòng Đăng ký kinh doanh",
+                    "Thẩm định tính hợp pháp theo quy định pháp luật và Điều lệ mẫu"):
+            with self.subTest(cau=cau):
+                self.assertEqual(rag._van_ban_nhac_trong_cau_hoi(cau), [])
+        # nhưng tên thật vẫn nhận
+        self.assertEqual([v["hien_thi"] for v in rag._van_ban_nhac_trong_cau_hoi(
+            "theo pháp luật hiện hành và Luật Doanh nghiệp 2020")], ["Luật Doanh nghiệp 2020"])
+
 
 class LuotTuKhoaNoiLong(unittest.TestCase):
     """Lượt OR chỉ cho câu ngắn và chỉ giữ từ phân biệt."""
@@ -174,13 +202,37 @@ class DiemTenDieu(unittest.TestCase):
         self.assertEqual(rag._diem_dieu_luat(
             self.doan(428, "Đơn phương chấm dứt thực hiện hợp đồng"), q), 1.0)
 
-    def test_ten_dieu_dai_hon_cau_khong_thuong(self):
+    def test_khop_theo_tu_co_bac(self):
+        """Luật sư hỏi bằng lời của mình chứ hiếm khi chép nguyên tên điều, nên
+        khớp theo TỪ được tính điểm — nhưng THẤP HƠN khớp nguyên văn, và tên
+        điều càng chung càng ít điểm (đo trên 40 kịch bản 11/09/2026)."""
         q = rag._fold(self.CAU)
+        # Cùng chủ đề, tên dài và cụ thể → điểm cao nhưng dưới 1.0.
+        d424 = rag._diem_dieu_luat(self.doan(424, "Hủy bỏ hợp đồng do chậm thực hiện nghĩa vụ"), q)
+        self.assertTrue(0 < d424 < 1.0, d424)
+        # Tên chung chung ("Chấm dứt hợp đồng") nằm gọn trong mọi câu cùng chủ
+        # đề → phải thấp hơn tên cụ thể, không được ngang khớp nguyên văn.
+        d422 = rag._diem_dieu_luat(self.doan(422, "Chấm dứt hợp đồng"), q)
+        self.assertLess(d422, d424)
+        self.assertLess(d422, 1.0)
+        # Khác chủ đề hẳn → 0.
         self.assertEqual(rag._diem_dieu_luat(
-            self.doan(424, "Hủy bỏ hợp đồng do chậm thực hiện nghĩa vụ"), q), 0.0)
-        self.assertEqual(rag._diem_dieu_luat(
-            self.doan(520, "Đơn phương chấm dứt thực hiện hợp đồng dịch vụ"), q), 0.0)
-        self.assertEqual(rag._diem_dieu_luat(self.doan(422, "Chấm dứt hợp đồng"), q), 0.0)
+            self.doan(688, "Hiệu lực của Bộ luật này về thời gian áp dụng"), q), 0.0)
+        # Tên hai từ không đủ đặc trưng để cộng điểm.
+        self.assertEqual(rag._diem_dieu_luat(self.doan(74, "Pháp nhân"), q), 0.0)
+
+    def test_ten_dieu_dinh_dau_sua_doi_van_boc_duoc(self):
+        """Văn bản hợp nhất viết "…thông qua 1.[42] Nghị quyết…" — thiếu nhánh
+        này thì Điều 148, 58 của VBHN Luật DN mất hẳn phần cộng điểm."""
+        d = {"doc_type": "law",
+             "content": "[Luật Doanh nghiệp số 59/2020/QH14 — Chương V — Điều 148]\n"
+                        "Điều 148. Điều kiện để nghị quyết Đại hội đồng cổ đông được "
+                        "thông qua 1.[42] Nghị quyết về nội dung sau đây…"}
+        m = rag._RE_TIEU_DE_DIEU.search(d["content"][:400])
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "148")
+        self.assertEqual(m.group(2).strip(),
+                         "Điều kiện để nghị quyết Đại hội đồng cổ đông được thông qua")
 
     def test_so_dieu_trong_cau(self):
         q = rag._fold("Điều 428 BLDS 2015 quy định gì?")

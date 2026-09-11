@@ -63,13 +63,32 @@ def _tokens(text: str) -> set[str]:
 # "Điều 423. Hủy bỏ hợp đồng" — tên điều dừng ở xuống dòng hoặc "1." mở khoản.
 _RE_TIEU_DE_DIEU = re.compile(
     r"^\s*(?:\[[^\]\n]*\]\s*)?Điều\s+(\d{1,4})[a-zA-Z]?\s*[.:]\s*"
-    r"(.{3,120}?)(?=\s+1\s*[.)]\s|\n|$)",
+    # Tên điều dừng ở: đầu khoản 1 (kèm dấu sửa đổi "1.[42]" trong văn bản hợp
+    # nhất — thiếu nhánh này thì Điều 148, 58 của VBHN Luật DN không bóc được
+    # tên và mất hẳn phần cộng điểm), xuống dòng, hoặc hết đoạn.
+    r"(.{3,150}?)(?=\s+\d{1,2}\s*[.)](?:\s|\[)|\n|$)",
     re.IGNORECASE | re.MULTILINE)
 _RE_SO_DIEU_HOI = re.compile(r"\bdieu\s+(\d{1,4})\b")
 
 
+# Tỉ lệ từ của TÊN ĐIỀU phải có mặt trong câu hỏi để tính là "hỏi đúng điều
+# này". 0,6 đo trên 40 kịch bản 11/09/2026: Điều 427 "Hậu quả của việc huỷ bỏ
+# hợp đồng" 88%, Điều 35 "Chuyển quyền sở hữu tài sản góp vốn" 88%, Điều 17
+# "Quyền thành lập, góp vốn, mua cổ phần…" 56% — hạ tiếp xuống dưới 0,5 thì
+# "Tên trùng và tên gây nhầm lẫn" (33%) kéo theo mọi điều có chữ "tên".
+_DIEU_TRUNG_TU = 0.55
+# Từ phổ thông trong tên điều, không phân biệt được điều nào với điều nào.
+# Số từ đặc trưng để tên điều được tính đủ trọng số; ngắn hơn thì hạ tỉ lệ.
+_DIEU_TU_DAC_TRUNG = 6
+_TU_MO_TEN_DIEU = frozenset((
+    "cua", "va", "trong", "cac", "mot", "so", "doi", "voi", "theo", "khi",
+    "de", "cho", "tai", "ve", "hoac", "nhung", "duoc", "co", "la", "bi",
+))
+
+
 def _diem_dieu_luat(item, qfold: str, so_dieu_hoi=()) -> float:
-    """1.0 khi câu hỏi gọi đúng TÊN ĐIỀU hoặc SỐ ĐIỀU của đoạn luật này.
+    """1.0 khi câu hỏi gọi đúng TÊN ĐIỀU hoặc SỐ ĐIỀU của đoạn luật này;
+    0 < x < 1 khi câu hỏi nói cùng nội dung bằng lời khác.
 
     Luật sư hỏi bằng thuật ngữ trùng tên điều: "so sánh hủy bỏ hợp đồng và đơn
     phương chấm dứt thực hiện hợp đồng" là tên hai Điều 423 và 428 BLDS. Vector
@@ -88,7 +107,19 @@ def _diem_dieu_luat(item, qfold: str, so_dieu_hoi=()) -> float:
     ten = _fold(m.group(2)).strip(" .;:,")
     if len(ten) >= 8 and f" {ten} " in f" {qfold} ":
         return 1.0
-    return 0.0
+    # Khớp THEO TỪ: luật sư hỏi bằng lời của mình, hiếm khi chép nguyên tên
+    # điều. Chỉ đếm từ mang nghĩa, và chỉ khi tên điều đủ dài để không phải
+    # cụm chung chung ("Pháp nhân" hai từ thì bỏ qua).
+    tu_ten = {t for t in _tokens(ten) if t not in _TU_MO_TEN_DIEU}
+    if len(tu_ten) < 3:
+        return 0.0
+    tu_hoi = _tokens(qfold)
+    ty_le = len(tu_ten & tu_hoi) / len(tu_ten)
+    if ty_le < _DIEU_TRUNG_TU:
+        return 0.0
+    # Tên điều NGẮN là cụm chung ("Chấm dứt hợp đồng") — nằm gọn trong mọi câu
+    # hỏi cùng chủ đề nên không phân biệt được điều nào, hạ điểm theo độ dài.
+    return ty_le * min(1.0, len(tu_ten) / _DIEU_TU_DAC_TRUNG)
 
 
 def _title_coverage(qtokens: set, title: str | None) -> float:
@@ -133,6 +164,83 @@ def _or_tsquery(question: str, gioi_han: bool = True) -> str | None:
     if not tokens or (gioi_han and len(tokens) > _OR_TOI_DA_TU):
         return None
     return " | ".join(tokens[:12])
+
+
+# Viết tắt luật sư gõ trong câu hỏi mà văn bản viết đầy đủ — vector lẫn từ
+# khoá không tự biết "IRC" là "Giấy chứng nhận đăng ký đầu tư" (Mai 29/08/2026:
+# hỏi "cấp ERC và IRC loại nào trước", bot bảo chưa có thông tin dù kho có
+# Luật Đầu tư). Chỉ nối vào CÂU TRA CỨU, câu hỏi hiện cho model giữ nguyên.
+_VIET_TAT_TRA_CUU = {
+    "irc": "Giấy chứng nhận đăng ký đầu tư",
+    "erc": "Giấy chứng nhận đăng ký doanh nghiệp",
+    "gcndkdt": "Giấy chứng nhận đăng ký đầu tư",
+    "gcndkdn": "Giấy chứng nhận đăng ký doanh nghiệp",
+    "dkkd": "đăng ký kinh doanh", "dkdn": "đăng ký doanh nghiệp",
+    "hdld": "hợp đồng lao động", "hdtv": "Hội đồng thành viên",
+    "dhdcd": "Đại hội đồng cổ đông", "hdqt": "Hội đồng quản trị",
+    "bks": "Ban kiểm soát", "ndt": "nhà đầu tư", "fdi": "nhà đầu tư nước ngoài",
+    "m&a": "mua bán sáp nhập doanh nghiệp", "nda": "thỏa thuận bảo mật thông tin",
+    "nca": "cam kết không cạnh tranh", "sha": "thỏa thuận cổ đông",
+    "viac": "Trung tâm Trọng tài Quốc tế Việt Nam", "bhxh": "bảo hiểm xã hội",
+    "bhyt": "bảo hiểm y tế", "bhtn": "bảo hiểm thất nghiệp",
+    "nsdld": "người sử dụng lao động", "nld": "người lao động",
+    "tnhh": "trách nhiệm hữu hạn", "ctcp": "công ty cổ phần",
+    "shcn": "sở hữu công nghiệp", "shtt": "sở hữu trí tuệ",
+    "kdtm": "kinh doanh thương mại", "vsic": "hệ thống ngành kinh tế Việt Nam",
+    "bpkctt": "biện pháp khẩn cấp tạm thời", "tand": "Tòa án nhân dân",
+}
+_RE_TOKEN_VT = re.compile(r"[^\W_]+(?:&[^\W_]+)?", re.UNICODE)
+
+
+def mo_rong_viet_tat(question: str) -> str:
+    """Nối nghĩa đầy đủ của các viết tắt vào cuối câu tra cứu."""
+    them = []
+    thap = (question or "").lower()
+    for t in _RE_TOKEN_VT.findall(question or ""):
+        nghia = _VIET_TAT_TRA_CUU.get(_fold_text(t))
+        if nghia and nghia.lower() not in thap and nghia not in them:
+            them.append(nghia)
+    return f"{question} ({'; '.join(them)})" if them else question
+
+
+# Câu hỏi tình huống hiếm khi chứa nguyên văn TÊN ĐIỀU: "kích hoạt điều khoản
+# mua lại/thoái vốn" cần Điều 51 LDN "Mua lại phần vốn góp", "chi nhánh không
+# có tư cách pháp nhân" cần Điều 84 BLDS "Chi nhánh, văn phòng đại diện của
+# pháp nhân". Vector trên câu dài 60 chữ xếp các điều đó thứ 10-30. Lượt 4 của
+# 40 kịch bản (11/09/2026): 30/50 điều tiêu chí đòi không hề vào nguồn dù kho
+# CÓ luật. Hỏi model 3-5 cụm tra cứu (tên điều / khái niệm đúng thuật ngữ) rồi
+# tìm riêng từng cụm trên kệ luật — một lượt sinh ~2 giây, mỗi cụm tìm ~0,4 giây.
+_CUM_TRA_CUU_PROMPT = (
+    "Bạn là luật sư Việt Nam. Với tình huống dưới đây, liệt kê 3 đến 5 CỤM TỪ "
+    "TRA CỨU để tìm đúng điều luật: mỗi cụm là TÊN MỘT ĐIỀU LUẬT hoặc một khái "
+    "niệm pháp lý đúng thuật ngữ trong văn bản luật Việt Nam (ví dụ: 'mua lại "
+    "phần vốn góp', 'chi nhánh, văn phòng đại diện của pháp nhân', 'thời hạn "
+    "góp vốn thành lập công ty'). Mỗi cụm một dòng, 3 đến 10 chữ, không giải "
+    "thích, không đánh số, không nhắc lại tình huống.\n\nTình huống: ")
+
+
+def _tach_cum_tra_cuu(raw: str) -> list:
+    """Dòng model trả về → danh sách cụm sạch (bỏ đánh số, gạch đầu dòng,
+    ngoặc kép, khối suy nghĩ; giữ 3-10 chữ; tối đa 5)."""
+    raw = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.S)
+    out = []
+    for line in raw.splitlines():
+        s = re.sub(r"^[\s\-\*•·\d\.\)]+", "", line).strip(" \"'“”:;.")
+        s = re.sub(r"\s+", " ", s)
+        n = len(s.split())
+        if 2 <= n <= 12 and s not in out:
+            out.append(s)
+    return out[:5]
+
+
+def _cum_tra_cuu_luat(question: str) -> list:
+    from app.models import llm_local
+    try:
+        raw, _ = llm_local(_CUM_TRA_CUU_PROMPT + (question or "")[:1500],
+                           temperature=0.1, num_predict=120)
+    except Exception:
+        return []
+    return _tach_cum_tra_cuu(raw)
 
 
 def resolve_search_question(question, history=None, state=None) -> str:
@@ -1018,9 +1126,41 @@ def _yeu_cau_bang(question: str) -> bool:
     return bool(_RE_SO_SANH.search(_fold_text(question or "")))
 
 
+# Câu hỏi THỦ TỤC / HỒ SƠ — nhân viên (Nhi, 29/08/2026) chấm "mới nêu được vài
+# ý gạch đầu dòng": thiếu lộ trình, làm ở đâu, thời hạn, phí, theo quy định nào.
+_RE_THU_TUC = re.compile(
+    r"\bthu tuc\b|\bho so\b|\bdang ky\b|\bxin cap\b|\bgiay phep\b|\btrinh tu\b|"
+    r"\bquy trinh\b|\bcap giay\b|\bthay doi noi dung\b|\bchap thuan\b")
+
+
+def _yeu_cau_thu_tuc(question: str) -> bool:
+    """Câu hỏi về thủ tục hành chính / hồ sơ — trả lời theo khung cố định."""
+    return bool(_RE_THU_TUC.search(_fold_text(question or "")))
+
+
 def _la_cau_hoi_phap_ly(question: str) -> bool:
     """Câu hỏi có nêu mốc pháp lý (Điều/khoản n, tên loại văn bản, án lệ)."""
     return bool(_RE_MOC_PHAP_LY.search(_fold_text(question or "")))
+
+
+# Từ vựng pháp lý trong câu hỏi TÌNH HUỐNG không nêu tên văn bản nào: "hậu quả
+# pháp lý", "chế tài xử phạt", "thẩm định tính hợp pháp"… Lượt 4 của 40 kịch
+# bản (11/09/2026): 6/8 câu đo thử không hề chạy khối kệ luật vì chốt cũ đòi
+# có "Điều n"/tên loại văn bản trong câu — kệ luật không được hỏi, mở rộng
+# cụm tra cứu không chạy, điều đúng không bao giờ vào nguồn.
+_RE_TU_PHAP_LY = re.compile(
+    r"\bphap ly\b|\bquy dinh\b|\bhop phap\b|\btham dinh\b|\bra soat\b|\bxu phat\b|"
+    r"\bche tai\b|\btranh chap\b|\bkhoi kien\b|\bhop dong\b|\bthu tuc\b|\bho so\b|"
+    r"\bdieu kien\b|\bnghia vu\b|\btrach nhiem\b|\btu van\b|\bhieu luc\b|"
+    r"\bvi pham\b|\bboi thuong\b|\bthoa thuan\b|\bco phan\b|\bvon gop\b|\bdoanh nghiep\b|"
+    r"\bnha dau tu\b|\bnhan hieu\b|\bsang che\b|\bquyen tac gia\b|\btoa an\b|\btrong tai\b|"
+    r"\bkhang cao\b|\bban an\b|\ban le\b|\bnguoi lao dong\b|\bsa thai\b|\bchap thuan\b")
+
+
+def _hoi_ve_phap_luat(question: str) -> bool:
+    """Câu hỏi thuộc luồng luật: nêu mốc pháp lý HOẶC dùng từ vựng pháp lý."""
+    fold = _fold_text(question or "")
+    return bool(_RE_MOC_PHAP_LY.search(fold) or _RE_TU_PHAP_LY.search(fold))
 
 
 # ---- Văn bản người hỏi NÊU ĐÍCH DANH có nằm trong nguồn không ----------------
@@ -1039,6 +1179,10 @@ _TU_DUNG_TEN = {
     "the", "trong", "hoac", "nay", "do", "khac", "moi", "cu", "lien", "su",
     "huong", "ap", "dung", "con", "da", "se", "thuoc", "phap", "chung", "cac",
     "moi", "hoi", "dan", "dieu", "khoan", "thuong", "neu", "khi", "ma", "voi",
+    # 40 kịch bản 11/09/2026: "Người đại diện theo pháp luật KIÊM Chủ tịch",
+    # "…pháp luật SANG CHO A", "…pháp luật NỘP LÊN Phòng ĐKKD" bị đọc thành
+    # tên văn bản "luật kiêm Chủ tịch", "luật sang cho A".
+    "kiem", "sang", "cho", "nop", "len", "toi", "bang", "boi", "cung", "roi",
 }
 # "dan" là từ dừng ("luật dân sự"?) — KHÔNG: "dân sự", "dân chủ" là tên thật.
 _TU_DUNG_TEN.discard("dan")
@@ -1074,6 +1218,11 @@ def _van_ban_nhac_trong_cau_hoi(question: str) -> list:
             if tuple(fold[i:i + len(pat)]) == pat:
                 loai = pat
                 break
+        # "PHÁP luật" là danh từ chung ("theo quy định pháp luật", "người đại
+        # diện theo pháp luật"), không phải tên một đạo luật.
+        if loai == ("luat",) and i > 0 and fold[i - 1] == "phap":
+            i += 1
+            continue
         if not loai:
             i += 1
             continue
@@ -1204,21 +1353,13 @@ def _nam_van_ban(so_hieu, ngay_ban_hanh=None):
     return m.group(1) if m else None
 
 
-def _khop_van_ban_nhac(nhac, docs, toi_da=4) -> list:
-    """id các văn bản LUẬT trong kho ứng với văn bản câu hỏi nêu đích danh.
+def _khop_van_ban_nhac_chi_tiet(nhac, docs) -> list:
+    """Với MỖI văn bản câu hỏi nêu: bậc khớp với kệ luật và id các bản khớp.
 
-    Sau khi nạp 25.130 bản án (08/09/2026), vector của câu "so sánh hủy bỏ và
-    đơn phương chấm dứt hợp đồng theo BLDS 2015" khớp toàn bản án; không một
-    đoạn BLDS nào lọt top-k dù kho có, và bot kết luận "BLDS 2015 không quy
-    định hủy bỏ hợp đồng". Người hỏi đã NÊU TÊN văn bản thì đoạn của chính văn
-    bản đó phải có mặt — hàm này chỉ tìm id, prepare tự kéo đoạn.
-
-    `docs`: [{id, so_hieu, loai_van_ban, trich_yeu, title, ngay_ban_hanh}].
-    Chữ ký so khớp cùng khuôn với _van_ban_thieu_trong_kho để hai chốt không
-    cãi nhau. Ưu tiên: trúng số hiệu → trúng tên + năm → trúng tên mà văn bản
-    không mang năm (bản hợp nhất) → trúng tên khác năm (kho chỉ có bản khác;
-    vẫn kéo vào để bot có gì đó thật để đọc, dòng "kho chưa có bản <năm>" do
-    chốt kia lo).
+    bac: 'so_hieu' (trúng số hiệu) · 'ten_nam' (trúng tên + năm, hoặc câu không
+    nêu năm) · 'vo_nam' (trúng tên, văn bản không mang năm — bản hợp nhất) ·
+    'khac_nam' (kho chỉ có bản khác năm) · None (không có). Ba bậc đầu = kho CÓ
+    văn bản đó; 'khac_nam' và None = kho chưa có đúng bản người hỏi nêu.
     """
     ra = []
     for v in nhac or []:
@@ -1241,7 +1382,38 @@ def _khop_van_ban_nhac(nhac, docs, toi_da=4) -> list:
                 vo_nam.append(d["id"])
             else:
                 khac_nam.append(d["id"])
-        for i in trung_so or ten_nam or vo_nam or khac_nam:
+        for bac, ids in (("so_hieu", trung_so), ("ten_nam", ten_nam),
+                         ("vo_nam", vo_nam), ("khac_nam", khac_nam)):
+            if ids:
+                ra.append({"v": v, "bac": bac, "ids": ids})
+                break
+        else:
+            ra.append({"v": v, "bac": None, "ids": []})
+    return ra
+
+
+_BAC_KHO_CO = ("so_hieu", "ten_nam", "vo_nam")
+
+
+def _khop_van_ban_nhac(nhac, docs, toi_da=4) -> list:
+    """id các văn bản LUẬT trong kho ứng với văn bản câu hỏi nêu đích danh.
+
+    Sau khi nạp 25.130 bản án (08/09/2026), vector của câu "so sánh hủy bỏ và
+    đơn phương chấm dứt hợp đồng theo BLDS 2015" khớp toàn bản án; không một
+    đoạn BLDS nào lọt top-k dù kho có, và bot kết luận "BLDS 2015 không quy
+    định hủy bỏ hợp đồng". Người hỏi đã NÊU TÊN văn bản thì đoạn của chính văn
+    bản đó phải có mặt — hàm này chỉ tìm id, prepare tự kéo đoạn.
+
+    `docs`: [{id, so_hieu, loai_van_ban, trich_yeu, title, ngay_ban_hanh}].
+    Chữ ký so khớp cùng khuôn với _van_ban_thieu_trong_kho để hai chốt không
+    cãi nhau. Ưu tiên: trúng số hiệu → trúng tên + năm → trúng tên mà văn bản
+    không mang năm (bản hợp nhất) → trúng tên khác năm (kho chỉ có bản khác;
+    vẫn kéo vào để bot có gì đó thật để đọc, dòng "kho chưa có bản <năm>" do
+    chốt kia lo).
+    """
+    ra = []
+    for k in _khop_van_ban_nhac_chi_tiet(nhac, docs):
+        for i in k["ids"]:
             if i not in ra:
                 ra.append(i)
     return ra[:toi_da]
@@ -1420,6 +1592,16 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             "nhân sự, biểu mẫu) thay cho căn cứ pháp luật. Chỉ trả lời phần "
             "có tài liệu tham khảo thật, phần còn lại ghi rõ 'chưa đối chiếu "
             "được, cần bổ sung văn bản vào kho'." + chr(10))
+    if _yeu_cau_thu_tuc(question):
+        parts.append(
+            "TRÌNH BÀY: câu hỏi này là về THỦ TỤC/HỒ SƠ. Trả lời theo đúng khung, "
+            "mỗi mục một tiêu đề: (1) Căn cứ pháp lý — tên văn bản + số hiệu + "
+            "điều; (2) Điều kiện; (3) Thành phần hồ sơ — liệt kê từng giấy tờ, "
+            "mẫu nào nếu nguồn có; (4) Trình tự thực hiện và cơ quan tiếp nhận; "
+            "(5) Thời hạn giải quyết; (6) Phí, lệ phí; (7) Lưu ý / rủi ro thường "
+            "gặp. Mục nào tài liệu tham khảo không có thì ghi rõ 'chưa có trong "
+            "tài liệu tham khảo' ngay tại mục đó — không bỏ trống lặng lẽ, không "
+            "điền từ trí nhớ." + chr(10))
     if _yeu_cau_bang(question):
         # Chi chen khi cau hoi that su can — nhet vao moi luot thi model ke
         # bang ca cho cau hoi mot y, vua ton token vua kho doc.
@@ -1445,6 +1627,13 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                  "nguồn nào có sẵn dòng [Thông tư/Nghị định… — Chương… — Điều…] ở đầu thì "
                  "dùng nguyên dòng đó làm căn cứ, KHÔNG viết chung chung 'theo quy định "
                  "pháp luật' và KHÔNG tự bịa số hiệu. "
+                 "TIỀN ĐỀ SAI: nếu câu hỏi (hoặc lượt trước của người dùng) NÊU một căn "
+                 "cứ — số điều, tên văn bản, mức phạt, thời hạn, tỷ lệ — mà nguồn ở trên "
+                 "cho thấy KHÁC hoặc không có, thì mở đầu bằng việc nói thẳng căn cứ "
+                 "người hỏi nêu không đúng, dẫn đúng theo nguồn, rồi mới trả lời; KHÔNG "
+                 "nương theo tiền đề sai để suy diễn tiếp. Khi người dùng chỉ ra câu trả "
+                 "lời trước sai hoặc dán đúng điều luật vào chat, phải đối chiếu lại và "
+                 "nói rõ điểm nào đã sửa so với lượt trước — không lặp lại câu cũ. "
                  "Khi câu hỏi liên quan hiệu lực/thời hạn (hợp đồng còn hạn không, ai "
                  "còn hợp đồng, vụ nào quá hạn), TỰ so từng ngày kết thúc trong tài liệu "
                  "với HÔM NAY ở đầu prompt: ngày kết thúc đã qua = ĐÃ HẾT HẠN, ĐỪNG coi "
@@ -2365,7 +2554,7 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         # chữ "chi tiết"; thêm ngữ cảnh hồ sơ để đoạn cần tìm nổi lên.
         search_question = f"hồ sơ nhân sự của {', '.join(persons)} — {question}"
     else:
-        search_question = resolve_search_question(question, history, state)
+        search_question = mo_rong_viet_tat(resolve_search_question(question, history, state))
     timings["search_question"] = search_question[:300]
     tick("lich_su_ms")
 
@@ -2552,8 +2741,12 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     # "thời giờ làm thêm của NGƯỜI LAO ĐỘNG theo BLLĐ" có từ khoá nhân sự nên
     # is_staff_query bật, mà đó vẫn là câu hỏi luật — chạy thử 06/09 lượt hai,
     # HĐLĐ của nhân viên vẫn chen vào nguồn vì chốt này bị bỏ qua.
-    if (channel == "internal" and _la_cau_hoi_phap_ly(question)
-            and company_context._legal_or_scenario_question(_fold_text(question))):
+    # Câu NGẮN thuần pháp lý ("cấp ERC và IRC loại nào trước?") không phải
+    # tình huống dài, cũng không phải câu hỏi dữ liệu HDS (infer_intent = None)
+    # — vẫn là câu hỏi luật, kệ luật phải được hỏi (Mai 29/08/2026).
+    if (channel == "internal" and _hoi_ve_phap_luat(question)
+            and (company_context._legal_or_scenario_question(_fold_text(question))
+                 or company_context.infer_intent(question) is None)):
         truoc = len(kept)
         kept = [c for c in kept if c.get("doc_type") != "ho_so_ns"]
         if truoc != len(kept):
@@ -2578,27 +2771,56 @@ def prepare(question, channel, client_id=None, conversation_id=None,
                 cho_phep = set(source_document_ids)
                 id_nhac = [i for i in id_nhac if i in cho_phep]
             if id_nhac:
-                dich_danh = retrieve(
-                    search_question, channel, client_id, dept_ids=dept_ids,
-                    is_banqt=is_banqt, top_k=6, can_finance=can_finance,
-                    document_ids=id_nhac, max_per_document=6,
-                    query_vector=query_vector, lexical="or")
-                for c in dich_danh:
-                    if c["chunk_id"] not in seen_ids:
+                # Lấy RIÊNG từng văn bản: câu 1.6 (LDN + BLDS) gộp chung một
+                # lượt thì 6 đoạn đều là LDN, BLDS không có mặt và bị báo
+                # "kho chưa có" dù đang nằm trong kho (40 kịch bản 11/09/2026).
+                for id_vb in id_nhac:
+                    dich_danh = retrieve(
+                        search_question, channel, client_id, dept_ids=dept_ids,
+                        is_banqt=is_banqt, top_k=3, can_finance=can_finance,
+                        document_ids=[id_vb], max_per_document=3,
+                        query_vector=query_vector, lexical="or", neighbours=False)
+                    for c in dich_danh:
+                        if c["chunk_id"] not in seen_ids:
+                            seen_ids.add(c["chunk_id"])
+                            luat_them.append(c)
+                timings["van_ban_neu_them"] = len(luat_them)
+        # (a2) Câu hỏi tình huống dài, không nêu điều: hỏi model các cụm tra
+        # cứu rồi tìm riêng từng cụm trên kệ luật (xem _CUM_TRA_CUU_PROMPT).
+        if (settings.get_int("retrieval_cum_tra_cuu", 1)
+                and len((question or "").split()) >= 12):
+            cum = _cum_tra_cuu_luat(search_question)   # đã mở rộng viết tắt (IRC, ERC…)
+            timings["cum_tra_cuu"] = cum
+            for cum_tu in cum:
+                extra = retrieve(
+                    cum_tu, channel, client_id, dept_ids=dept_ids,
+                    is_banqt=is_banqt, top_k=3, can_finance=can_finance,
+                    doc_types=["law"], document_ids=source_document_ids,
+                    lexical="or", neighbours=False)
+                for c in extra:
+                    if c["chunk_id"] not in seen_ids and c["score"] >= min_score:
                         seen_ids.add(c["chunk_id"])
                         luat_them.append(c)
-                timings["van_ban_neu_them"] = len(luat_them)
         # (b) Kệ LUẬT tìm riêng, rồi (c) án lệ / bản án / quan điểm. Gộp bốn
         # kệ vào một lượt là kệ bản án (436.000 đoạn) nuốt hết chỗ của kệ
         # luật (4.300 đoạn) — điều luật mới là căn cứ, bản án là minh hoạ.
         # Chỉ vector: nhánh từ khoá đã chạy ở lượt chính, chạy lại theo từng
         # kệ là tốn thêm vài giây mỗi kệ mà không ra gì mới.
-        for ke, k in ((["law"], 3), (["an_le", "ban_an", "advisory"], 3)):
+        # Kệ luật nhỏ (vài nghìn đoạn, có chỉ mục doc_type) nên lượt OR từ khoá
+        # rẻ và bắt được điều có TÊN trùng câu hỏi ("cổ phần ưu đãi cổ tức" →
+        # Điều 117) mà vector xếp thấp. Kệ bản án lớn thì chỉ vector.
+        # Kệ luật lấy RỘNG (10 đoạn, tối đa 8 đoạn cùng một văn bản): một tình
+        # huống pháp lý thật chạm nhiều điều rời nhau — 4.6 cần Điều 123, 125
+        # VÀ 148 của cùng Luật Doanh nghiệp; lấy 4 đoạn thì luôn thiếu một
+        # điều (đo 11/09/2026). Prompt hiện dùng 6,5-19k/32k token nên còn chỗ.
+        # Kệ bản án giữ 3 và chỉ vector: nó minh hoạ, không phải căn cứ.
+        for ke, k, mpd, lex in ((["law"], 10, 8, "or"),
+                                (["an_le", "ban_an", "advisory"], 3, None, False)):
             extra = retrieve(
                 search_question, channel, client_id, dept_ids=dept_ids,
                 is_banqt=is_banqt, top_k=k, can_finance=can_finance,
                 doc_types=ke, document_ids=source_document_ids,
-                query_vector=query_vector, lexical=False)
+                max_per_document=mpd, query_vector=query_vector, lexical=lex)
             for c in extra:
                 if c["chunk_id"] not in seen_ids and c["score"] >= min_score:
                     seen_ids.add(c["chunk_id"])
@@ -2714,7 +2936,9 @@ def prepare(question, channel, client_id=None, conversation_id=None,
             # mất phần ĐẦU prompt, tức đúng khối DỮ LIỆU CÔNG TY.
             # Số thật đo trên kho HDS: một bộ hồ sơ có tới 143 đoạn, riêng hai
             # file báo cáo tháng đã chiếm 97 đoạn.
-            kept = added + kept[:PERSON_OTHER_CHUNKS]
+            # Câu vừa nêu người vừa là câu hỏi luật (HĐLĐ của Ngân có trái
+            # BLLĐ không?): kệ luật đã kéo vào không được cắt cụt còn 8 đoạn.
+            kept = added + (kept if timings.get("kho_luat_them") else kept[:PERSON_OTHER_CHUNKS])
             timings["bo_ho_so_them"] = len(added)
             timings["bo_ho_so_dinh_danh"] = len(head)
     chunks = fit_context(kept,
@@ -2787,6 +3011,22 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     # Văn bản người hỏi NÊU ĐÍCH DANH mà không có trong nguồn → nói cho model
     # biết, không thì nó điền từ trí nhớ và dẫn hồ sơ nội bộ làm căn cứ.
     van_ban_thieu = _van_ban_thieu_trong_kho(question, chunks)
+    if van_ban_thieu:
+        # Đoạn ĐÃ LẤY chỉ là một góc kho: câu 1.6 nêu LDN + BLDS, ngân sách
+        # prompt chỉ chừa được đoạn LDN, và chốt này hô "kho chưa có BLDS" dù
+        # BLDS nằm ngay kệ luật (40 kịch bản 11/09/2026). Đối chiếu thêm với
+        # kệ luật thật: kho có (đúng số hiệu / đúng tên + năm / bản hợp nhất)
+        # thì không phải "thiếu" — chỉ là chưa được kéo vào prompt.
+        try:
+            ke_luat = _tai_lieu_luat_trong_kho(
+                CHANNEL_LEVEL[channel], client_id=client_id, dept_ids=dept_ids,
+                is_banqt=is_banqt, can_finance=can_finance)
+            co_trong_ke = {k["v"]["hien_thi"]
+                           for k in _khop_van_ban_nhac_chi_tiet(van_ban_thieu, ke_luat)
+                           if k["bac"] in _BAC_KHO_CO}
+        except Exception:
+            co_trong_ke = set()
+        van_ban_thieu = [v for v in van_ban_thieu if v["hien_thi"] not in co_trong_ke]
     if van_ban_thieu:
         timings["van_ban_thieu"] = [v["hien_thi"] for v in van_ban_thieu]
 

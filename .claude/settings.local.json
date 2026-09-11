@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(ssh -i ~/.ssh/id_claude pc@100.101.107.89 \"docker exec hds-postgres psql -U hds -d hdsai -t -c \\\\\"SELECT count\\(*\\) FILTER \\(WHERE doc_type='law'\\) AS law, count\\(*\\) AS tong, count\\(*\\) FILTER \\(WHERE NOT approved\\) AS cho_duyet FROM documents WHERE coalesce\\(active,true\\)\\\\\"\")"
     ]
   }
 }

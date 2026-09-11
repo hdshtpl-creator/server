@@ -1387,10 +1387,11 @@ def person_field_question(question: str) -> bool:
 # Từ đứng NGAY SAU tên một tiếng biến nó thành từ ghép, không còn là tên người:
 # ngân hàng / ngân sách / ngân quỹ, nhi đồng, thu nhập, an toàn… Rẻ hơn nhiều
 # so với gắn bộ nhận dạng tên riêng, và mỗi lần gặp ca mới chỉ cần thêm một từ.
-_COMPOUND_NEXT = {
-    "hang", "sach", "quy", "khoan", "dong", "khoa", "nhap", "hoi", "toan",
-    "ninh", "hoat", "vien", "te", "sau", "truoc", "nay", "kia", "mot",
-}
+_COMPOUND_NEXT = {"hang", "sach", "quy", "khoan", "dong", "khoa", "nhap", "hoi", "toan",
+    "ninh", "hoat", "vien", "te", "sau", "truoc", "nay", "kia", "mot", "kho", "phieu", "luong", "moi"}
+# 'ngân HÀNG', 'ngân SÁCH', 'nhi ĐỒNG', 'mai MỐI': tiếng sau ghép thành từ thường —
+# 2.4/1.7/1.9 trong 40 kịch bản (11/09/2026) nhắc 'tài khoản ngân hàng' và bị
+# kéo nguyên bộ hồ sơ nhân sự Ngân vào nguồn, đẩy đoạn luật ra ngoài.
 # Từ đứng NGAY TRƯỚC tên một tiếng biến nó thành từ ghép: thương MẠI, ngày MAI,
 # sáng MAI, hôm SAU/MAI, tương LAI… (bỏ dấu thì "mại" = "mai").
 _COMPOUND_PREV = {"thuong", "ngay", "sang", "chieu", "toi", "hom", "tuong", "sau"}
@@ -1413,7 +1414,10 @@ def detect_staff_person(question, names) -> list[str]:
     q = _fold(question)
     for phrase in _TIME_PHRASES:
         q = q.replace(phrase, " ")
-    tokens = q.split()
+    # Bỏ dấu câu dính vào tiếng: "tài khoản ngân hàng." → tiếng sau "hang."
+    # không khớp "hang" trong _COMPOUND_NEXT và Ngân thành nhân viên (2.4
+    # trong 40 kịch bản, 11/09/2026).
+    tokens = re.findall(r"[^\W_]+", q)
     if not tokens:
         return []
     has_context = any(w in q for w in PERSON_CONTEXT_WORDS)

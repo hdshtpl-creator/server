@@ -27,7 +27,9 @@ Ba việc, theo thứ tự:
 Chạy:  python -m app.backfill_van_ban            # metadata + quan hệ
        python -m app.backfill_van_ban --dry-run  # chỉ liệt kê, không ghi
        python -m app.backfill_van_ban --lam-lai-doan   # thêm bước 3
-       python -m app.backfill_van_ban --doc-id 123     # một tài liệu
+       python -m app.backfill_van_ban --doc-id 123 --tat-ca --lam-lai-doan
+                                          # một tài liệu: bóc lại danh tính + cắt lại
+                                          # đoạn dù đã có khuôn mới (sửa nhãn sai)
 """
 import json
 import sys
@@ -118,12 +120,17 @@ def buoc_metadata(dry_run=False, doc_id=None, tat_ca=False):
               f"{n_ha} văn bản bị hạ trạng thái hiệu lực.")
 
 
-def buoc_lam_lai_doan(dry_run=False, doc_id=None):
+def buoc_lam_lai_doan(dry_run=False, doc_id=None, ep=False):
     """Bước 3: cắt + embed lại đoạn cho văn bản luật có file gốc.
 
     Chỉ chọn tài liệu CHƯA có đoạn 'phan_mo_dau' (dấu hiệu đã cắt theo khuôn
     mới) — chạy lại lần hai không làm lại việc đã làm. Trạng thái duyệt và
     documents.id giữ nguyên tuyệt đối.
+
+    ``ep=True`` (mặc định khi gọi đích danh --doc-id): cắt lại kể cả khi đã có
+    khuôn mới — dùng khi danh tính vừa được sửa (11/09/2026: ba bản hợp nhất
+    Công báo mang nhãn "Văn bản hợp nhất Văn phòng quốc hội số …" đã có
+    'phan_mo_dau' nên bị bỏ qua, nhãn sai không bao giờ được thay).
 
     Ngoại lệ đã biết: văn bản bắt đầu THẲNG bằng "Điều 1" (không có phần mở
     đầu) không sinh đoạn 'phan_mo_dau' nào, nên mỗi lượt chạy lại đều cắt +
@@ -141,7 +148,9 @@ def buoc_lam_lai_doan(dry_run=False, doc_id=None):
                 AND d.source_path IS NOT NULL
                 -- Bản người duyệt đã chữa tay nằm trong chunks, KHÔNG nằm trong
                 -- file gốc: cắt lại từ file là xoá sạch công sửa OCR của họ.
-                AND coalesce(d.extraction_status,'ready') <> 'edited'
+                AND coalesce(d.extraction_status,'ready') <> 'edited'"""
+    if not ep:
+        sql += """
                 AND NOT EXISTS (SELECT 1 FROM chunks c WHERE c.document_id=d.id
                                   AND c.source_locator='phan_mo_dau')"""
     params = []
@@ -202,4 +211,4 @@ if __name__ == "__main__":
         mot_id = int(args[args.index("--doc-id") + 1])
     buoc_metadata(dry_run=dry, doc_id=mot_id, tat_ca="--tat-ca" in args)
     if "--lam-lai-doan" in args:
-        buoc_lam_lai_doan(dry_run=dry, doc_id=mot_id)
+        buoc_lam_lai_doan(dry_run=dry, doc_id=mot_id, ep=("--ep" in args) or bool(mot_id))

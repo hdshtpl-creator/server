@@ -6,6 +6,8 @@ Nghị định 96/2026 → nhãn đoạn "Nghị Định số 63/2025/QH15"). T�
 Toàn bộ là logic thuần — không CSDL, không Ollama.
 """
 import unittest
+
+from app.van_ban import boc_metadata, trich_dan
 from datetime import date
 
 from app import van_ban
@@ -105,6 +107,90 @@ class NhanDoanMangSoDung(unittest.TestCase):
         # Đường cũ (không tên file) không được tái phát nhãn "Nghị Định số 63/2025/QH15".
         self.assertNotIn("63/2025", document_citation(DAU_ND_96))
 
+
+
+class BanHopNhatCongBao(unittest.TestCase):
+    """PDF Công báo của văn bản hợp nhất: dòng 'VĂN BẢN HỢP NHẤT - VĂN PHÒNG
+    QUỐC HỘI' đứng trước tên luật. Ba luật nạp 11/09/2026 (SHTT, Thương mại,
+    Cán bộ công chức) bị bóc thành loại 'Văn bản hợp nhất', trích yếu 'Văn
+    phòng quốc hội', và nhãn đoạn ghi 'Văn bản hợp nhất Văn phòng quốc hội số
+    50/2005/QH11' — luật sư đọc không hiểu đó là Luật Sở hữu trí tuệ."""
+
+    CHU = ("12 CÔNG BÁO/Số 361 + 362/Ngày 13-02-2023\n"
+           "VĂN BẢN PHÁP LUẬT KHÁC\n"
+           "VĂN BẢN HỢP NHẤT - VĂN PHÒNG QUỐC HỘI\n"
+           "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\n"
+           "Độc lập - Tự do - Hạnh phúc\n"
+           "LUẬT\n"
+           "SỞ HỮU TRÍ TUỆ\n"
+           "Luật Sở hữu trí tuệ số 50/2005/QH11 ngày 29 tháng 11 năm 2005 của Quốc\n"
+           "hội, có hiệu lực kể từ ngày 01 tháng 7 năm 2006, được sửa đổi, bổ sung bởi:\n"
+           "1. Luật số 36/2009/QH12 ngày 19 tháng 6 năm 2009 của Quốc hội sửa đổi, bổ\n"
+           "sung một số điều của Luật Sở hữu trí tuệ, có hiệu lực kể từ ngày 01 tháng 01 năm 2010;\n"
+           "Căn cứ Hiến pháp nước Cộng hòa xã hội chủ nghĩa Việt Nam;\n"
+           "Quốc hội ban hành Luật Sở hữu trí tuệ.\n"
+           "Phần thứ nhất\nQUY ĐỊNH CHUNG\n"
+           "Điều 1. Phạm vi điều chỉnh\nLuật này quy định về quyền tác giả…\n")
+
+    def test_danh_tinh_tu_cau_dinh_danh(self):
+        m = boc_metadata(self.CHU, ten_file="01_Luat_SHTT_11-VBHN-VPQH.pdf")
+        self.assertEqual(m["so_hieu"], "11/VBHN-VPQH")
+        self.assertEqual(m["so_hieu_trong_van_ban"], "50/2005/QH11")
+        self.assertEqual(m["loai_van_ban"], "Luật")
+        self.assertEqual(m["trich_yeu"], "Sở hữu trí tuệ")
+        self.assertTrue(m.get("hop_nhat"))
+
+    def test_trich_dan_ghi_ten_luat_goc(self):
+        self.assertEqual(
+            trich_dan(self.CHU, ten_file="01_Luat_SHTT_11-VBHN-VPQH.pdf"),
+            "Luật Sở hữu trí tuệ số 50/2005/QH11 (văn bản hợp nhất 11/VBHN-VPQH)")
+
+    def test_bo_luat_va_ten_co_dau_phay(self):
+        chu = self.CHU.replace("LUẬT\nSỞ HỮU TRÍ TUỆ", "LUẬT\nCÁN BỘ, CÔNG CHỨC").replace(
+            "Luật Sở hữu trí tuệ số 50/2005/QH11 ngày 29 tháng 11 năm 2005",
+            "Luật Cán bộ, công chức số 22/2008/QH12 ngày 13 tháng 11 năm 2008")
+        m = boc_metadata(chu, ten_file="12_Luat_Can_bo_cong_chuc_25-VBHN-VPQH.pdf")
+        self.assertEqual((m["loai_van_ban"], m["trich_yeu"], m["so_hieu_trong_van_ban"]),
+                         ("Luật", "Cán bộ, công chức", "22/2008/QH12"))
+
+    def test_van_ban_thuong_khong_bi_anh_huong(self):
+        chu = ("QUỐC HỘI\nLuật số: 45/2019/QH14\nCỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\n"
+               "BỘ LUẬT\nLAO ĐỘNG\nCăn cứ Hiến pháp;\nQuốc hội ban hành Bộ luật Lao động.\n"
+               "Điều 1. Phạm vi điều chỉnh\n")
+        m = boc_metadata(chu, ten_file="Bộ-luật-45-2019-QH14.docx")
+        self.assertEqual((m["loai_van_ban"], m["trich_yeu"], m["so_hieu"]),
+                         ("Bộ luật", "Lao động", "45/2019/QH14"))
+        self.assertFalse(m.get("hop_nhat"))
+
+
+class LenhCongBoTrongCongBao(unittest.TestCase):
+    """Công báo in mục lục 'Lệnh số 21/2015/L-CTN về việc công bố Luật' trước
+    'Luật số 92/2015/QH13 Bộ luật tố tụng dân sự' — số của Lệnh bị lấy làm số
+    trong văn bản, nhãn đoạn thành 'Bộ luật Tố tụng dân sự số 21/2015/L-CTN
+    (văn bản hợp nhất 92/2015/QH13)' (11/09/2026)."""
+
+    CHU = ("CÔNG BÁO/Số 1235 + 1236/Ngày 27-12-2015\nMỤC LỤC\n"
+           "CHỦ TỊCH NƯỚC - QUỐC HỘI\n"
+           "08-12-2015 - Lệnh số 21/2015/L-CTN về việc công bố Luật.\n"
+           "25-11-2015 - Luật số 92/2015/QH13 Bộ luật tố tụng dân sự.\n"
+           "QUỐC HỘI\nCỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\n"
+           "BỘ LUẬT\nTỐ TỤNG DÂN SỰ\nCăn cứ Hiến pháp nước Cộng hòa xã hội chủ nghĩa Việt Nam;\n"
+           "Quốc hội ban hành Bộ luật tố tụng dân sự.\n"
+           "Phần thứ nhất\nNHỮNG QUY ĐỊNH CHUNG\nĐiều 1. Phạm vi điều chỉnh\n")
+
+    def test_bo_qua_so_lenh(self):
+        m = boc_metadata(self.CHU, ten_file="03_Bo_luat_To_tung_dan_su_92-2015-QH13.pdf")
+        self.assertEqual(m["so_hieu"], "92/2015/QH13")
+        self.assertNotEqual(m.get("so_hieu_trong_van_ban"), "21/2015/L-CTN")
+        self.assertFalse(m.get("hop_nhat"))
+        self.assertEqual(trich_dan(self.CHU, ten_file="03_Bo_luat_To_tung_dan_su_92-2015-QH13.pdf"),
+                         "Bộ luật Tố tụng dân sự số 92/2015/QH13")
+
+    def test_khong_bia_van_ban_hop_nhat_khi_ten_file_khong_phai_vbhn(self):
+        # số trong chữ khác số tên file vì dẫn chiếu → tên file thắng, không ghi "(văn bản hợp nhất …)"
+        chu = "NGHỊ ĐỊNH\nSố: 99/2020/NĐ-CP\nQuy định chi tiết\nĐiều 1. Phạm vi\n"
+        self.assertEqual(trich_dan(chu, ten_file="Nghị-định-96-2026-NĐ-CP.docx"),
+                         "Nghị định số 96/2026/NĐ-CP")
 
 if __name__ == "__main__":
     unittest.main()
