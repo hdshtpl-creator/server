@@ -116,3 +116,42 @@ class TenNhanSuTrongTuGhep(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CanCuPhapLuatTrongCau(unittest.TestCase):
+    """Câu hỏi pháp lý: prompt bắt nêu số Điều ngay trong câu, không lấy điều lệ
+    khách làm căn cứ (phản hồi Thuỳ Dương, Mai, Loan 28-29/08/2026)."""
+
+    def test_cau_hoi_luat_co_khoi_can_cu(self):
+        p = rag.build_prompt("Thời hiệu khởi kiện tranh chấp hợp đồng thương mại là bao lâu?",
+                             [], chunk_chars=0, budget=0)
+        self.assertIn("CĂN CỨ PHÁP LUẬT:", p)
+        self.assertIn("KHÔNG thay được số điều", p)
+        self.assertIn("theo Điều lệ của Công ty X", p)
+        # Khối này phải đứng NGAY TRƯỚC câu hỏi để model đọc sau cùng.
+        self.assertLess(p.index("CĂN CỨ PHÁP LUẬT:"), p.index("CÂU HỎI HIỆN TẠI:"))
+
+    def test_cau_hoi_thuong_khong_co(self):
+        for cau in ("Hôm nay ai đi làm muộn?", "Mai còn bao nhiêu ngày phép?",
+                    "Tóm tắt biên bản họp tuần trước"):
+            with self.subTest(cau=cau):
+                p = rag.build_prompt(cau, [], chunk_chars=0, budget=0)
+                self.assertNotIn("CĂN CỨ PHÁP LUẬT:", p)
+
+
+class TuVungDoanhNghiep(unittest.TestCase):
+    """Câu hỏi doanh nghiệp không dùng chữ 'luật' vẫn phải vào luồng luật."""
+
+    def test_cau_doanh_nghiep(self):
+        for cau in ("Thời hạn góp vốn của thành viên, cổ đông là trong vòng bao nhiêu ngày?",
+                    "Vốn điều lệ tối thiểu để thành lập công ty là bao nhiêu?",
+                    "Muốn giải thể công ty thì làm thế nào?",
+                    "Chuyển nhượng phần vốn cho người ngoài có cần chấp thuận không?"):
+            with self.subTest(cau=cau):
+                self.assertTrue(rag._hoi_ve_phap_luat(cau))
+
+    def test_cau_noi_bo_khong_vao(self):
+        for cau in ("Mai còn bao nhiêu ngày phép?", "Lịch họp tuần này có gì?",
+                    "Tóm tắt biên bản họp hôm qua"):
+            with self.subTest(cau=cau):
+                self.assertFalse(rag._hoi_ve_phap_luat(cau))

@@ -1154,7 +1154,10 @@ _RE_TU_PHAP_LY = re.compile(
     r"\bdieu kien\b|\bnghia vu\b|\btrach nhiem\b|\btu van\b|\bhieu luc\b|"
     r"\bvi pham\b|\bboi thuong\b|\bthoa thuan\b|\bco phan\b|\bvon gop\b|\bdoanh nghiep\b|"
     r"\bnha dau tu\b|\bnhan hieu\b|\bsang che\b|\bquyen tac gia\b|\btoa an\b|\btrong tai\b|"
-    r"\bkhang cao\b|\bban an\b|\ban le\b|\bnguoi lao dong\b|\bsa thai\b|\bchap thuan\b")
+    r"\bkhang cao\b|\bban an\b|\ban le\b|\bnguoi lao dong\b|\bsa thai\b|\bchap thuan\b|"
+    r"\bgop von\b|\bvon dieu le\b|\bco dong\b|\bdieu le cong ty\b|\bdang ky doanh nghiep\b|\bdang ky kinh doanh\b|\bgiai the\b|\bpha san\b|\bchuyen nhuong\b|\bthoi hieu\b|\bthe chap\b|\bbao lanh\b|\buy quyen\b|\bthua ke\b")
+# 12/09/2026: 'thời hạn góp vốn của thành viên, cổ đông' không có từ nào ở trên nên
+# kệ luật không mở, bot lấy điều lệ của khách làm căn cứ (phản hồi Mai 29/08).
 
 
 def _hoi_ve_phap_luat(question: str) -> bool:
@@ -1614,6 +1617,20 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             "rút ra. Nếu hai khái niệm khác nhau mà bạn đang định viết định "
             "nghĩa gần như nhau cho cả hai, nghĩa là bạn CHƯA phân biệt được: "
             "hãy nói thẳng điều đó thay vì viết cho có." + chr(10))
+    if _hoi_ve_phap_luat(question):
+        # Nhân viên (Thuỳ Dương, Mai, Loan 28-29/08/2026): bot nói đúng nội dung
+        # nhưng chỉ ghi [Nguồn n], không nêu số Điều; và lấy điều lệ của khách
+        # làm căn cứ cho câu hỏi về luật. Đặt sát câu hỏi để model đọc sau cùng.
+        parts.append(
+            "CĂN CỨ PHÁP LUẬT: câu hỏi này hỏi về quy định pháp luật. Mỗi kết luận "
+            "phải nêu NGAY TRONG CÂU số Điều/khoản cùng tên văn bản và số hiệu (vd "
+            "'Điều 319 Luật Thương mại số 36/2005/QH11'), rồi mới tới [Nguồn n] — "
+            "ký hiệu [Nguồn n] KHÔNG thay được số điều. Điều lệ, hợp đồng, hồ sơ của "
+            "khách hàng hay nhân viên KHÔNG phải căn cứ pháp luật: chỉ dùng để đối "
+            "chiếu và phải ghi rõ 'theo Điều lệ của Công ty X', không viết nội dung "
+            "điều lệ như thể đó là luật. Nếu nguồn không có văn bản luật cho ý nào, "
+            "nói rõ 'kho chưa có văn bản điều chỉnh ý này' thay vì dẫn tài liệu khác."
+            + chr(10))
     parts.append(f"CÂU HỎI HIỆN TẠI: {question}\n"
                  "Nếu đây là câu nói lại/chỉnh lại câu trước, hiểu theo diễn biến ở "
                  "trên và trả lời luôn. MỖI đoạn có khẳng định lấy từ tài liệu phải kết "
