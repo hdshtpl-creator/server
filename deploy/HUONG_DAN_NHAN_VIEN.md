@@ -64,6 +64,11 @@ Nơi hỏi đáp hằng ngày: tra luật, tra hồ sơ khách, hỏi về nhân
 - Bot **nhớ cả cuộc trò chuyện**: 10 lượt gần nhất được giữ nguyên văn, phần cũ hơn được tự cô đọng thành bản tóm tắt (cùng cơ chế Claude/ChatGPT) — nên mở lại chat cũ dài bao nhiêu, hỏi tiếp bot vẫn nhớ tên khách, số hợp đồng, kết luận từ những lượt đầu. Hội thoại **chỉ mất khi bạn bấm xoá**. Đổi chủ đề hẳn thì bấm **Cuộc trò chuyện mới** cho sạch ngữ cảnh.
 - Câu hỏi phức tạp có thể mất vài chục giây. Màn hình luôn hiện **đang làm gì** ("Đang tìm trong kho tài liệu…", "Đang tra cứu văn bản luật, án lệ…") — im lặng không có nghĩa là treo.
 
+Hai kiểu câu hỏi có khung trả lời riêng:
+
+- **Tình huống dài** (mô tả vụ việc rồi hỏi hậu quả, phương án): bot trả lời phần đã đủ căn cứ, rồi kết bằng mục **"Cần làm rõ để tư vấn chắc chắn hơn"** — 2-4 câu hỏi về dữ kiện còn thiếu và mỗi câu ảnh hưởng kết luận nào. Trả lời các câu đó trong lượt sau là bot tư vấn tiếp trên cùng hội thoại.
+- **Đánh giá nhãn hiệu** ("nhãn X có khả năng bảo hộ không", "X và Y có tương tự gây nhầm lẫn không"): bot so riêng từng yếu tố (cấu trúc, phát âm, nghĩa, hình thức, nhóm hàng hoá), dẫn điều luật, kết luận theo **một trong ba mức** (bảo hộ cao / có rủi ro / từ chối cao) và đề xuất 2-3 hướng sửa nhãn khác nhau. Kết luận cuối vẫn do luật sư phụ trách.
+
 ### 3.2 Các nút trên thanh công cụ
 
 | Nút | Dùng khi nào |
@@ -160,6 +165,12 @@ Chỗ nào AI lấy số liệu từ file đính kèm chứ không từ câu l�
 
 File tạo ra **tự xoá sau 24 giờ** — tải về ngay.
 
+### 4.4 Đối chiếu file của bạn với mẫu công ty
+
+Bạn soạn xong một hợp đồng hay biểu mẫu và muốn biết nó có đúng mẫu quy định của HDS không: đính kèm file đó, chọn mẫu tương ứng ở **Chọn file mẫu**, rồi bấm **Đối chiếu với mẫu**.
+
+AI trả về bốn phần: mẫu yêu cầu những mục nào; **bảng đối chiếu** từng mục với kết luận *ĐỦ / THIẾU / KHÁC MẪU / CẦN XEM LẠI*; lỗi thể thức (thiếu số, ngày, căn cứ, chữ ký…); và danh sách việc cần sửa. AI chỉ so hai tài liệu với nhau, không tự thêm nội dung — mục nào cả hai đều không có thì nó nói không có.
+
 ---
 
 ## 5. TAB SOẠN TÀI LIỆU
@@ -173,6 +184,8 @@ Quy trình: **Tạo bản nháp** (chọn mẫu, chọn tài liệu nguồn, ghi
 - Mọi phiên bản đều được lưu, không ghi đè — luôn quay lại được bản cũ.
 - Chỉ người có **quyền duyệt** mới phê duyệt được; còn chỗ trống `[CẦN BỔ SUNG]` hoặc chưa đủ căn cứ thì phải tick xác nhận mới duyệt được.
 - Bản nháp xuất ra là **văn bản mới soạn** (Times New Roman 12), không giữ định dạng file mẫu gốc. Cần giữ nguyên format mẫu thì dùng **Tạo file mẫu** ở tab Kiểm tra pháp lý (mục 4.2).
+- **Soạn văn bản tố tụng và đơn từ ngay từ khung chat**: gõ *"Soạn đơn kháng cáo bản án sơ thẩm số … vì …"*, *"Viết công văn gửi Sở … đề nghị …"*, *"Dự thảo đơn phản đối cấp văn bằng nhãn hiệu số …"*, *"Tạo bản luận cứ bảo vệ bị đơn …"*. Không cần ghi "cho ai" — cả câu là bối cảnh. Các loại nhận được: đơn khởi kiện, đơn kháng cáo, đơn yêu cầu, đơn đề nghị, đơn phản đối, đơn khiếu nại, công văn, thông báo, bản tự khai, bản luận cứ, bản bảo vệ, bản ý kiến, ý kiến pháp lý. Kho có mẫu đúng loại thì bám mẫu; chưa có thì soạn theo **khung thể thức chuẩn** với đủ mục bắt buộc, chỗ chưa có dữ liệu để `[CẦN BỔ SUNG]`. Căn cứ pháp lý chỉ lấy từ văn bản luật trong kho. Bản nháp nằm ở tab này, tải được **.docx** hoặc **.pdf**.
+- Câu hỏi *"soạn đơn kháng cáo cần những nội dung gì?"* là câu tra cứu, bot trả lời chứ không tạo file.
 
 ---
 

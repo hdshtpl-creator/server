@@ -1138,6 +1138,36 @@ def _yeu_cau_thu_tuc(question: str) -> bool:
     return bool(_RE_THU_TUC.search(_fold_text(question or "")))
 
 
+# Câu hỏi TÌNH HUỐNG (dài, có bối cảnh) — Loan 28/08/2026: "AI nên xác định
+# những dữ kiện còn thiếu và đặt câu hỏi bổ sung cho người dùng" thay vì kết
+# luận chắc nịch trên thông tin hạn chế. Chỉ áp cho câu dài có từ vựng pháp lý;
+# câu tra cứu một ý thì không hỏi lại cho có.
+_TU_TINH_HUONG_TOI_THIEU = 25
+
+
+def _yeu_cau_lam_ro(question: str) -> bool:
+    """Câu hỏi tình huống pháp lý đủ dài để có dữ kiện còn thiếu đáng hỏi."""
+    q = question or ""
+    return len(q.split()) >= _TU_TINH_HUONG_TOI_THIEU and _hoi_ve_phap_luat(q)
+
+
+# ĐÁNH GIÁ NHÃN HIỆU — Nhi (Phòng SHTT, 29/08/2026): "tất cả các nhãn đánh giá
+# đều có một kết quả là khả năng từ chối cao; phương án cứu nhãn không đa dạng,
+# lúc nào cũng thêm chữ VÀNG ở cuối". Khung buộc so RIÊNG từng yếu tố, kết luận
+# theo thang ba mức và đề xuất phương án khác nhau cho chính nhãn đó.
+_RE_NHAN_HIEU = re.compile(r"\bnhan hieu\b|\bthuong hieu\b|\blogo\b")
+_RE_DANH_GIA_NHAN_HIEU = re.compile(
+    r"\bkha nang\b|\btuong tu\b|\bnham lan\b|\btrung\b|\bdanh gia\b|"
+    r"\btham dinh\b|\btra cuu\b|\bxung dot\b|\bdang ky duoc\b|\bco dang ky\b|"
+    r"\bbao ho duoc\b|\btu choi\b|\bphan doi\b|\bphan biet\b")
+
+
+def _yeu_cau_nhan_hieu(question: str) -> bool:
+    """Câu hỏi đánh giá khả năng bảo hộ / tương tự gây nhầm lẫn của nhãn hiệu."""
+    fold = _fold_text(question or "")
+    return bool(_RE_NHAN_HIEU.search(fold) and _RE_DANH_GIA_NHAN_HIEU.search(fold))
+
+
 def _la_cau_hoi_phap_ly(question: str) -> bool:
     """Câu hỏi có nêu mốc pháp lý (Điều/khoản n, tên loại văn bản, án lệ)."""
     return bool(_RE_MOC_PHAP_LY.search(_fold_text(question or "")))
@@ -1617,6 +1647,36 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             "rút ra. Nếu hai khái niệm khác nhau mà bạn đang định viết định "
             "nghĩa gần như nhau cho cả hai, nghĩa là bạn CHƯA phân biệt được: "
             "hãy nói thẳng điều đó thay vì viết cho có." + chr(10))
+    if _yeu_cau_nhan_hieu(question):
+        parts.append(
+            "TRÌNH BÀY: câu hỏi này là ĐÁNH GIÁ NHÃN HIỆU. Trả lời theo khung: "
+            "(1) Dấu hiệu được hỏi: phần chữ, phần hình, cách phát âm, nghĩa, và "
+            "nhóm hàng hoá/dịch vụ đăng ký; (2) Đối chiếu với nhãn hiệu đối chứng "
+            "(nếu câu hỏi nêu): so RIÊNG từng yếu tố — cấu trúc, phát âm, ý nghĩa, "
+            "hình thức trình bày, hàng hoá/dịch vụ và kênh tiêu thụ — yếu tố nào "
+            "giống, yếu tố nào khác; (3) Căn cứ: đối chiếu từng điểm với điều kiện "
+            "bảo hộ trong Luật Sở hữu trí tuệ có trong nguồn (điều kiện chung, dấu "
+            "hiệu không được bảo hộ, khả năng phân biệt) — dẫn đúng Điều/khoản/điểm; "
+            "(4) Kết luận theo ĐÚNG MỘT trong ba mức: 'Khả năng bảo hộ cao' / 'Có "
+            "rủi ro, cần lập luận thêm' / 'Khả năng bị từ chối cao', kèm lý do gắn "
+            "với yếu tố đã so ở (2). KHÔNG mặc định kết luận từ chối: nhãn khác đối "
+            "chứng về cả phát âm lẫn nghĩa, hoặc khác nhóm hàng hoá, thì phải nói rõ "
+            "là có khả năng bảo hộ; (5) Phương án nếu có rủi ro: nêu 2-3 hướng KHÁC "
+            "NHAU và cụ thể cho chính nhãn này (đổi/bỏ thành phần chữ gây nhầm lẫn, "
+            "thêm phần hình có tính phân biệt, thu hẹp danh mục hàng hoá/dịch vụ, "
+            "tuyên bố không bảo hộ riêng phần mô tả) — không lặp một công thức chung "
+            "như thêm cùng một chữ vào cuối; (6) Ghi rõ: kết luận cuối do luật sư phụ "
+            "trách quyết định sau khi tra cứu cơ sở dữ liệu của Cục Sở hữu trí tuệ."
+            + chr(10))
+    if _yeu_cau_lam_ro(question):
+        parts.append(
+            "LÀM RÕ DỮ KIỆN: đây là tình huống cụ thể. Trả lời đầy đủ phần đã có căn "
+            "cứ, rồi kết thúc bằng mục 'Cần làm rõ để tư vấn chắc chắn hơn' gồm 2-4 "
+            "câu hỏi ngắn về dữ kiện còn thiếu mà kết luận phụ thuộc vào (loại hình "
+            "và điều lệ công ty, ngày tháng, giá trị, điều khoản hợp đồng, tình trạng "
+            "đăng ký, đã có văn bản gì…), mỗi câu ghi kèm nó đổi kết luận nào. Không "
+            "hỏi lại điều câu hỏi đã nêu. Nếu dữ kiện đã đủ thì ghi 'Không cần làm "
+            "rõ thêm' — không hỏi cho có." + chr(10))
     if _hoi_ve_phap_luat(question):
         # Nhân viên (Thuỳ Dương, Mai, Loan 28-29/08/2026): bot nói đúng nội dung
         # nhưng chỉ ghi [Nguồn n], không nêu số Điều; và lấy điều lệ của khách
@@ -1951,6 +2011,44 @@ def _nguon_dinh_kem(fname, content, tom_tat=False):
     return {"title": f"[{'Tóm tắt file' if tom_tat else 'File'}: {fname}]",
             "content": content, "score": 1.0,
             "kind": "attachment", "attachment_name": fname, "is_summary": tom_tat}
+
+
+# Mẫu công ty đưa trọn vào nguồn để đối chiếu — cắt ở mức này để không vỡ prompt.
+MAU_DOI_CHIEU_CHARS = 14_000
+
+
+def _nguon_mau_cong_ty(doc_id, *, dept_ids=None, is_banqt=False, can_finance=False):
+    """Toàn văn (đúng thứ tự) của một file trong kệ mẫu, làm nguồn để đối chiếu.
+
+    Chỉ nhận doc_type mau_hd/thu_mau và chỉ khi người hỏi được thấy tài liệu
+    đó (đi qua RLS của chính họ). Trả [] khi không thấy — prepare ghi timings
+    để người vận hành biết vì sao model không có mẫu.
+    """
+    try:
+        with db.session(role="internal", dept_ids=dept_ids, is_banqt=is_banqt,
+                        can_finance=can_finance) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT d.title, c.content FROM chunks c
+                                 JOIN documents d ON d.id=c.document_id
+                                WHERE d.id=%s AND d.doc_type IN ('mau_hd','thu_mau')
+                                  AND coalesce(d.active, true)
+                                ORDER BY c.chunk_index""", (doc_id,))
+                rows = cur.fetchall()
+    except Exception:
+        return []
+    if not rows:
+        return []
+    title = rows[0][0]
+    out, tong = [], 0
+    for _, content in rows:
+        content = content or ""
+        if tong + len(content) > MAU_DOI_CHIEU_CHARS:
+            break
+        tong += len(content)
+        out.append({"title": f"[Mẫu công ty: {title}]", "content": content,
+                    "score": 1.0, "kind": "attachment",
+                    "attachment_name": f"Mẫu: {title}", "is_summary": False})
+    return out
 
 
 def _nguon_chua_tom_tat(fname):
@@ -2640,7 +2738,8 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     # rồi bấm "Tạo file mẫu" — điền thông tin chủ thể vào ĐÚNG file .docx gốc
     # (giữ nguyên định dạng), không đi RAG. Nhịp tim SSE ở api.py bọc cả prepare
     # nên lượt điền dài không gây 524.
-    if direct is None and channel == "internal" and user_id and template_doc_id:
+    if (direct is None and channel == "internal" and user_id and template_doc_id
+            and mode != "template_check"):
         from app import template_fill  # nạp trễ để tránh vòng import
         fill_model = model if model and model != "auto" else None
         try:
@@ -2971,6 +3070,16 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     temp_chunks = (get_temp_context(conversation_id, search_question,
                                     query_vector=query_vector)
                    if (use_temp and conversation_id) else None)
+    if mode == "template_check" and template_doc_id and channel == "internal":
+        # ĐỐI CHIẾU VỚI MẪU CÔNG TY (Nhi, 29/08/2026): file nhân viên tải lên
+        # nằm ở temp_chunks; mẫu chuẩn đã chọn được đưa TRỌN vào nguồn để
+        # model so từng mục. Không có file đính kèm thì vẫn chạy: model chỉ
+        # liệt kê mẫu yêu cầu gì và bảo cần đính kèm file.
+        mau = _nguon_mau_cong_ty(template_doc_id, dept_ids=dept_ids,
+                                 is_banqt=is_banqt, can_finance=can_finance)
+        timings["mau_doi_chieu"] = template_doc_id if mau else None
+        if mau:
+            temp_chunks = list(mau) + list(temp_chunks or [])
     method = find_method(search_question, query_vector=query_vector) if use_method else None
 
     # Nguồn vận hành dùng song song với tài liệu, nhưng các câu đếm xác định đã
@@ -3097,9 +3206,10 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     timings["chuan_bi_ms"] = int((time.time() - prepare_started) * 1000)
     # Chế độ kiểm tra pháp lý dùng prompt RÀ SOÁT riêng — vẫn kênh internal,
     # vẫn RLS ấy, chỉ khác vai trò của model.
-    system_key = ("prompt_legal_review"
-                  if (mode == "legal_review" and channel == "internal")
-                  else f"prompt_{channel}")
+    if channel == "internal" and mode in ("legal_review", "template_check"):
+        system_key = f"prompt_{mode}"
+    else:
+        system_key = f"prompt_{channel}"
     return {
         "prompt": prompt,
         "system": cfg.get(system_key) or settings.DEFAULTS.get(system_key, ""),

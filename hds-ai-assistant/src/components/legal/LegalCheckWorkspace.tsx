@@ -17,6 +17,7 @@ import {
   FileText,
   FilePlus2,
   Files,
+  ListChecks,
   ChevronDown,
   ChevronUp,
   Search,
@@ -375,7 +376,12 @@ export const LegalCheckWorkspace: React.FC = () => {
   };
 
   /** Gửi một lượt hỏi qua /chat/stream — dùng chung cho cả ba nút. */
-  const send = async (question: string, templateDocId?: number, makeFiles?: boolean) => {
+  const send = async (
+    question: string,
+    templateDocId?: number,
+    makeFiles?: boolean,
+    checkTemplate?: boolean,
+  ) => {
     if (sessionCache.busy || uploading) return;
     // Lượt này thuộc về người đang đăng nhập BÂY GIỜ: đổi người giữa chừng là
     // epoch lệch và mọi sự kiện còn lại của lượt bị vứt (xem sessionCache).
@@ -410,7 +416,12 @@ export const LegalCheckWorkspace: React.FC = () => {
           use_temp: attachments.length > 0,
           // Điền mẫu / tạo bộ file là luồng trả lời trực tiếp; các câu hỏi
           // thường đi chế độ rà soát pháp lý (prompt riêng + ưu tiên kệ luật).
-          mode: templateDocId || makeFiles ? undefined : 'legal_review',
+          // Đối chiếu với mẫu: mode riêng + mẫu đã chọn, KHÔNG đi luồng điền mẫu.
+          mode: checkTemplate
+            ? 'template_check'
+            : templateDocId || makeFiles
+              ? undefined
+              : 'legal_review',
           template_doc_id: templateDocId ?? undefined,
           make_files: makeFiles || undefined,
           signal: stopper.signal,
@@ -562,6 +573,22 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
       'Từ hồ sơ đính kèm, hãy lên danh sách và tạo các văn bản cần thiết (biên bản nghiệm thu, giấy đề nghị thanh toán các đợt…).';
     setTemplateOpen(false);
     void send(q, selectedTemplate?.id, true);
+  };
+
+  // Nhi (29/08/2026): "kiểm tra biểu mẫu của nhân viên khi up lên có đúng mẫu
+  // quy định của công ty không". Cần cả file đính kèm lẫn mẫu đã chọn.
+  const handleCheckTemplate = () => {
+    if (busy || uploading || !selectedTemplate) return;
+    if (attachments.length === 0) {
+      showToast('Đính kèm file của nhân viên trước, rồi bấm Đối chiếu với mẫu.', 'info');
+      return;
+    }
+    const extra = input.trim();
+    const q = extra
+      ? `Đối chiếu file đính kèm với mẫu «${selectedTemplate.title}». ${extra}`
+      : `Đối chiếu file đính kèm với mẫu «${selectedTemplate.title}»: mục nào thiếu, mục nào khác mẫu, lỗi thể thức, và cần sửa gì.`;
+    setTemplateOpen(false);
+    void send(q, selectedTemplate.id, false, true);
   };
 
   return (
@@ -837,6 +864,16 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
             >
               <Files className="w-3.5 h-3.5" />
               Tạo bộ file
+            </button>
+            <button
+              type="button"
+              onClick={handleCheckTemplate}
+              disabled={busy || uploading || !selectedTemplate}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-hds-navy dark:border-blue-400 text-hds-navy dark:text-blue-300 text-xs font-bold hover:bg-hds-soft dark:hover:bg-slate-800 disabled:opacity-50 transition-colors"
+              title="AI so file nhân viên đính kèm với mẫu đã chọn: mục nào thiếu, mục nào khác mẫu, lỗi thể thức"
+            >
+              <ListChecks className="w-3.5 h-3.5" />
+              Đối chiếu với mẫu
             </button>
             {selectedTemplate && (
               <button

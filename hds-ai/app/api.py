@@ -291,13 +291,13 @@ class ChatIn(BaseModel):
     make_files: bool = False
 
 
-_CHAT_MODES = {None, "", "legal_review"}
+_CHAT_MODES = {None, "", "legal_review", "template_check"}
 
 
 def _chat_mode(body: ChatIn, internal: bool) -> str | None:
     """Chế độ đặc biệt của khung chat — chỉ nhân viên nội bộ được dùng."""
     if body.mode not in _CHAT_MODES:
-        raise HTTPException(422, "mode chỉ nhận 'legal_review'")
+        raise HTTPException(422, "mode chỉ nhận 'legal_review' hoặc 'template_check'")
     mode = body.mode or None
     return mode if internal else None
 

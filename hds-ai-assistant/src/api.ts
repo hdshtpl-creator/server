@@ -85,7 +85,7 @@ export const chatStream = ApiJs.chatStream as (
     model?: string;
     source_document_ids?: number[];
     /** Tab "Kiểm tra pháp lý": 'legal_review' — chỉ vai nội bộ. */
-    mode?: 'legal_review' | null;
+    mode?: 'legal_review' | 'template_check' | null;
     /** Điền chủ thể vào file mẫu này (kệ HỢP ĐỒNG MẪU / THƯ MẪU). */
     template_doc_id?: number | null;
     /** "Tạo bộ file": AI tự lên danh sách văn bản cần soạn từ hồ sơ đính kèm. */

@@ -3,8 +3,8 @@ import { useApp } from '../../context/AppContext';
 import { ConversationSidebar } from './ConversationSidebar';
 import { ChatMessageItem } from './ChatMessageItem';
 import * as api from '../../api';
-import type { BrowseDocument, MethodTemplate, TempAttachment } from '../../types';
-import { isClientRole, ATTACH_ACCEPT_FALLBACK } from '../../constants';
+import type { BrowseDocument, MatterAlerts, MethodTemplate, TempAttachment } from '../../types';
+import { isClientRole, ATTACH_ACCEPT_FALLBACK, canAccessAdmin } from '../../constants';
 import { BUILD_ID } from '../../banMoi';
 import {
   Send,
@@ -22,6 +22,7 @@ import {
   BookOpen,
   Check,
   Search,
+  AlarmClock,
 } from 'lucide-react';
 
 const nowLabel = () =>
@@ -51,6 +52,8 @@ export const ChatLayout: React.FC = () => {
     isChatStreaming,
     setChatStreaming,
     showToast,
+    setActiveView,
+    setAdminTab,
   } = useApp();
 
   const [inputQuestion, setInputQuestion] = useState('');
@@ -66,6 +69,12 @@ export const ChatLayout: React.FC = () => {
   // '' = mặc định máy chủ; hoặc tên model cụ thể
   const [selectedModel, setSelectedModel] = useState('auto');
   const [uploading, setUploading] = useState(false);
+  // Cảnh báo hạn vụ việc ngay trong khung chat (Nhi, 29/08/2026: "quản lý
+  // deadline, thông báo, cảnh báo"). Tổng quan đã có thẻ, nhưng nhân viên mở
+  // chat chứ không mở Quản trị — nên mang số vụ gấp ra đây, một dòng, tắt
+  // được và nhớ đã tắt trong ngày.
+  const [hanVuViec, setHanVuViec] = useState<MatterAlerts | null>(null);
+  const [anHanVuViec, setAnHanVuViec] = useState(false);
   // Nhịp đập mỗi giây trong lúc đọc file, chỉ để chip đếm giây hiện ra là còn
   // sống. Không chạy khi rảnh nên không tốn gì.
   const [nhip, setNhip] = useState(0);
@@ -96,6 +105,38 @@ export const ChatLayout: React.FC = () => {
   const dragDepthRef = useRef(0);
 
   const isClient = isClientRole(currentUser?.role);
+  const khoaAnHan = () => `hds_an_han_vu_viec_${new Date().toISOString().slice(0, 10)}`;
+  useEffect(() => {
+    if (!currentUser || isClient) {
+      setHanVuViec(null);
+      return;
+    }
+    let song = true;
+    try {
+      setAnHanVuViec(sessionStorage.getItem(khoaAnHan()) === '1');
+    } catch {
+      /* trình duyệt chặn storage thì cứ hiện */
+    }
+    api
+      .getMatterAlerts(5)
+      .then((d) => {
+        if (song) setHanVuViec(d);
+      })
+      .catch(() => {
+        /* không có quyền hoặc chưa có vụ việc thì im lặng */
+      });
+    return () => {
+      song = false;
+    };
+  }, [currentUser?.id, isClient]);
+  const tatHanVuViec = () => {
+    setAnHanVuViec(true);
+    try {
+      sessionStorage.setItem(khoaAnHan(), '1');
+    } catch {
+      /* bỏ qua */
+    }
+  };
   const serverConvId = activeConversation?.server_id;
   const attachments = activeConversation?.attachments ?? [];
   // Chỉ nhân viên nội bộ: /upload/extract nằm sau require(INTERNAL_ROLES).
@@ -650,6 +691,54 @@ export const ChatLayout: React.FC = () => {
           </div>
         )}
 
+        {hanVuViec && hanVuViec.urgent > 0 && !anHanVuViec && (
+          <div className="shrink-0 mx-3 sm:mx-4 mt-2 flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+            <AlarmClock className="w-4 h-4 shrink-0 mt-px" />
+            <div className="flex-1 min-w-0">
+              <span className="font-bold">
+                {hanVuViec.urgent} vụ việc quá hạn hoặc đến hạn trong 7 ngày.
+              </span>{' '}
+              {hanVuViec.items
+                .filter((a) => a.severity === 'gap')
+                .slice(0, 3)
+                .map((a) => (
+                  <span key={a.matter_id} className="inline-block mr-2">
+                    {a.matter_title}
+                    {a.days_left !== null && (
+                      <span className="opacity-80">
+                        {' '}
+                        ({a.days_left < 0
+                          ? `quá ${-a.days_left} ngày`
+                          : a.days_left === 0
+                            ? 'hết hạn hôm nay'
+                            : `còn ${a.days_left} ngày`})
+                      </span>
+                    )}
+                  </span>
+                ))}
+              {canAccessAdmin(currentUser) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveView('admin');
+                    setAdminTab('overview');
+                  }}
+                  className="underline font-semibold ml-1"
+                >
+                  Xem tất cả
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={tatHanVuViec}
+              className="p-0.5 shrink-0"
+              aria-label="Ẩn cảnh báo hạn vụ việc hôm nay"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         {/* Danh sách tin nhắn */}
         <div className="flex-1 overflow-y-auto min-h-0">
           {hasConversation ? (
