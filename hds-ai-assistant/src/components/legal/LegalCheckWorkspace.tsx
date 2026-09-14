@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type {
+  BoMau,
   ChatMessage,
   ConversationSummary,
   TempAttachment,
@@ -9,6 +10,7 @@ import type {
 } from '../../types';
 import { ATTACH_ACCEPT_FALLBACK } from '../../constants';
 import { ChatMessageItem } from '../chat/ChatMessageItem';
+import { BoMauPicker } from '../chat/BoMauPicker';
 import {
   Scale,
   Paperclip,
@@ -137,6 +139,10 @@ export const LegalCheckWorkspace: React.FC = () => {
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateSearch, setTemplateSearch] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateFile | null>(null);
+  // Bộ mẫu hồ sơ (15/09/2026): "Tạo bộ file" với bộ đang chọn = điền dữ liệu
+  // (hồ sơ đính kèm + hội thoại) vào từng file .docx của bộ. Rỗng = cả bộ.
+  const [selectedBoMau, setSelectedBoMau] = useState<BoMau | null>(null);
+  const [boMauFileIds, setBoMauFileIds] = useState<number[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -424,6 +430,10 @@ export const LegalCheckWorkspace: React.FC = () => {
               : 'legal_review',
           template_doc_id: templateDocId ?? undefined,
           make_files: makeFiles || undefined,
+          // Bộ mẫu đang chọn: máy chủ chỉ dùng khi lượt là lệnh tạo file.
+          bo_mau_id: selectedBoMau?.id ?? undefined,
+          bo_mau_file_ids:
+            selectedBoMau && boMauFileIds.length > 0 ? boMauFileIds : undefined,
           signal: stopper.signal,
         },
         (evt) => {
@@ -564,13 +574,15 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
     if (busy || uploading) return;
     const extra = input.trim();
     // Cần ít nhất một nguồn dữ liệu: câu lệnh hoặc hồ sơ đính kèm.
-    if (!extra && attachments.length === 0) {
-      showToast('Đính kèm hồ sơ hoặc mô tả cần tạo những file gì đã nhé.', 'info');
+    if (!extra && attachments.length === 0 && !selectedBoMau) {
+      showToast('Đính kèm hồ sơ, chọn bộ mẫu, hoặc mô tả cần tạo những file gì đã nhé.', 'info');
       return;
     }
     const q =
       extra ||
-      'Từ hồ sơ đính kèm, hãy lên danh sách và tạo các văn bản cần thiết (biên bản nghiệm thu, giấy đề nghị thanh toán các đợt…).';
+      (selectedBoMau
+        ? `Điền thông tin khách (từ hồ sơ đính kèm và những gì đã trao đổi) vào bộ mẫu «${selectedBoMau.ten}», mỗi file mẫu một file, giữ nguyên điều khoản.`
+        : 'Từ hồ sơ đính kèm, hãy lên danh sách và tạo các văn bản cần thiết (biên bản nghiệm thu, giấy đề nghị thanh toán các đợt…).');
     setTemplateOpen(false);
     void send(q, selectedTemplate?.id, true);
   };
@@ -700,6 +712,7 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
               <li>2. Yêu cầu phân tích: "Hợp đồng này có điểm nào trái quy định không?"</li>
               <li>3. Chọn mẫu ở nút "Chọn file mẫu" rồi bấm "Tạo file mẫu" — AI thay chủ thể vào đúng file gốc.</li>
               <li>4. Hoặc bấm "Tạo bộ file" — AI tự lên danh sách văn bản (nghiệm thu, đề nghị thanh toán các đợt…) và soạn từng file từ hồ sơ.</li>
+              <li>5. Chọn "Bộ mẫu" (nhóm .docx tải lên ở Quản trị → Bộ mẫu hồ sơ) rồi "Điền bộ này" — AI điền thông tin khách vào từng file của bộ.</li>
             </ul>
             <p className="text-[11px] italic">
               File đính kèm chỉ dùng trong hội thoại này, tự xoá sau 6 giờ, không vào kho tri thức.
@@ -884,6 +897,15 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
                 Bỏ chọn
               </button>
             )}
+            <BoMauPicker
+              selected={selectedBoMau}
+              selectedFileIds={boMauFileIds}
+              onSelect={setSelectedBoMau}
+              onFileIdsChange={setBoMauFileIds}
+              onFillNow={handleMakeFiles}
+              disabled={busy || uploading}
+              direction="up"
+            />
             <span className="text-[10px] text-slate-400 dark:text-slate-500 ml-auto hidden sm:inline">
               Mẹo: đặt {'{{ten_ben_a}}'} trong file mẫu để điền chính xác tuyệt đối.
             </span>

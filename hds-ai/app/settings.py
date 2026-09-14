@@ -187,6 +187,10 @@ DEFAULTS = {
     # HISTORY_CHARS ký tự; hội thoại toàn câu trả lời rất dài mà chạm trần
     # num_ctx thì hạ số này trên web trước tiên.
     "chat_history_turns": "10",
+    # Trần số file một lượt "Tạo bộ file" / điền bộ mẫu. 0 = KHÔNG giới hạn
+    # (chủ dự án 15/09/2026). Mỗi file là một lời gọi model (~30-60 giây trên
+    # GPU 16GB) — máy yếu hoặc dùng chung nhiều người thì đặt trần ở đây.
+    "doc_factory_max_files": "0",
     # Model sinh câu trả lời (Ollama). Chính sách 20/08/2026: chạy FULL
     # qwen3:14b cho mọi câu — không tự hạ xuống model nhỏ. Admin đổi trên web
     # nếu máy không kham nổi. KHÔNG áp cho model tạo vector (bge-m3): mọi đoạn

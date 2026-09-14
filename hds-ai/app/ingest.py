@@ -6,6 +6,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -905,6 +906,14 @@ OCR_DPI = _positive_int_env("INGEST_OCR_DPI", 400)
 # --oem 1 = chỉ dùng mạng LSTM (chính xác hơn engine cũ với chữ có dấu).
 # --psm 3 = tự phân tích bố cục, hợp với giấy tờ nhiều khối.
 OCR_CONFIG = os.getenv("INGEST_OCR_CONFIG", "--oem 1 --psm 3")
+# Trần điểm ảnh cho MỘT trang/ảnh đưa vào OCR. Ca thật 15/09/2026: PDF scan
+# khai khổ trang 1753×2515 pt (≈ 62×89 cm — máy scan ghi số điểm ảnh thành điểm
+# in), render 400 dpi thành 136 megapixel; tesseract nhai 15 phút chưa xong MỘT
+# trang và chặn cả lượt học của kho. A4 ở 400 dpi ≈ 15 MP, A3 ≈ 31 MP; quá trần
+# thì hạ dpi lúc render (PDF) hoặc thu nhỏ ảnh — chữ vẫn thừa nét để đọc.
+OCR_MAX_PIXELS = _positive_int_env("INGEST_OCR_MAX_PIXELS", 32_000_000)
+# Tesseract quá lâu cho một trang (giây) → bỏ trang đó, KHÔNG treo cả kho.
+OCR_PAGE_TIMEOUT = _positive_int_env("INGEST_OCR_PAGE_TIMEOUT", 240)
 # Bo doc chu: 'auto' (mac dinh) dung PaddleOCR neu may chu da cai, khong thi
 # tesseract. Dat 'tesseract' de ep dung ban cu, 'paddle' de ep dung ban moi.
 OCR_ENGINE = os.getenv("INGEST_OCR_ENGINE", "auto")
@@ -1193,9 +1202,54 @@ def _paddle_text(image):
     raise loi if loi else RuntimeError("PaddleOCR không có lối gọi nào dùng được")
 
 
+def _kich_thuoc_trang_pt(info):
+    """(rộng, cao) tính bằng điểm in, đọc từ pdfinfo ("Page size: 595 x 842 pts (A4)")."""
+    m = re.search(r"([\d.]+)\s*x\s*([\d.]+)\s*pts", str((info or {}).get("Page size") or ""))
+    return (float(m.group(1)), float(m.group(2))) if m else None
+
+
+def _dpi_vua_tran(page_w_pt, page_h_pt, dpi=None, max_pixels=None) -> int:
+    """dpi render một trang PDF sao cho ảnh không vượt OCR_MAX_PIXELS. Logic thuần."""
+    dpi = dpi or OCR_DPI
+    max_pixels = max_pixels or OCR_MAX_PIXELS
+    try:
+        w_in, h_in = float(page_w_pt) / 72.0, float(page_h_pt) / 72.0
+    except (TypeError, ValueError):
+        return dpi
+    if w_in <= 0 or h_in <= 0:
+        return dpi
+    fit = int(math.sqrt(max_pixels / (w_in * h_in)))
+    return max(72, min(dpi, fit))
+
+
+def _thu_nho_anh_qua_lon(image, max_pixels=None):
+    """Ảnh vượt trần điểm ảnh → thu nhỏ giữ tỉ lệ (lưới an toàn cho ảnh rời và
+    cho trang PDF lỡ render to hơn dự tính). Logic thuần: chỉ cần .size/.resize."""
+    max_pixels = max_pixels or OCR_MAX_PIXELS
+    w, h = image.size
+    if w * h <= max_pixels:
+        return image
+    scale = math.sqrt(max_pixels / float(w * h))
+    new = (max(1, int(w * scale)), max(1, int(h * scale)))
+    try:
+        from PIL import Image
+        resample = Image.LANCZOS
+    except Exception:
+        resample = 1
+    print(f"   [OCR] Ảnh {w}×{h} quá trần {max_pixels:,} điểm ảnh — thu nhỏ còn {new[0]}×{new[1]}.")
+    return image.resize(new, resample)
+
+
 def _tesseract_text(image):
     import pytesseract
-    return pytesseract.image_to_string(image, lang="vie", config=OCR_CONFIG)
+    try:
+        return pytesseract.image_to_string(image, lang="vie", config=OCR_CONFIG,
+                                           timeout=OCR_PAGE_TIMEOUT)
+    except RuntimeError as exc:      # pytesseract: "Tesseract process timeout"
+        if "timeout" not in str(exc).lower():
+            raise
+        print(f"   [OCR] Bỏ một trang: tesseract quá {OCR_PAGE_TIMEOUT} giây.")
+        return ""
 
 
 def _ocr_image_text(image):
@@ -1208,6 +1262,7 @@ def _ocr_image_text(image):
     không đọc được gì.
     """
     global _paddle_warned
+    image = _thu_nho_anh_qua_lon(image)
     # Chọn bộ đọc TRƯỚC khi tiền xử lý: mỗi bộ cần một kiểu ảnh khác nhau.
     engine = _choose_ocr_engine(OCR_ENGINE, _paddle_available())
     if engine == "paddle":
@@ -1277,11 +1332,19 @@ def _ocr_pdf_strict(path: Path) -> str:
             "Chạy: pip install pytesseract pdf2image && "
             "sudo apt install tesseract-ocr tesseract-ocr-vie poppler-utils") from e
     try:
-        page_count = int(pdfinfo_from_path(str(path)).get("Pages") or 0)
+        info = pdfinfo_from_path(str(path))
+        page_count = int(info.get("Pages") or 0)
     except Exception:
         # pdfinfo chê metadata của file hỏng nhẹ, nhưng pdftoppm (bên dưới)
         # thường vẫn render được ảnh — đừng chết ở bước ĐẾM TRANG.
-        page_count = 0
+        info, page_count = {}, 0
+    # Khổ trang khai to bất thường → hạ dpi để ảnh không vượt trần điểm ảnh
+    # (chỉ biết khổ trang đầu; trang sau to hơn đã có lưới thu nhỏ ở _ocr_image_text).
+    kho = _kich_thuoc_trang_pt(info)
+    dpi = _dpi_vua_tran(kho[0], kho[1]) if kho else OCR_DPI
+    if dpi < OCR_DPI:
+        print(f"   [OCR] Trang khổ {kho[0]:.0f}×{kho[1]:.0f} pt — render {dpi} dpi "
+              f"thay vì {OCR_DPI} để không vượt {OCR_MAX_PIXELS:,} điểm ảnh.")
     if page_count > MAX_OCR_PAGES:
         raise ExtractionError(
             "ocr_page_limit", f"PDF scan có {page_count} trang, vượt giới hạn OCR {MAX_OCR_PAGES} trang.",
@@ -1292,7 +1355,7 @@ def _ocr_pdf_strict(path: Path) -> str:
             # OCR theo lô nhỏ để không giữ ảnh của cả PDF trong RAM cùng lúc.
             for first_page in range(1, page_count + 1, 10):
                 last_page = min(page_count, first_page + 9)
-                images = convert_from_path(str(path), dpi=OCR_DPI,
+                images = convert_from_path(str(path), dpi=dpi,
                                            first_page=first_page, last_page=last_page)
                 # Song song trong lô, nhưng ghép lại THEO ĐÚNG THỨ TỰ
                 # TRANG: văn bản luật đảo trang là sai mạch điều khoản.
@@ -1305,7 +1368,7 @@ def _ocr_pdf_strict(path: Path) -> str:
                         parts.append(f"[Trang {page_number}]\n{value}")
         else:
             # Không đếm được trang — render cả file một lượt rồi tự giới hạn.
-            images = convert_from_path(str(path), dpi=OCR_DPI)
+            images = convert_from_path(str(path), dpi=dpi)
             if len(images) > MAX_OCR_PAGES:
                 raise ExtractionError(
                     "ocr_page_limit",

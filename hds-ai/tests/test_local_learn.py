@@ -180,3 +180,92 @@ class SkipRuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FingerprintCacheTests(unittest.TestCase):
+    """Đệm md5: tệp chưa đổi kích thước lẫn mtime thì KHÔNG đọc lại (lịch 15 phút
+    trên kho 70 GB không được băm lại cả kho mỗi lượt)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_lay_tu_dem_khi_tep_chua_doi(self):
+        p = self.root / "a.txt"
+        p.write_bytes(b"noi dung")
+        cache = {}
+        first = ll.cached_md5(p, "local:a.txt", cache)
+        self.assertEqual(first, ll.file_md5(p))
+        with unittest.mock.patch.object(ll, "file_md5",
+                                        side_effect=AssertionError("không được đọc lại")):
+            self.assertEqual(ll.cached_md5(p, "local:a.txt", cache), first)
+
+    def test_bam_lai_khi_tep_doi(self):
+        p = self.root / "a.txt"
+        p.write_bytes(b"ban mot")
+        cache = {}
+        truoc = ll.cached_md5(p, "local:a.txt", cache)
+        p.write_bytes(b"ban hai!")                       # đổi kích thước
+        sau = ll.cached_md5(p, "local:a.txt", cache)
+        self.assertNotEqual(truoc, sau)
+        self.assertEqual(sau, ll.file_md5(p))
+        p.write_bytes(b"ban ba!!")                       # cùng kích thước, khác mtime
+        os.utime(p, ns=(1_000_000_000, 1_000_000_000))
+        self.assertEqual(ll.cached_md5(p, "local:a.txt", cache), ll.file_md5(p))
+        self.assertEqual(cache["local:a.txt"][0], 8)
+
+    def test_dem_ghi_doc_va_tia_tep_da_mat(self):
+        f = self.root / "dem.json"
+        cache = {"local:a": [3, 5, "x" * 32], "local:b": [1, 2, "y" * 32]}
+        ll.save_fingerprint_cache(cache, keep={"local:a"}, path=f)
+        self.assertEqual(ll.load_fingerprint_cache(f), {"local:a": [3, 5, "x" * 32]})
+        self.assertFalse(f.with_name(f.name + ".tmp").exists())
+
+    def test_dem_hong_thi_coi_nhu_rong(self):
+        f = self.root / "dem.json"
+        f.write_text("{khong phai json", encoding="utf-8")
+        self.assertEqual(ll.load_fingerprint_cache(f), {})
+        f.write_text('{"local:a": ["sai", 1, 2], "local:b": [1, 2, "ok"]}', encoding="utf-8")
+        self.assertEqual(ll.load_fingerprint_cache(f), {"local:b": [1, 2, "ok"]})
+        self.assertEqual(ll.load_fingerprint_cache(self.root / "khong-co.json"), {})
+
+
+class MaKhachTuThuMucTests(unittest.TestCase):
+    """Tách mã khách từ tên thư mục — kể cả khi thiếu dấu cách sau dấu chấm."""
+
+    def test_cac_kieu_ten_thu_muc_khach(self):
+        f = ll.auto_learn._client_code_and_name
+        self.assertEqual(f("1729. Công ty Cổ phần Đại Hữu"), ("1729", "Công ty Cổ phần Đại Hữu"))
+        self.assertEqual(f("1043.Chị Trang Gola"), ("1043", "Chị Trang Gola"))
+        self.assertEqual(f("730 CÔNG TY TNHH JY"), ("730", "CÔNG TY TNHH JY"))
+        self.assertEqual(f("1160. _CÔNG TY AN PHÚC"), ("1160", "_CÔNG TY AN PHÚC"))
+        self.assertEqual(f("[SUNGROUP] Tập đoàn Sun"), ("SUNGROUP", "Tập đoàn Sun"))
+        # Khách đời đầu mã 1–2 chữ số vẫn là khách (DFK = khách số 9, 450 file)
+        self.assertEqual(f("9. CHI NHÁNH CÔNG TY TNHH KIỂM TOÁN DFK VIỆT NAM"),
+                         ("9", "CHI NHÁNH CÔNG TY TNHH KIỂM TOÁN DFK VIỆT NAM"))
+        self.assertEqual(f("1234."), (None, None))
+        self.assertEqual(f(""), (None, None))
+
+    def test_ngan_tha_nham_tang_khach_khong_thanh_khach(self):
+        g = ll.auto_learn._ma_ngan_dat_nham
+        subs = {"tong hop thong tin khach hang": "ho_so_kh", "du an": "filing"}
+        cats = {"van ban phap luat": {"doc_type": "law"}}
+        roots = {"ho so khach hang"}
+        # Ngăn con đặt thẳng trong Hồ sơ khách hàng → chặn (kể cả khác số thứ tự)
+        self.assertTrue(g("1", "Tổng hợp thông tin khách hàng", cats, subs, roots))
+        self.assertTrue(g("2", "Dự án", cats, subs, roots))
+        self.assertTrue(g("7", "VĂN BẢN PHÁP LUẬT", cats, subs, roots))
+        # Gói export Drive giải nén nguyên vỏ (ca thật 12/09/2026) → chặn
+        self.assertTrue(g("1", "HỒ SƠ KHÁCH HÀNG-20260912T071314Z-1-004", cats, subs, roots))
+        self.assertTrue(g("1", "Hồ sơ khách hàng", cats, subs, roots))
+        # Khách thật mã ngắn → không chặn
+        self.assertFalse(g("9", "CHI NHÁNH CÔNG TY TNHH KIỂM TOÁN DFK VIỆT NAM", cats, subs, roots))
+        self.assertFalse(g("21", "CÔNG TY TNHH VIETNERGY", cats, subs, roots))
+        # Mã ≥3 chữ số không bao giờ bị chặn, mã chữ cũng vậy, không có roots cũng chạy
+        self.assertFalse(g("1729", "Dự án", cats, subs, roots))
+        self.assertFalse(g("SUNGROUP", "Dự án", cats, subs, roots))
+        self.assertFalse(g("1", "", cats, subs, roots))
+        self.assertTrue(g("2", "Dự án", cats, subs))

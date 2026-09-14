@@ -182,6 +182,22 @@ journalctl -u hds-ai-quet-kho.service -n 40 --no-pager
 
 Lệnh cài lịch cũng **tự tắt** lịch học Drive cũ nếu còn.
 
+Không có quyền root (hoặc không muốn đụng systemd) thì dùng **crontab của chính
+user chạy backend** — cùng chu kỳ 15 phút, tự khoá chống chạy chồng và không
+chen vào lượt quét bấm từ web:
+
+```bash
+bash deploy/hoc-tu-thu-muc.sh --install-cron   # không cần sudo
+crontab -l                                     # thấy dòng "*/15 … --cron"
+tail -n 40 hds-ai/data/quet_kho.log            # lượt quét gần nhất
+tail hds-ai/data/quet_kho_lich_su.log          # một dòng tổng kết mỗi lượt
+```
+
+Hai lịch **không dùng song song**: `--install-timer` tự gỡ dòng cron, còn
+`--install-cron` từ chối khi đã có timer. Lượt đầu tiên băm md5 cả kho (kho
+70 GB mất ~12 phút); từ lượt sau bộ quét dùng đệm `hds-ai/data/.quet_kho_md5.json`
+nên chỉ băm tệp mới hoặc vừa sửa.
+
 Kiểm tra trên web: **Quản trị → Kho tài liệu đã học** → thẻ trạng thái phải đổi
 tiêu đề thành **“Quét kho tài liệu trên máy chủ”** kèm đường dẫn thư mục.
 

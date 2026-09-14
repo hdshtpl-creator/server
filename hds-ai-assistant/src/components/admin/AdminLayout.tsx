@@ -10,6 +10,7 @@ import { Client360Tab } from './Client360Tab';
 import { BrowseDocsTab } from './BrowseDocsTab';
 import { AiSettingsTab } from './AiSettingsTab';
 import { FeedbackReviewTab } from './FeedbackReviewTab';
+import { BoMauTab } from './BoMauTab';
 import {
   LayoutDashboard,
   FileCheck2,
@@ -22,6 +23,7 @@ import {
   ThumbsUp,
   Search,
   SlidersHorizontal,
+  Layers,
 } from 'lucide-react';
 
 type TabDef = {
@@ -46,6 +48,9 @@ const TABS: TabDef[] = [
   { id: 'review', label: 'Duyệt nhãn tài liệu', icon: FileCheck2, group: 'knowledge' },
   { id: 'documents', label: 'Kho tài liệu đã học', icon: BookOpen, group: 'knowledge' },
   { id: 'methods', label: 'Mẫu phương pháp', icon: Boxes, group: 'knowledge' },
+  // Bộ .docx mẫu đi cùng nhau (hợp đồng + phụ lục + biên bản…) — AI điền cả
+  // bộ trong một lượt chat. Tải lên ở đây, không qua kho tri thức.
+  { id: 'bo_mau', label: 'Bộ mẫu hồ sơ', icon: Layers, group: 'knowledge' },
 ];
 
 const GROUP_LABEL: Record<TabDef['group'], string> = {
@@ -131,6 +136,7 @@ export const AdminLayout: React.FC = () => {
           {adminTab === 'review' && <DocumentReviewTab />}
           {adminTab === 'documents' && <LearnedDocsTab />}
           {adminTab === 'methods' && <MethodTemplatesTab />}
+          {adminTab === 'bo_mau' && <BoMauTab />}
         </div>
       </div>
     </div>

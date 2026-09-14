@@ -851,3 +851,41 @@ CREATE TABLE IF NOT EXISTS ingest_failures (
 );
 CREATE INDEX IF NOT EXISTS idx_ingest_failures_open
   ON ingest_failures(resolved_at, last_seen_at DESC);
+
+-- ============================================================
+-- BỘ MẪU HỒ SƠ (15/09/2026)
+-- ------------------------------------------------------------
+-- Một "bộ mẫu" = nhóm file .docx mẫu đi cùng nhau (hợp đồng + phụ lục + biên
+-- bản bàn giao…), tải lên từ Quản trị → Bộ mẫu hồ sơ. Trong chat, chọn bộ
+-- (hoặc gọi tên bộ trong câu lệnh) là AI điền dữ liệu khách vào TỪNG file
+-- của bộ trong một lượt — dữ liệu lấy từ file đính kèm, lịch sử hội thoại và
+-- câu lệnh. Tệp gốc nằm ở data/work/bo_mau/<id>/ (ngoài kho tri thức: mẫu
+-- không cần học/duyệt nhãn, chỉ cần điền).
+-- department_id NULL = cả công ty dùng được; có giá trị = chỉ phòng đó
+-- (và Ban quản trị/admin).
+CREATE TABLE IF NOT EXISTS bo_mau (
+  id            SERIAL PRIMARY KEY,
+  ten           TEXT NOT NULL,
+  mo_ta         TEXT,
+  department_id INT REFERENCES departments(id),
+  created_by    INT REFERENCES users(id),
+  active        BOOLEAN NOT NULL DEFAULT true,
+  created_at    TIMESTAMPTZ DEFAULT now(),
+  updated_at    TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS bo_mau_file (
+  id            SERIAL PRIMARY KEY,
+  bo_mau_id     INT NOT NULL REFERENCES bo_mau(id) ON DELETE CASCADE,
+  ten_file      TEXT NOT NULL,          -- tên hiển thị (tên file gốc)
+  duong_dan     TEXT NOT NULL,          -- data/work/bo_mau/<bo>/<uuid>_<tên>.docx
+  thu_tu        INT NOT NULL DEFAULT 0,
+  placeholders  JSONB,                  -- {{…}} quét sẵn lúc tải lên
+  so_ky_tu      INT,
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_bo_mau_file_bo ON bo_mau_file(bo_mau_id, thu_tu, id);
+-- Tài khoản ứng dụng cần DELETE thật (gỡ bộ / gỡ file là thao tác thường ngày
+-- của người duyệt) — GRANT chung phía trên không có DELETE, đúng vết xe
+-- temp_files 29/08/2026.
+GRANT SELECT, INSERT, UPDATE, DELETE ON bo_mau, bo_mau_file TO hds_app;
+GRANT USAGE, SELECT ON SEQUENCE bo_mau_id_seq, bo_mau_file_id_seq TO hds_app;

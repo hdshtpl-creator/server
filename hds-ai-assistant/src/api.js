@@ -251,7 +251,7 @@ export async function chatInternal({
  */
 export async function chatStream(
   { question, conversation_id, use_temp, use_method, model, source_document_ids,
-    mode, template_doc_id, make_files, signal },
+    mode, template_doc_id, make_files, bo_mau_id, bo_mau_file_ids, signal },
   onEvent
 ) {
   const payload = {
@@ -267,6 +267,12 @@ export async function chatStream(
     mode: mode || undefined,
     template_doc_id: toIntOrNull(template_doc_id) ?? undefined,
     make_files: make_files ? true : undefined,
+    // Bộ mẫu hồ sơ đang chọn dưới khung chat — máy chủ chỉ điền khi lượt là
+    // lệnh tạo file (make_files hoặc câu "tạo bộ hồ sơ…").
+    bo_mau_id: toIntOrNull(bo_mau_id) ?? undefined,
+    bo_mau_file_ids: Array.isArray(bo_mau_file_ids) && bo_mau_file_ids.length
+      ? bo_mau_file_ids.map(toIntOrNull).filter((id) => id !== null)
+      : undefined,
   };
 
   // `signal` không đi vào thân yêu cầu (payload gửi lên máy chủ) — chỉ chuyền
@@ -1226,6 +1232,116 @@ export async function downloadTemplateFill(token, filename) {
   triggerDownload(blob, filename || (m ? decodeURIComponent(m[1]) : 'file-da-dien.docx'));
 }
 
+// ==================== BỘ MẪU HỒ SƠ (15/09/2026) ====================
+// Nhóm .docx mẫu tải lên từ Quản trị; trong chat chọn bộ (hoặc gọi tên bộ
+// trong câu) là AI điền dữ liệu khách vào từng file của bộ.
+
+// GET /bo-mau — bộ mẫu người đang đăng nhập dùng được, kèm file từng bộ.
+export async function listBoMau() {
+  if (useMockBackend) {
+    return { items: [...mockState.boMau], max_bo: 100, max_file_moi_bo: 100, co_quyen_sua: true };
+  }
+  return request('/bo-mau');
+}
+
+// POST /bo-mau {ten, mo_ta, department_id}
+export async function createBoMau({ ten, mo_ta, department_id }) {
+  if (useMockBackend) {
+    const id = Date.now() % 100000;
+    mockState.boMau.push({ id, ten, mo_ta: mo_ta || '', department_id: department_id ?? null,
+                           active: true, created_at: new Date().toISOString(), so_file: 0, files: [] });
+    return { ok: true, id };
+  }
+  return request('/bo-mau', {
+    method: 'POST',
+    body: JSON.stringify({ ten, mo_ta: mo_ta || undefined, department_id: department_id ?? null }),
+  });
+}
+
+// PUT /bo-mau/{id}
+export async function updateBoMau(boId, data) {
+  if (useMockBackend) {
+    const bo = mockState.boMau.find((b) => b.id === toIntOrNull(boId));
+    if (bo) Object.assign(bo, { ...data, doi_pham_vi: undefined });
+    return { ok: true, changed: Boolean(bo) };
+  }
+  return request(`/bo-mau/${toIntOrNull(boId)}`, { method: 'PUT', body: JSON.stringify(data) });
+}
+
+// DELETE /bo-mau/{id}
+export async function deleteBoMau(boId) {
+  if (useMockBackend) {
+    mockState.boMau = mockState.boMau.filter((b) => b.id !== toIntOrNull(boId));
+    return { ok: true };
+  }
+  return request(`/bo-mau/${toIntOrNull(boId)}`, { method: 'DELETE' });
+}
+
+// POST /bo-mau/{id}/files — multipart nhiều file .docx, có tiến trình tải lên.
+export async function uploadBoMauFiles({ boId, files, onProgress }) {
+  if (useMockBackend) {
+    await new Promise((r) => setTimeout(r, 300));
+    if (onProgress) onProgress(100);
+    const bo = mockState.boMau.find((b) => b.id === toIntOrNull(boId));
+    const base = bo ? bo.files.length : 0;
+    const ket_qua = Array.from(files).map((f, i) => {
+      const item = { id: Date.now() + i, ten_file: f.name, thu_tu: base + i + 1,
+                     placeholders: ['{{ten_ben_a}}'], so_placeholder: 1, so_ky_tu: 1200 };
+      if (bo) { bo.files.push(item); bo.so_file = bo.files.length; }
+      return { ok: true, ...item };
+    });
+    return { ok: true, ket_qua };
+  }
+  const form = new FormData();
+  Array.from(files).forEach((f) => form.append('files', f));
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${apiBaseUrl}/bo-mau/${toIntOrNull(boId)}/files`);
+    if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+    xhr.upload.onprogress = (e) => {
+      if (onProgress && e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* rơi xuống nhánh lỗi */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(parseErrorBody(xhr.responseText, xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error('Không kết nối được máy chủ khi tải tệp lên.'));
+    xhr.send(form);
+  });
+}
+
+// DELETE /bo-mau/{id}/files/{fid}
+export async function deleteBoMauFile(boId, fileId) {
+  if (useMockBackend) {
+    const bo = mockState.boMau.find((b) => b.id === toIntOrNull(boId));
+    if (bo) { bo.files = bo.files.filter((f) => f.id !== toIntOrNull(fileId)); bo.so_file = bo.files.length; }
+    return { ok: true };
+  }
+  return request(`/bo-mau/${toIntOrNull(boId)}/files/${toIntOrNull(fileId)}`, { method: 'DELETE' });
+}
+
+// GET /bo-mau/{id}/files/{fid}/download — tải bản gốc một file mẫu trong bộ.
+export async function downloadBoMauFile(boId, fileId, filename) {
+  if (useMockBackend) {
+    triggerDownload(new Blob(['Bản demo'], { type: 'text/plain' }), filename || 'mau.txt');
+    return;
+  }
+  const res = await fetch(
+    `${apiBaseUrl}/bo-mau/${toIntOrNull(boId)}/files/${toIntOrNull(fileId)}/download`,
+    { headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {} }
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(text, res.status));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  triggerDownload(blob, filename || (m ? decodeURIComponent(m[1]) : 'mau.docx'));
+}
+
 // ==================== CHẾ ĐỘ GIẢ LẬP (MOCK) ====================
 // Dữ liệu mẫu bám sát seed thật của backend:
 //   - 4 bộ phận trong app/seed_departments.py
@@ -1233,6 +1349,8 @@ export async function downloadTemplateFill(token, filename) {
 //   - enum doc_type / access_level / matters.status trong sql/schema.sql
 
 let mockState = {
+  // Bộ mẫu hồ sơ (chế độ giả lập bắt đầu trống — tạo qua tab Quản trị).
+  boMau: [],
   stats: {
     tai_lieu: 148,
     da_duyet_nhan: 134,

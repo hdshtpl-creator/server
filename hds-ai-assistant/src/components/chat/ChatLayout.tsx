@@ -2,8 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ConversationSidebar } from './ConversationSidebar';
 import { ChatMessageItem } from './ChatMessageItem';
+import { BoMauPicker } from './BoMauPicker';
 import * as api from '../../api';
-import type { BrowseDocument, MatterAlerts, MethodTemplate, TempAttachment } from '../../types';
+import type { BoMau, BrowseDocument, MatterAlerts, MethodTemplate, TempAttachment } from '../../types';
 import { isClientRole, ATTACH_ACCEPT_FALLBACK, canAccessAdmin } from '../../constants';
 import { BUILD_ID } from '../../banMoi';
 import {
@@ -59,6 +60,11 @@ export const ChatLayout: React.FC = () => {
   const [inputQuestion, setInputQuestion] = useState('');
   const [useMethod, setUseMethod] = useState(false);
   const [methodTemplates, setMethodTemplates] = useState<MethodTemplate[]>([]);
+  // Bộ mẫu hồ sơ chọn dưới khung chat (15/09/2026): gửi kèm bo_mau_id là AI
+  // điền dữ liệu (file đính kèm + lịch sử chat) vào từng file .docx của bộ.
+  // boMauFileIds rỗng = cả bộ.
+  const [selectedBoMau, setSelectedBoMau] = useState<BoMau | null>(null);
+  const [boMauFileIds, setBoMauFileIds] = useState<number[]>([]);
   const [genModels, setGenModels] = useState<string[]>([]);
   // Model gọi qua API ngoài. Chỉ hiện khi admin ĐÃ BẬT nhánh này — chọn một
   // model cloud lúc nó đang tắt thì máy chủ tự trả về Qwen local, người hỏi
@@ -361,9 +367,24 @@ export const ChatLayout: React.FC = () => {
     void handleAttach(files);
   };
 
-  const handleSendMessage = async (e?: React.FormEvent) => {
+  /** Nút "Điền bộ này" trên chip bộ mẫu: ô nhập trống thì gửi lệnh mặc định —
+   *  dữ liệu lấy từ file đính kèm + những gì đã trao đổi trong hội thoại. */
+  const handleFillBoMau = () => {
+    if (!selectedBoMau || isChatStreaming) return;
+    const extra = inputQuestion.trim();
+    const q =
+      extra ||
+      `Điền thông tin khách (từ file đính kèm và những gì đã trao đổi trong hội thoại) vào bộ mẫu «${selectedBoMau.ten}», mỗi file mẫu một file, giữ nguyên điều khoản.`;
+    void handleSendMessage(undefined, q, { makeFiles: true });
+  };
+
+  const handleSendMessage = async (
+    e?: React.FormEvent,
+    override?: string,
+    opts?: { makeFiles?: boolean }
+  ) => {
     if (e) e.preventDefault();
-    const questionText = inputQuestion.trim();
+    const questionText = (override ?? inputQuestion).trim();
     if (!questionText || isChatStreaming || !activeConversation) return;
     // File còn đang đọc thì CHẶN, đừng gửi câu hỏi đi tay không. Bản trước chỉ
     // loại chip 'uploading' ra khỏi danh sách tên file rồi vẫn gửi: người dùng
@@ -412,6 +433,12 @@ export const ChatLayout: React.FC = () => {
           model: isClient ? undefined : selectedModel,
           source_document_ids:
             isClient || selectedSourceIds.length === 0 ? undefined : selectedSourceIds,
+          // Bộ mẫu đang chọn là NGỮ CẢNH: chỉ lệnh tạo file (nút "Điền bộ này"
+          // hoặc câu lệnh "tạo bộ hồ sơ…") mới điền; câu hỏi thường vẫn đi RAG.
+          make_files: opts?.makeFiles || undefined,
+          bo_mau_id: isClient || !selectedBoMau ? undefined : selectedBoMau.id,
+          bo_mau_file_ids:
+            isClient || !selectedBoMau || boMauFileIds.length === 0 ? undefined : boMauFileIds,
           signal: stopper.signal,
         },
         (evt) => {
@@ -631,6 +658,19 @@ export const ChatLayout: React.FC = () => {
                   Mẫu phương pháp
                 </span>
               </label>
+            )}
+
+            {!isClient && (
+              <BoMauPicker
+                selected={selectedBoMau}
+                selectedFileIds={boMauFileIds}
+                onSelect={setSelectedBoMau}
+                onFileIdsChange={setBoMauFileIds}
+                onFillNow={handleFillBoMau}
+                disabled={isChatStreaming || uploading}
+                direction="down"
+                align="right"
+              />
             )}
 
             {!isClient && (

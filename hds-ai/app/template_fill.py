@@ -50,6 +50,9 @@ DATA_RAW = Path(os.getenv("DATA_RAW", "./data/raw"))
 DATA_WORK = Path(os.getenv("DATA_WORK", "./data/work"))
 FILL_KEEP_HOURS = 24
 FILL_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+# Đuôi file kết quả được phép tải về: .docx từng file, .zip gói cả bộ (bộ mẫu
+# 30-100 file mà bấm từng nút Tải là không ai làm nổi — 15/09/2026).
+FILL_EXTENSIONS = {"docx", "zip"}
 
 
 # ---------------------------------------------------------------------------
@@ -357,20 +360,23 @@ def save_filled(doc, filename: str) -> tuple[str, Path]:
     return token, out
 
 
-def save_filled_bytes(payload: bytes, filename: str) -> tuple[str, Path]:
-    """Như save_filled nhưng nhận sẵn bytes .docx — cho file soạn mới bằng
-    drafting.render_docx (luồng tạo bộ file)."""
+def save_filled_bytes(payload: bytes, filename: str,
+                      extension: str = "docx") -> tuple[str, Path]:
+    """Như save_filled nhưng nhận sẵn bytes — cho file soạn mới bằng
+    drafting.render_docx (luồng tạo bộ file) và gói .zip cả bộ."""
     from app.drafting import safe_export_name
+    if extension not in FILL_EXTENSIONS:
+        raise ValueError(f"đuôi {extension!r} không được phép")
     token = uuid.uuid4().hex
     out_dir = fills_dir() / token
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / safe_export_name(filename, "docx")
+    out = out_dir / safe_export_name(filename, extension)
     out.write_bytes(payload)
     return token, out
 
 
 def find_fill_file(token: str) -> Path | None:
-    """Tìm file .docx theo token — dùng cho endpoint tải về."""
+    """Tìm file kết quả (.docx hoặc .zip) theo token — dùng cho endpoint tải về."""
     if not FILL_TOKEN_RE.match(token or ""):
         return None
     out_dir = (fills_dir() / token)
@@ -380,7 +386,7 @@ def find_fill_file(token: str) -> Path | None:
     except (FileNotFoundError, ValueError, OSError):
         return None
     for f in sorted(resolved_dir.iterdir()):
-        if f.suffix.lower() == ".docx" and f.is_file():
+        if f.suffix.lower().lstrip(".") in FILL_EXTENSIONS and f.is_file():
             return f
     return None
 

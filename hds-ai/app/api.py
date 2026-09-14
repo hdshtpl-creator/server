@@ -12,6 +12,7 @@ Nhóm đường dẫn:
   /drafts/*   — soạn tài liệu có nguồn, version, duyệt và xuất DOCX/Markdown
   /files/*    — tải lên kho, tải bản gốc về, XEM TRƯỚC trong trình duyệt
   /templates/* + /template-fills/* — kệ file mẫu và file đã điền chủ thể
+  /bo-mau/*   — bộ mẫu hồ sơ (nhóm .docx mẫu, AI điền cả bộ từ chat)
   /users/*    — quản lý người dùng và quyền (chỉ admin)
   /stats,/health
 
@@ -289,9 +290,36 @@ class ChatIn(BaseModel):
     # giấy đề nghị thanh toán…) từ hồ sơ đính kèm; mẫu là template_doc_id
     # (nếu chọn) hoặc file .docx đã tải lên hội thoại.
     make_files: bool = False
+    # BỘ MẪU HỒ SƠ (15/09/2026): bộ .docx mẫu đang chọn dưới khung chat. Chỉ
+    # lượt là LỆNH tạo file (make_files hoặc câu "tạo bộ hồ sơ…") mới điền dữ
+    # liệu vào TỪNG file của bộ; câu hỏi thường vẫn đi RAG. bo_mau_file_ids
+    # thu hẹp về vài file trong bộ (mặc định cả bộ).
+    bo_mau_id: int | None = None
+    bo_mau_file_ids: list[int] | None = None
 
 
 _CHAT_MODES = {None, "", "legal_review", "template_check"}
+
+
+def _chat_bo_mau(body: ChatIn, internal: bool) -> tuple[int | None, list[int] | None]:
+    """Validate bộ mẫu sớm (trước khi mở SSE); vai khách bị hạ về None như
+    template_doc_id — câu hỏi thường của khách vẫn chạy."""
+    bo_id = getattr(body, "bo_mau_id", None)
+    if bo_id is None or not internal:
+        return None, None
+    if isinstance(bo_id, bool) or not isinstance(bo_id, int) or bo_id <= 0:
+        raise HTTPException(422, "bo_mau_id phải là số nguyên dương")
+    raw_ids = getattr(body, "bo_mau_file_ids", None)
+    if raw_ids is None:
+        return bo_id, None
+    ids, seen = [], set()
+    for value in raw_ids:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise HTTPException(422, "bo_mau_file_ids chỉ nhận số nguyên dương")
+        if value not in seen:
+            seen.add(value)
+            ids.append(value)
+    return bo_id, (ids or None)
 
 
 def _chat_mode(body: ChatIn, internal: bool) -> str | None:
@@ -402,6 +430,7 @@ def chat_internal(body: ChatIn, user=Depends(current_user)):
     require(user, INTERNAL_ROLES)
     question = _clean_question(body)
     source_ids = _chat_source_ids(body)
+    bo_mau_id, bo_mau_file_ids = _chat_bo_mau(body, internal=True)
     conv = _resolve_conv(user, body, "internal")
     res = rag.answer(question, "internal", user_id=user["id"], conversation_id=conv,
                      use_temp=body.use_temp, use_method=body.use_method,
@@ -411,6 +440,7 @@ def chat_internal(body: ChatIn, user=Depends(current_user)):
                      mode=_chat_mode(body, internal=True),
                      template_doc_id=_chat_template_id(body, internal=True),
                      make_files=_chat_make_files(body, internal=True),
+                     bo_mau_id=bo_mau_id, bo_mau_file_ids=bo_mau_file_ids,
                      # role + dept_codes: kênh internal không dùng cho tier,
                      # nhưng luồng điền mẫu cần chúng để soi ma trận access_rules.
                      role=user["role"], dept_codes=user["dept_codes"])
@@ -468,6 +498,7 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
     chat_mode = _chat_mode(body, internal=not is_client)
     template_doc_id = _chat_template_id(body, internal=not is_client)
     make_files = _chat_make_files(body, internal=not is_client)
+    bo_mau_id, bo_mau_file_ids = _chat_bo_mau(body, internal=not is_client)
 
     if is_client:
         quota = user.get("monthly_quota") or 0
@@ -535,7 +566,8 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
                         source_document_ids=source_ids,
                         mode=chat_mode, template_doc_id=template_doc_id,
                         make_files=make_files, on_status=on_status,
-                        cancel=cancel):
+                        cancel=cancel, bo_mau_id=bo_mau_id,
+                        bo_mau_file_ids=bo_mau_file_ids):
                     q.put(("event", ev))
             except Exception as e:  # noqa: BLE001 - báo lỗi qua dòng, không để luồng chết câm
                 q.put(("error", str(e)))
@@ -2495,6 +2527,147 @@ def template_fill_download(token: str, user=Depends(current_user)):
         db.audit(conn, user["id"], "download_template_fill", "template_fill",
                  None, {"token": token})
     return FileResponse(path, filename=path.name)
+
+
+# ---------- 8a3. BỘ MẪU HỒ SƠ (nhóm .docx mẫu, điền cả bộ từ chat) ----------
+class BoMauIn(BaseModel):
+    ten: str
+    mo_ta: str | None = None
+    department_id: int | None = None     # None = cả công ty
+
+
+class BoMauUpdate(BaseModel):
+    ten: str | None = None
+    mo_ta: str | None = None
+    department_id: int | None = None
+    # Cờ riêng vì department_id=None vừa có nghĩa "không đổi" vừa có nghĩa
+    # "mở cho cả công ty" — người gọi phải nói rõ.
+    doi_pham_vi: bool = False
+    active: bool | None = None
+
+
+def _bo_mau_or_404(bo_id: int, user):
+    from app import bo_mau
+    bo = bo_mau.get_set(bo_id, role=user["role"], dept_ids=user["dept_ids"],
+                        is_banqt=user["is_banqt"])
+    if not bo:
+        raise HTTPException(404, "Bộ mẫu không tồn tại hoặc tài khoản chưa được xem")
+    return bo
+
+
+@app.get("/bo-mau")
+def bo_mau_list(user=Depends(current_user)):
+    """Các bộ mẫu người hỏi dùng được (phạm vi phòng ban), kèm file của từng bộ
+    — menu "Bộ mẫu" dưới khung chat và tab Quản trị → Bộ mẫu hồ sơ."""
+    require(user, INTERNAL_ROLES)
+    from app import bo_mau
+    items = bo_mau.list_sets(role=user["role"], dept_ids=user["dept_ids"],
+                             is_banqt=user["is_banqt"])
+    return {"items": items, "max_bo": bo_mau.MAX_BO,
+            "max_file_moi_bo": bo_mau.MAX_FILE_MOI_BO,
+            "co_quyen_sua": user["role"] == "admin" or bool(user["can_review"])}
+
+
+@app.post("/bo-mau")
+def bo_mau_create(body: BoMauIn, user=Depends(current_user)):
+    require_reviewer(user)
+    from app import bo_mau
+    try:
+        bo_id = bo_mau.create_set(body.ten, body.mo_ta, body.department_id, user["id"])
+    except bo_mau.LoiBoMau as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "id": bo_id}
+
+
+@app.put("/bo-mau/{bo_id}")
+def bo_mau_update(bo_id: int, body: BoMauUpdate, user=Depends(current_user)):
+    require_reviewer(user)
+    from app import bo_mau
+    _bo_mau_or_404(bo_id, user)
+    try:
+        changed = bo_mau.update_set(
+            bo_id, user["id"], ten=body.ten, mo_ta=body.mo_ta,
+            department_id=body.department_id if body.doi_pham_vi else bo_mau._KHONG_DOI,
+            active=body.active)
+    except bo_mau.LoiBoMau as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "changed": changed}
+
+
+@app.delete("/bo-mau/{bo_id}")
+def bo_mau_delete(bo_id: int, user=Depends(current_user)):
+    require_reviewer(user)
+    from app import bo_mau
+    _bo_mau_or_404(bo_id, user)
+    bo_mau.delete_set(bo_id, user["id"])
+    return {"ok": True}
+
+
+@app.post("/bo-mau/{bo_id}/files")
+async def bo_mau_upload(bo_id: int, files: list[UploadFile] = File(...),
+                        user=Depends(current_user)):
+    """Tải một hay nhiều file .docx mẫu vào bộ. Mỗi file một kết quả riêng —
+    một file hỏng không chặn các file khác (cùng lối với /kho/tai-len)."""
+    require_reviewer(user)
+    from app import bo_mau
+    import tempfile
+    _bo_mau_or_404(bo_id, user)
+    if len(files) > bo_mau.MAX_FILE_MOI_BO:
+        raise HTTPException(400, f"Mỗi lần tối đa {bo_mau.MAX_FILE_MOI_BO} file")
+    gioi_han = MAX_UPLOAD_MB * 1024 * 1024
+    ket_qua = []
+    for f in files:
+        safe = _safe_filename(f.filename)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=Path(safe).suffix.lower(),
+                                             delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+                size = 0
+                while chunk := await f.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > gioi_han:
+                        raise bo_mau.LoiBoMau(f"«{safe}» vượt quá {MAX_UPLOAD_MB} MB")
+                    tmp.write(chunk)
+            from fastapi.concurrency import run_in_threadpool
+            item = await run_in_threadpool(bo_mau.add_file, bo_id, safe, tmp_path,
+                                           user["id"])
+            ket_qua.append({"ok": True, **item})
+        except bo_mau.LoiBoMau as e:
+            ket_qua.append({"ok": False, "ten_file": safe, "loi": str(e)})
+        finally:
+            await f.close()
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+    return {"ok": any(k["ok"] for k in ket_qua), "ket_qua": ket_qua}
+
+
+@app.delete("/bo-mau/{bo_id}/files/{file_id}")
+def bo_mau_delete_file(bo_id: int, file_id: int, user=Depends(current_user)):
+    require_reviewer(user)
+    from app import bo_mau
+    _bo_mau_or_404(bo_id, user)
+    if not bo_mau.delete_file(bo_id, file_id, user["id"]):
+        raise HTTPException(404, "File không có trong bộ này")
+    return {"ok": True}
+
+
+@app.get("/bo-mau/{bo_id}/files/{file_id}/download")
+def bo_mau_download_file(bo_id: int, file_id: int, user=Depends(current_user)):
+    """Tải bản gốc một file mẫu trong bộ (để xem chỗ trống, sửa rồi tải lại)."""
+    require(user, INTERNAL_ROLES)
+    from app import bo_mau
+    bo = _bo_mau_or_404(bo_id, user)
+    row = next((x for x in bo["files"] if int(x["id"]) == int(file_id)), None)
+    if not row:
+        raise HTTPException(404, "File không có trong bộ này")
+    try:
+        path = bo_mau.resolve_path(row["duong_dan"])
+    except (FileNotFoundError, ValueError, OSError):
+        raise HTTPException(404, "Tệp gốc không còn trên máy chủ — tải lại file vào bộ")
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "bo_mau_download_file", "bo_mau_file", file_id, {})
+    return FileResponse(path, filename=row["ten_file"])
 
 
 # ---------- 8b. CÀI ĐẶT AI (phong cách tư vấn, bản đồ Drive) ----------

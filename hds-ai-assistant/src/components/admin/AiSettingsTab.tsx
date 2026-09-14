@@ -428,6 +428,14 @@ const PARAM_FIELDS: FieldDef[] = [
     max: 20,
   },
   {
+    key: 'doc_factory_max_files',
+    label: 'Trần số file một lượt "Tạo bộ file" / điền bộ mẫu',
+    hint: '0 = không giới hạn (mặc định). Mỗi file là một lượt gọi model — máy yếu hoặc nhiều người dùng chung thì đặt trần.',
+    kind: 'number',
+    min: 0,
+    max: 500,
+  },
+  {
     key: 'llm_num_predict',
     label: 'Trần độ dài câu trả lời (token)',
     hint: '-1 = KHÔNG chặn độ dài (mặc định hiện tại). Đặt số dương để ép trần thời gian, 700 token ≈ 450 từ.',

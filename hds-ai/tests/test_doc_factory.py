@@ -26,11 +26,19 @@ class ParsePlanTests(unittest.TestCase):
         self.assertEqual(files[1]["khuon"], "soan_moi")
         self.assertEqual(ghi_chu, "ngày tháng để trống")
 
-    def test_qua_tran_bi_cat(self):
+    def test_mac_dinh_khong_tran(self):
+        # 15/09/2026: bỏ trần 8 file — bộ hồ sơ 30-100 file phải ra đủ.
+        items = ", ".join(f'{{"ten_file": "File {i}", "khuon": "soan_moi"}}'
+                          for i in range(40))
+        files, _ = df.parse_plan(f'{{"files": [{items}]}}')
+        self.assertEqual(len(files), 40)
+        self.assertEqual(df.MAX_FILES, 0)
+
+    def test_admin_dat_tran_thi_cat(self):
         items = ", ".join(f'{{"ten_file": "File {i}", "khuon": "soan_moi"}}'
                           for i in range(20))
-        files, _ = df.parse_plan(f'{{"files": [{items}]}}')
-        self.assertEqual(len(files), df.MAX_FILES)
+        files, _ = df.parse_plan(f'{{"files": [{items}]}}', max_files=8)
+        self.assertEqual(len(files), 8)
 
     def test_thieu_ten_file_bi_loai(self):
         files, _ = df.parse_plan(

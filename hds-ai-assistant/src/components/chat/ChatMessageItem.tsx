@@ -466,17 +466,25 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
             <div className="mt-2 flex flex-col gap-1.5">
               {fillSources.map((src, i) => {
                 const token = (src.source_locator as string).split('#', 2)[1] || '';
-                const label =
-                  fillSources.length === 1
+                const quote = (src.quote as string) || '';
+                // Gói .zip cả bộ (bộ mẫu nhiều file) — nút nổi bật hơn nút lẻ.
+                const laZip = /\.zip$/i.test(quote);
+                const label = laZip
+                  ? `${(src.title as string) || 'Tải cả bộ'} (.zip)`
+                  : fillSources.length === 1
                     ? 'Tải file đã điền (.docx)'
-                    : `Tải: ${(src.quote as string) || `file ${i + 1}`}`;
+                    : `Tải: ${quote || `file ${i + 1}`}`;
                 return (
                   <button
                     key={token || i}
                     type="button"
                     onClick={() => void downloadFill(src)}
                     disabled={fillBusyToken !== null}
-                    className="self-start inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-hds-navy text-hds-gold text-xs font-semibold hover:bg-hds-navy-light disabled:opacity-60 transition-colors max-w-full"
+                    className={`self-start inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-60 transition-colors max-w-full ${
+                      laZip
+                        ? 'bg-hds-gold text-hds-navy hover:bg-hds-gold-light'
+                        : 'bg-hds-navy text-hds-gold hover:bg-hds-navy-light'
+                    }`}
                   >
                     {fillBusyToken === token ? (
                       <span className="w-3.5 h-3.5 shrink-0 rounded-full border-2 border-hds-gold border-t-transparent animate-spin" />

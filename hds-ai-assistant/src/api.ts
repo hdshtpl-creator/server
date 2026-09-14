@@ -90,6 +90,11 @@ export const chatStream = ApiJs.chatStream as (
     template_doc_id?: number | null;
     /** "Tạo bộ file": AI tự lên danh sách văn bản cần soạn từ hồ sơ đính kèm. */
     make_files?: boolean;
+    /** Bộ mẫu hồ sơ đang chọn dưới khung chat — máy chủ chỉ điền khi lượt là
+     *  lệnh tạo file (make_files hoặc câu "tạo bộ hồ sơ…"); bo_mau_file_ids
+     *  thu hẹp về vài file trong bộ. */
+    bo_mau_id?: number | null;
+    bo_mau_file_ids?: number[];
     /** Nút "Dừng" của giao diện. Huỷ signal là đóng kết nối, và chính việc
      *  đóng kết nối báo cho máy chủ ngừng sinh chữ (xem rag.answer_stream). */
     signal?: AbortSignal;
@@ -144,6 +149,46 @@ export const previewDocument = ApiJs.previewDocument as (
 
 export const downloadTemplateFill = ApiJs.downloadTemplateFill as (
   token: string,
+  filename?: string
+) => Promise<void>;
+
+// ---- BỘ MẪU HỒ SƠ (15/09/2026) ----
+export const listBoMau = ApiJs.listBoMau as () => Promise<import('./types').BoMauListResponse>;
+
+export const createBoMau = ApiJs.createBoMau as (data: {
+  ten: string;
+  mo_ta?: string;
+  department_id?: number | null;
+}) => Promise<{ ok: boolean; id: number }>;
+
+export const updateBoMau = ApiJs.updateBoMau as (
+  boId: number,
+  data: {
+    ten?: string;
+    mo_ta?: string;
+    department_id?: number | null;
+    /** true = áp department_id (kể cả null = cả công ty). */
+    doi_pham_vi?: boolean;
+    active?: boolean;
+  }
+) => Promise<{ ok: boolean; changed: boolean }>;
+
+export const deleteBoMau = ApiJs.deleteBoMau as (boId: number) => Promise<{ ok: boolean }>;
+
+export const uploadBoMauFiles = ApiJs.uploadBoMauFiles as (params: {
+  boId: number;
+  files: FileList | File[];
+  onProgress?: (pct: number) => void;
+}) => Promise<import('./types').BoMauUploadResult>;
+
+export const deleteBoMauFile = ApiJs.deleteBoMauFile as (
+  boId: number,
+  fileId: number
+) => Promise<{ ok: boolean }>;
+
+export const downloadBoMauFile = ApiJs.downloadBoMauFile as (
+  boId: number,
+  fileId: number,
   filename?: string
 ) => Promise<void>;
 

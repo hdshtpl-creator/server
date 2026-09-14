@@ -50,7 +50,7 @@ Bốn tiến trình cần nhớ:
 | Model AI | `ollama` | `curl -s http://localhost:11434/api/tags` |
 | Web server | `nginx` | `nginx -t && systemctl status nginx` |
 
-Timer **tuỳ chọn**, không tự cài: `hds-ai-quet-kho.timer` — quét kho tài liệu mỗi 15 phút (`sudo bash deploy/hoc-tu-thu-muc.sh --install-timer`). Xem mục 4 và 12.
+Timer **tuỳ chọn**, không tự cài: `hds-ai-quet-kho.timer` — quét kho tài liệu mỗi 15 phút (`sudo bash deploy/hoc-tu-thu-muc.sh --install-timer`). Không có root thì `bash deploy/hoc-tu-thu-muc.sh --install-cron` (crontab của user, cùng chu kỳ). Xem mục 4 và 12.
 
 **Backend chỉ lắng nghe 127.0.0.1:8000** — mọi thứ đi vào phải qua nginx `/api/`.
 
@@ -234,9 +234,13 @@ Nhân viên nối ổ trên Windows: `\\<IP máy chủ>\KhoTaiLieu`.
 ```bash
 cd hds-ai && .venv/bin/python -m app.local_learn --dry-run   # chỉ liệt kê
 cd .. && bash deploy/hoc-tu-thu-muc.sh                       # quét và học một lần
-sudo bash deploy/hoc-tu-thu-muc.sh --install-timer           # lịch 15 phút/lần
+sudo bash deploy/hoc-tu-thu-muc.sh --install-timer           # lịch 15 phút/lần (systemd)
 systemctl list-timers hds-ai-quet-kho.timer
 journalctl -u hds-ai-quet-kho.service -n 40 --no-pager
+# Không có root: crontab của user, cùng chu kỳ, tự khoá chống chạy chồng
+bash deploy/hoc-tu-thu-muc.sh --install-cron
+tail -n 40 hds-ai/data/quet_kho.log        # lượt gần nhất
+tail hds-ai/data/quet_kho_lich_su.log      # một dòng mỗi lượt
 ```
 
 Bộ quét **tự dừng** trong ba tình huống nguy hiểm, đọc kỹ thông báo:

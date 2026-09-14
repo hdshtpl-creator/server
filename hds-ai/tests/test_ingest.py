@@ -680,3 +680,63 @@ Người lao động có quyền đơn phương chấm dứt hợp đồng lao �
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OcrTrangKhoLonTests(unittest.TestCase):
+    """Một trang scan khai khổ 62×89 cm không được phép treo cả lượt học
+    (ca thật 15/09/2026: 136 megapixel, tesseract 15 phút chưa xong một trang)."""
+
+    def test_dpi_ha_theo_kho_trang(self):
+        from app.ingest import _dpi_vua_tran
+        # A4 ở 400 dpi ≈ 15 MP → giữ nguyên 400
+        self.assertEqual(_dpi_vua_tran(595, 842, dpi=400, max_pixels=32_000_000), 400)
+        # Khổ 1753×2515 pt → phải hạ xuống < 200 dpi để dưới 32 MP
+        dpi = _dpi_vua_tran(1753, 2515, dpi=400, max_pixels=32_000_000)
+        self.assertLess(dpi, 200)
+        self.assertLessEqual((1753 / 72 * dpi) * (2515 / 72 * dpi), 32_000_000)
+        self.assertGreaterEqual(dpi, 72)
+        # Dữ liệu hỏng → giữ dpi mặc định
+        self.assertEqual(_dpi_vua_tran("x", None, dpi=400), 400)
+        self.assertEqual(_dpi_vua_tran(0, 842, dpi=400), 400)
+
+    def test_doc_kho_trang_tu_pdfinfo(self):
+        from app.ingest import _kich_thuoc_trang_pt
+        self.assertEqual(_kich_thuoc_trang_pt({"Page size": "1753 x 2515 pts"}), (1753.0, 2515.0))
+        self.assertEqual(_kich_thuoc_trang_pt({"Page size": "595.28 x 841.89 pts (A4)"}), (595.28, 841.89))
+        self.assertIsNone(_kich_thuoc_trang_pt({"Pages": "2"}))
+        self.assertIsNone(_kich_thuoc_trang_pt(None))
+
+    def test_thu_nho_anh_qua_tran(self):
+        from app.ingest import _thu_nho_anh_qua_lon
+
+        class Anh:
+            def __init__(self, w, h):
+                self.size = (w, h)
+
+            def resize(self, new, resample):
+                return Anh(*new)
+
+        nho = Anh(3000, 4000)
+        self.assertIs(_thu_nho_anh_qua_lon(nho, max_pixels=32_000_000), nho)
+        with redirect_stdout(io.StringIO()):
+            to = _thu_nho_anh_qua_lon(Anh(9739, 13972), max_pixels=32_000_000)
+        self.assertLessEqual(to.size[0] * to.size[1], 32_000_000)
+        self.assertAlmostEqual(to.size[0] / to.size[1], 9739 / 13972, places=2)
+
+    def test_tesseract_qua_gio_thi_bo_trang(self):
+        import sys
+        from types import SimpleNamespace
+        from app import ingest
+
+        def treo(*a, **k):
+            raise RuntimeError("Tesseract process timeout")
+        gia = SimpleNamespace(image_to_string=treo)
+        with patch.dict(sys.modules, {"pytesseract": gia}), redirect_stdout(io.StringIO()):
+            self.assertEqual(ingest._tesseract_text(object()), "")
+
+        def hong(*a, **k):
+            raise RuntimeError("khac")
+        gia.image_to_string = hong
+        with patch.dict(sys.modules, {"pytesseract": gia}):
+            with self.assertRaises(RuntimeError):
+                ingest._tesseract_text(object())

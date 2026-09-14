@@ -38,7 +38,8 @@ Chạy tay:      python -m app.local_learn              # học file mới/sửa
 Chuyển đổi:    python -m app.local_learn --chuyen-doi # gắn lại danh tính cho
                tài liệu đã học từ Drive (chạy MỘT LẦN, TRƯỚC mọi lượt quét)
                thêm --nguoc để trả lại danh tính Drive cũ
-Chạy định kỳ:  deploy/hoc-tu-thu-muc.sh --install-timer
+Chạy định kỳ:  deploy/hoc-tu-thu-muc.sh --install-timer   (systemd, cần root)
+               deploy/hoc-tu-thu-muc.sh --install-cron    (crontab user, không cần root)
 """
 import hashlib
 import json
@@ -145,6 +146,65 @@ def file_md5(path: Path, chunk=1024 * 1024) -> str:
                 break
             h.update(block)
     return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Đệm md5 — để lịch quét 15 phút không băm lại cả kho mỗi lượt
+# ---------------------------------------------------------------------------
+# Kho thật 09/2026: 42.000 tệp / 71 GB, băm md5 toàn bộ mất ~12 phút. Lịch
+# 15 phút mà băm lại từ đầu thì đĩa và một nhân CPU bận gần như liên tục chỉ
+# để kết luận "không đổi". Đệm ghi (kích thước, mtime_ns, md5) theo danh tính
+# tệp: tệp còn nguyên kích thước lẫn thời gian sửa thì lấy md5 từ đệm, không
+# đọc lại. MỐC SO SÁNH THẬT vẫn là md5 lưu ở documents.checksum — đệm chỉ
+# tránh việc tính lại nó. Mất/hỏng đệm không sao: chậm lại đúng một lượt.
+CACHE_NAME = ".quet_kho_md5.json"
+
+
+def cache_path() -> Path:
+    """Nằm CẠNH kho (data/), không nằm trong kho; tên bắt đầu bằng "." để dẫu
+    ai trỏ DATA_LIB trùng thư mục chứa nó thì walk_library vẫn bỏ qua."""
+    return library_root().parent / CACHE_NAME
+
+
+def load_fingerprint_cache(path=None) -> dict:
+    path = path or cache_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, ent in raw.items():
+        if (isinstance(ent, list) and len(ent) == 3
+                and isinstance(ent[0], int) and isinstance(ent[1], int)
+                and isinstance(ent[2], str)):
+            out[key] = ent
+    return out
+
+
+def save_fingerprint_cache(cache: dict, keep=None, path=None):
+    """Ghi đệm nguyên tử (tmp + replace); `keep` = danh tính còn thấy trong kho
+    ở lượt này, để tỉa tệp đã bị xoá khỏi đệm."""
+    path = path or cache_path()
+    data = {k: v for k, v in cache.items() if keep is None or k in keep}
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"[CẢNH BÁO] Không ghi được đệm md5 ({path}): {e}")
+
+
+def cached_md5(path: Path, key: str, cache: dict) -> str:
+    """md5 của tệp — lấy từ đệm khi kích thước và mtime chưa đổi."""
+    st = path.stat()
+    ent = cache.get(key)
+    if ent and ent[0] == st.st_size and ent[1] == st.st_mtime_ns:
+        return ent[2]
+    digest = file_md5(path)
+    cache[key] = [st.st_size, st.st_mtime_ns, digest]
+    return digest
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +389,8 @@ def run(dry_run=False):
         print("       KHÔNG ghi kết quả quét. Kiểm tra:  mount | grep " + str(root))
         sys.exit(1)
 
+    # Đệm md5 (kích thước + mtime → md5): lượt quét định kỳ chỉ băm tệp mới/đổi.
+    cache = load_fingerprint_cache()
     seen_keys = set()
     pending = []          # file chưa có bản ghi — chờ đối chiếu di chuyển
     n_new = n_upd = n_skip = n_move = n_unmapped = n_badext = 0
@@ -451,7 +513,7 @@ def run(dry_run=False):
             continue
 
         try:
-            fingerprint = file_md5(path)
+            fingerprint = cached_md5(path, key, cache)
         except OSError as exc:
             error_items.append({"name": path.name, "location": loc,
                                 "code": "file_unreadable", "error": str(exc)[:300],
@@ -485,6 +547,10 @@ def run(dry_run=False):
         elif learn(path, loc, labels, key, fingerprint, row):
             updated_items.append(item_info)
             n_upd += 1
+
+    # Ghi đệm ngay khi băm xong — TRƯỚC phần học có thể kéo dài hàng giờ, để
+    # lượt bị ngắt giữa chừng cũng không phải băm lại cả kho ở lượt sau.
+    save_fingerprint_cache(cache, keep=seen_keys)
 
     # ---- Vòng 2: đối chiếu di chuyển / đổi tên trước khi coi là file mới ----
     missing = {k: v for k, v in known.items() if k not in seen_keys}

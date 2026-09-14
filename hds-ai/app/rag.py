@@ -2583,7 +2583,7 @@ def prepare(question, channel, client_id=None, conversation_id=None,
             use_temp=False, use_method=False, dept_ids=None, is_banqt=False,
             can_finance=False, role=None, model=None, source_document_ids=None,
             user_id=None, mode=None, template_doc_id=None, on_status=None,
-            dept_codes=None, make_files=False):
+            dept_codes=None, make_files=False, bo_mau_id=None, bo_mau_file_ids=None):
     """Dựng đủ nguyên liệu cho một lượt trả lời, DỪNG NGAY TRƯỚC khi gọi model.
 
     Tách riêng vì có hai cách sinh câu trả lời — trả một cục (answer) và trả
@@ -2595,6 +2595,10 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     căn cứ luật/án lệ có mặt trong nguồn và dùng prompt rà soát riêng.
     template_doc_id (chỉ kênh nội bộ): "Tạo file mẫu" — điền chủ thể vào file
     mẫu .docx gốc, trả lời trực tiếp không qua RAG.
+    bo_mau_id / bo_mau_file_ids (chỉ kênh nội bộ): bộ mẫu .docx người dùng chọn
+    dưới khung chat — điền dữ liệu vào TỪNG file của bộ (doc_factory) khi lượt
+    này là lệnh tạo file (make_files hoặc câu lệnh nhận ra); câu hỏi thường thì
+    bỏ qua bộ đang chọn.
     on_status: callback nhận chuỗi tiến trình ("Đang tìm trong kho…") để đẩy
     lên giao diện qua SSE — máy chậm mà màn hình im lặng là người dùng tưởng
     treo (yêu cầu 26/08/2026, kiểu ChatGPT/NotebookLM).
@@ -2691,6 +2695,22 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     # lựa chọn đó thắng — câu "Tạo file từ mẫu «…» cho bà Mai" khớp cả regex
     # soạn thảo, không gate là bị cướp sang luồng bản nháp Markdown (mất
     # định dạng), phát hiện khi rà soát 26/08/2026. Cùng lý do với make_files.
+    # LỆNH TẠO BỘ FILE GÕ THẲNG TRONG CHAT THƯỜNG (15/09/2026): "tạo bộ hồ sơ
+    # theo bộ mẫu Thuê nhà cho khách Minh", "tạo file với thông tin khách vừa
+    # trao đổi" — không cần bấm nút. Đứng TRƯỚC chat_draft vì khuôn "bộ hồ sơ /
+    # các file" bao trùm hơn "tạo <một loại giấy> cho <tên>"; hai regex cố ý
+    # không giao nhau (test cặp đôi ở tests/test_bo_mau.py).
+    if (direct is None and channel == "internal" and user_id
+            and not template_doc_id and not make_files and mode != "template_check"):
+        from app import doc_factory  # nạp trễ để tránh vòng import
+        if doc_factory.detect_request(question):
+            make_files = True
+            timings["tao_bo_file_tu_chat"] = True
+    # Bộ mẫu đang chọn trên giao diện chỉ là NGỮ CẢNH: câu hỏi thường ("khách
+    # này cần giấy tờ gì?") vẫn đi RAG; chỉ lệnh tạo file (nút "Điền bộ này"
+    # gửi make_files, hoặc câu lệnh nhận ra ở trên) mới điền bộ.
+    if bo_mau_id and not make_files:
+        bo_mau_id, bo_mau_file_ids = None, None
     if (direct is None and channel == "internal" and user_id
             and not template_doc_id and not make_files):
         draft_req = chat_draft.detect_request(question)
@@ -2723,7 +2743,10 @@ def prepare(question, channel, client_id=None, conversation_id=None,
                 can_finance=can_finance, conversation_id=conversation_id,
                 template_doc_id=template_doc_id, model=fleet_model,
                 on_status=on_status, role_level=role, dept_codes=dept_codes,
-                use_temp=use_temp)
+                use_temp=use_temp, bo_mau_id=bo_mau_id,
+                bo_mau_file_ids=bo_mau_file_ids,
+                # Dữ liệu khách đã nói trong chat: tóm tắt + các lượt gần nhất.
+                history=history, summary=summary)
         except Exception as exc:  # noqa: BLE001 — chat không được sập vì tạo bộ file
             direct = {
                 "answer": ("Mình chưa tạo được bộ file "
@@ -3709,7 +3732,7 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
            prefer="local", use_temp=False, use_method=False,
            dept_ids=None, is_banqt=False, can_finance=False, role=None, model=None,
            source_document_ids=None, mode=None, template_doc_id=None,
-           dept_codes=None, make_files=False):
+           dept_codes=None, make_files=False, bo_mau_id=None, bo_mau_file_ids=None):
     """Trả lời MỘT CỤC — dùng cho kênh website, API khách và các lời gọi nội bộ."""
     request_started = time.time()
     p = prepare(question, channel, client_id=client_id, conversation_id=conversation_id,
@@ -3717,7 +3740,8 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
                 is_banqt=is_banqt, can_finance=can_finance, role=role, model=model,
                 source_document_ids=source_document_ids, user_id=user_id,
                 mode=mode, template_doc_id=template_doc_id, dept_codes=dept_codes,
-                make_files=make_files)
+                make_files=make_files, bo_mau_id=bo_mau_id,
+                bo_mau_file_ids=bo_mau_file_ids)
     timings, chunks, method = p["timings"], p["chunks"], p["method"]
 
     if p.get("direct_answer") is not None:
@@ -3762,7 +3786,7 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
                   use_temp=False, use_method=False, dept_ids=None, is_banqt=False,
                   can_finance=False, role=None, model=None, source_document_ids=None,
                   mode=None, template_doc_id=None, on_status=None, dept_codes=None,
-                  make_files=False, cancel=None):
+                  make_files=False, cancel=None, bo_mau_id=None, bo_mau_file_ids=None):
     """Trả lời THEO DÒNG — generator sinh ra các sự kiện dict:
 
         {"type": "meta",  "sources": [...]}        gửi ngay khi biết nguồn
@@ -3788,7 +3812,8 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
                 is_banqt=is_banqt, can_finance=can_finance, role=role, model=model,
                 source_document_ids=source_document_ids, user_id=user_id,
                 mode=mode, template_doc_id=template_doc_id, on_status=on_status,
-                dept_codes=dept_codes, make_files=make_files)
+                dept_codes=dept_codes, make_files=make_files, bo_mau_id=bo_mau_id,
+                bo_mau_file_ids=bo_mau_file_ids)
     timings, chunks, method = p["timings"], p["chunks"], p["method"]
 
     # Dừng NGAY trong lúc tìm kho (prepare có thể mất hàng chục giây): đừng

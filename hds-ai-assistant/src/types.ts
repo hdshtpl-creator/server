@@ -324,6 +324,50 @@ export interface TemplateFile {
   fillable: boolean;
 }
 
+/** Một file .docx mẫu trong BỘ MẪU HỒ SƠ — GET /bo-mau. */
+export interface BoMauFile {
+  id: number;
+  ten_file: string;
+  thu_tu: number;
+  /** Các chỗ trống {{…}} quét sẵn lúc tải lên (nguyên văn). */
+  placeholders: string[];
+  so_placeholder: number;
+  so_ky_tu: number;
+}
+
+/** Bộ mẫu hồ sơ: nhóm .docx mẫu đi cùng nhau, AI điền cả bộ trong một lượt chat. */
+export interface BoMau {
+  id: number;
+  ten: string;
+  mo_ta: string;
+  /** null = cả công ty dùng được; có giá trị = chỉ phòng đó (+ Ban QT/admin). */
+  department_id: number | null;
+  active: boolean;
+  created_at: string | null;
+  so_file: number;
+  files: BoMauFile[];
+}
+
+export interface BoMauListResponse {
+  items: BoMau[];
+  max_bo: number;
+  max_file_moi_bo: number;
+  /** Người đang đăng nhập có quyền tạo/sửa/xoá bộ (admin hoặc can_review). */
+  co_quyen_sua: boolean;
+}
+
+export interface BoMauUploadResult {
+  ok: boolean;
+  ket_qua: Array<{
+    ok: boolean;
+    id?: number;
+    ten_file: string;
+    so_placeholder?: number;
+    placeholders?: string[];
+    loi?: string;
+  }>;
+}
+
 export type DraftStatus =
   | 'draft'
   | 'generating'

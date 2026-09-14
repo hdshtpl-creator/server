@@ -121,9 +121,13 @@ ALLOWED = set(SUPPORTED_EXTENSIONS)
 RE_CODE = re.compile(r"^\s*\[([A-Za-z0-9._\-]+)\]")
 # Bỏ số thứ tự đầu tên: "1. ", "2.3 ", "09) ", "1 - "
 RE_ORDINAL = re.compile(r"^\s*\d+(\.\d+)*\s*[.)\-–]?\s*")
-# Mã khách theo kiểu số đầu tên: "1729. Công ty..." → 1729 (≥3 chữ số để không
-# nhầm với số thứ tự mục "1.", "9." của cây thư mục chung).
-RE_CLIENT_NUM = re.compile(r"^\s*(\d{3,})\s*[.)\-–]?\s+(.*\S)")
+# Mã khách theo kiểu số đầu tên: "1729. Công ty..." → 1729. Nhận cả khi nhân
+# viên quên dấu cách sau dấu chấm ("1043.Chị Trang Gola") — kho thật 12/09/2026
+# có tám thư mục như vậy, trước đây bị bỏ qua lặng lẽ "chưa tách được mã khách".
+# Mã 1–2 chữ số CŨNG là mã khách thật ("9. CHI NHÁNH CÔNG TY TNHH KIỂM TOÁN DFK"
+# — bảy khách đời đầu, 712 file, từng bị luật "≥3 chữ số" bỏ qua); chỉ chặn khi
+# phần tên trùng tên một ngăn con — xem _ma_ngan_dat_nham.
+RE_CLIENT_NUM = re.compile(r"^\s*(\d+)\s*(?:[.)\-–]\s*|\s+)(.*\S)")
 
 
 def _norm(name: str) -> str:
@@ -160,6 +164,27 @@ def _client_code_and_name(folder: str):
     if m:
         return m.group(1), m.group(2).strip()
     return None, None
+
+
+def _ma_ngan_dat_nham(code: str, cname: str, cats: dict, subs: dict, roots=()) -> bool:
+    """Thư mục "N. Tên" ở TẦNG KHÁCH mà N chỉ 1–2 chữ số: là khách đời đầu hay
+    là ngăn thả nhầm tầng? Hai kiểu nhầm có thật:
+      · "1. Tổng hợp thông tin khách hàng" đặt thẳng trong Hồ sơ khách hàng
+        (tên trùng một ngăn con / loại giấy tờ trong bản đồ);
+      · "1. HỒ SƠ KHÁCH HÀNG-20260912T071314Z-1-004" — gói export Drive giải
+        nén nguyên vỏ vào tầng khách (kho thật 12/09/2026, 1.234 file); tên bắt
+        đầu bằng tên một thư mục gốc khách hàng.
+    Gắn chúng thành khách số 1 là vừa tạo khách rác vừa gom hồ sơ nhiều khách
+    vào một chỗ. Mã ≥3 chữ số không bao giờ bị chặn: khách 1729 đặt tên thư
+    mục là gì cũng là khách 1729."""
+    if not code or not code.isdigit() or len(code) >= 3:
+        return False
+    key = _norm(cname)
+    if not key:
+        return False
+    if key in cats or key in subs:
+        return True
+    return any(key == r or key.startswith(r) for r in roots if r)
 
 
 def _matter_code_candidates(segment: str) -> list[str]:
@@ -262,6 +287,10 @@ def resolve_labels(parts, create_missing_client=True):
         if not code:
             return None, (f"chưa tách được mã khách từ thư mục '{folder}'. "
                           f"Đặt tên dạng '1729. Tên công ty' hoặc '[MÃ] Tên khách'")
+        if _ma_ngan_dat_nham(code, cname, cats, subs, roots):
+            return None, (f"'{folder}' trông như ngăn con đặt nhầm ở tầng khách "
+                          f"(mã '{code}' + tên trùng một loại giấy tờ). Chuyển nó "
+                          f"vào đúng thư mục khách rồi bộ quét sẽ học")
         with db.session(role="internal", admin=True) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT id, department_id FROM clients WHERE upper(code)=upper(%s)", (code,))
