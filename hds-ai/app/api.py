@@ -40,6 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app import company_context, db, kho, rag, auth, settings, van_ban
+from app import ra_soat_rui_ro, so_sanh
 from app.admin_ui import ADMIN_HTML
 
 app = FastAPI(title="HDS AI", version="1.0")
@@ -1017,7 +1018,7 @@ def review_pending(user=Depends(current_user), limit: int = 50):
                            d.source_kind,c.name,d.extraction_status,d.extraction_error,
                            (SELECT left(content,200) FROM chunks WHERE document_id=d.id ORDER BY chunk_index LIMIT 1),
                            d.so_hieu,d.loai_van_ban,d.trich_yeu,d.ngay_ban_hanh,
-                           d.ngay_hieu_luc,d.trang_thai_hieu_luc
+                           d.ngay_hieu_luc,d.trang_thai_hieu_luc,d.ty_le_rac
                            FROM documents d LEFT JOIN clients c ON c.id=d.client_id
                            WHERE NOT d.label_verified ORDER BY d.confidence NULLS FIRST, d.id LIMIT %s""",
                         (limit,))
@@ -1030,7 +1031,11 @@ def review_pending(user=Depends(current_user), limit: int = 50):
              "so_hieu": r[11], "loai_van_ban": r[12], "trich_yeu": r[13],
              "ngay_ban_hanh": str(r[14]) if r[14] else None,
              "ngay_hieu_luc": str(r[15]) if r[15] else None,
-             "trang_thai_hieu_luc": r[16]} for r in rows]
+             "trang_thai_hieu_luc": r[16],
+             # Tỉ lệ token đọc lỗi do app/duyet_hang_loat chấm. Tài liệu còn ở
+             # hàng chờ SAU một lượt duyệt hàng loạt thường là vì con số này
+             # vượt ngưỡng — người soát cần thấy ngay nó tệ cỡ nào.
+             "ty_le_rac": r[17]} for r in rows]
 
 
 class LabelIn(BaseModel):
@@ -1077,8 +1082,41 @@ def review_content_get(doc_id: int, user=Depends(current_user)):
             "chunk_count": len(parts), "content": content}
 
 
+# Lý do sửa nội dung tài liệu kho (kế hoạch ngày 3): dữ liệu quý nhất của cơ
+# chế tự học là VÌ SAO phải sửa, không chỉ sửa thành gì.
+EDIT_REASONS = {
+    "luat_thay_doi": "Luật thay đổi",
+    "rui_ro": "Rủi ro",
+    "yeu_cau_khach": "Yêu cầu khách hàng",
+    "sua_loi_trich_xuat": "Sửa lỗi trích xuất / OCR",
+    "khac": "Khác",
+}
+
+
 class ContentIn(BaseModel):
     content: str
+    edit_reason: str | None = None
+    edit_note: str | None = None
+
+
+def _luu_phien_ban_tai_lieu(cur, doc_id: int, ban_cu: str, ban_moi: str,
+                            user_id: int, edit_reason: str, edit_note: str | None) -> int:
+    """Ghi lịch sử sửa nội dung: lần đầu sửa thì cất luôn bản gốc làm v1 (để
+    còn so được với bản trước khi ai đụng vào), rồi bản mới là v(n+1)."""
+    cur.execute("SELECT coalesce(max(version_no),0) FROM document_versions WHERE document_id=%s",
+                (doc_id,))
+    n = cur.fetchone()[0]
+    if n == 0 and ban_cu.strip():
+        cur.execute("""INSERT INTO document_versions
+                         (document_id,version_no,content,edited_by,edit_reason,edit_note)
+                       VALUES (%s,1,%s,NULL,'ban_goc','Bản trích xuất ban đầu')""",
+                    (doc_id, ban_cu))
+        n = 1
+    cur.execute("""INSERT INTO document_versions
+                     (document_id,version_no,content,edited_by,edit_reason,edit_note)
+                   VALUES (%s,%s,%s,%s,%s,%s)""",
+                (doc_id, n + 1, ban_moi, user_id, edit_reason, (edit_note or "").strip() or None))
+    return n + 1
 
 
 @app.put("/review/{doc_id}/content")
@@ -1086,13 +1124,18 @@ def review_content_put(doc_id: int, body: ContentIn, user=Depends(current_user))
     """Lưu nội dung người duyệt đã sửa: chia đoạn lại, tạo vector lại — bot học
     ĐÚNG BẢN ĐÃ SỬA, không phải bản OCR thô. Trạng thái duyệt giữ nguyên (đang
     chờ thì vẫn chờ — sửa xong bấm Duyệt như thường); extraction_status thành
-    'edited' để phân biệt với bản máy tự trích."""
+    'edited' để phân biệt với bản máy tự trích. Bản cũ KHÔNG mất: ghi vào
+    document_versions kèm lý do sửa (bắt buộc chọn)."""
     require_reviewer(user)
     text = (body.content or "").strip()
     if len(text) < 30:
         raise HTTPException(422, "Nội dung sau sửa quá ngắn (dưới 30 ký tự)")
     if len(text) > 2_000_000:
         raise HTTPException(422, "Nội dung vượt 2 triệu ký tự — tách nhỏ tài liệu")
+    edit_reason = (body.edit_reason or "").strip()
+    if edit_reason not in EDIT_REASONS:
+        raise HTTPException(422, "Chọn lý do sửa: " + ", ".join(
+            f"{k} ({v})" for k, v in EDIT_REASONS.items()))
     from app.ingest import (ExtractionResult, apply_context_headers,
                             client_display_name, split_document_with_metadata)
     from app.models import embed, summarize
@@ -1101,6 +1144,10 @@ def review_content_put(doc_id: int, body: ContentIn, user=Depends(current_user))
             cur.execute("""SELECT title,doc_type,access_level,client_id,department_id
                              FROM documents WHERE id=%s""", (doc_id,))
             doc = cur.fetchone()
+            cur.execute("SELECT content FROM chunks WHERE document_id=%s ORDER BY chunk_index",
+                        (doc_id,))
+            ban_cu = "\n\n".join(_CTX_HEADER_RE.sub("", r[0] or "", count=1)
+                                 for r in cur.fetchall())
     if not doc:
         raise HTTPException(404, "Không thấy tài liệu")
     title, doc_type, access_level, client_id, department_id = doc
@@ -1150,9 +1197,13 @@ def review_content_put(doc_id: int, body: ContentIn, user=Depends(current_user))
                                   ngay_ban_hanh,ngay_hieu_luc,trang_thai_hieu_luc
                              FROM documents WHERE id=%s""", (doc_id,))
             r = cur.fetchone() or (None,) * 6
+            version_no = _luu_phien_ban_tai_lieu(cur, doc_id, ban_cu, text, user["id"],
+                                                 edit_reason, body.edit_note)
         db.audit(conn, user["id"], "edit_document_content", "documents", doc_id,
-                 {"chunks": len(pieces), "characters": len(text)})
+                 {"chunks": len(pieces), "characters": len(text),
+                  "version": version_no, "edit_reason": edit_reason})
     return {"ok": True, "document_id": doc_id, "chunks": len(pieces),
+            "version_no": version_no, "edit_reason": edit_reason,
             "van_ban": {"so_hieu": r[0], "loai_van_ban": r[1], "trich_yeu": r[2],
                         "ngay_ban_hanh": str(r[3]) if r[3] else None,
                         "ngay_hieu_luc": str(r[4]) if r[4] else None,
@@ -2868,6 +2919,423 @@ def feedback_review(fid: int, body: FeedbackReviewIn, user=Depends(current_user)
 # Router nhận lại chính dependency xác thực/duyệt ở file này để không sinh một
 # cơ chế quyền thứ hai. Đăng ký trước route /admin; các endpoint được liệt kê
 # trong OpenAPI như phần còn lại của ứng dụng.
+# ---------- 12. HOÀN THIỆN GIAI ĐOẠN 1 (15/09/2026) ----------
+# Bốn nhóm còn thiếu so với kế hoạch 10 ngày: khách quan tâm từ website
+# (leads), nhật ký hệ thống xem trên web, lịch sử phiên bản tài liệu kho,
+# rà soát rủi ro theo danh mục điều khoản chuẩn.
+
+# ---- 12a. Khách quan tâm (form trên khung chat nhúng website) ----
+LEAD_STATUSES = {"moi": "Mới", "da_lien_he": "Đã liên hệ", "bo_qua": "Bỏ qua"}
+_RE_PHONE = re.compile(r"^\+?[0-9]{9,15}$")
+_RE_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
+
+
+class LeadIn(BaseModel):
+    name: str
+    phone: str | None = None
+    email: str | None = None
+    need: str | None = None
+    conversation_id: int | None = None
+    # Ô bẫy: người thật không thấy, máy quét form điền bừa → bỏ lặng lẽ.
+    website: str | None = None
+
+
+def kiem_tra_lead(body: LeadIn) -> dict:
+    """Làm sạch + kiểm tra form liên hệ. Trả dict sẵn sàng INSERT, hoặc ném 422.
+    Tách riêng để test không cần CSDL."""
+    name = " ".join((body.name or "").split())
+    # Người gõ "091 234.5678" hay "+84-91…" đều là một số — chỉ giữ chữ số (và
+    # dấu + đầu) rồi mới kiểm định dạng.
+    phone = re.sub(r"[\s.\-()]", "", body.phone or "")
+    email = (body.email or "").strip().lower()
+    need = " ".join((body.need or "").split())
+    if len(name) < 2 or len(name) > 120:
+        raise HTTPException(422, "Vui lòng nhập họ tên (2–120 ký tự)")
+    if not phone and not email:
+        raise HTTPException(422, "Cần số điện thoại hoặc email để HDS liên hệ lại")
+    if phone and not _RE_PHONE.match(phone):
+        raise HTTPException(422, "Số điện thoại không hợp lệ")
+    if email and (len(email) > 200 or not _RE_EMAIL.match(email)):
+        raise HTTPException(422, "Email không hợp lệ")
+    if len(need) > 2000:
+        raise HTTPException(422, "Nội dung cần tư vấn tối đa 2.000 ký tự")
+    return {"name": name, "phone": phone or None, "email": email or None,
+            "need": need or None, "conversation_id": body.conversation_id}
+
+
+@app.post("/leads")
+def lead_create(body: LeadIn, request: Request):
+    """Người dân để lại liên hệ từ khung chat trên website HDS (không đăng
+    nhập). Dùng chung van chống spam theo IP của kênh công khai."""
+    if (body.website or "").strip():
+        return {"ok": True}           # bot điền ô bẫy — giả vờ nhận, không lưu
+    lead = kiem_tra_lead(body)
+    _public_rate_check(request)
+    conv_id = lead["conversation_id"]
+    if conv_id is not None:
+        try:
+            check_conversation(None, conv_id, "public")
+        except HTTPException:
+            conv_id = None            # id lạ → vẫn nhận liên hệ, chỉ bỏ liên kết
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO leads (name,phone,email,need,conversation_id,source,ip)
+                           VALUES (%s,%s,%s,%s,%s,'website',%s) RETURNING id""",
+                        (lead["name"], lead["phone"], lead["email"], lead["need"],
+                         conv_id, _client_ip(request)))
+            lead_id = cur.fetchone()[0]
+        db.audit(conn, None, "lead_create", "leads", lead_id, {"source": "website"})
+    return {"ok": True, "id": lead_id,
+            "message": "HDS đã nhận thông tin, luật sư sẽ liên hệ lại sớm nhất."}
+
+
+def _require_lead_viewer(user):
+    if user["role"] not in SEE_ALL and not (user.get("can_review") and user["role"] == "truong_bph"):
+        raise HTTPException(403, "Chỉ Ban quản trị / trưởng bộ phận xem danh sách khách quan tâm")
+
+
+@app.get("/leads")
+def leads_list(user=Depends(current_user), status: str = "", limit: int = 200):
+    _require_lead_viewer(user)
+    if status and status not in LEAD_STATUSES:
+        raise HTTPException(422, "Trạng thái không hợp lệ")
+    limit = max(1, min(limit, 500))
+    sql = """SELECT l.id,l.name,l.phone,l.email,l.need,l.status,l.note,l.source,
+                    l.conversation_id,l.created_at,l.handled_at,u.full_name
+               FROM leads l LEFT JOIN users u ON u.id=l.handled_by WHERE true"""
+    params: list = []
+    if status:
+        sql += " AND l.status=%s"; params.append(status)
+    sql += " ORDER BY (l.status='moi') DESC, l.created_at DESC LIMIT %s"; params.append(limit)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+            cur.execute("SELECT status,count(*) FROM leads GROUP BY 1")
+            dem = dict(cur.fetchall())
+    return {"items": [{
+        "id": r[0], "name": r[1], "phone": r[2], "email": r[3], "need": r[4],
+        "status": r[5], "note": r[6], "source": r[7], "conversation_id": r[8],
+        "created_at": r[9], "handled_at": r[10], "handled_by_name": r[11],
+    } for r in rows], "counts": {k: int(dem.get(k, 0)) for k in LEAD_STATUSES},
+        "statuses": LEAD_STATUSES}
+
+
+class LeadPatch(BaseModel):
+    status: str | None = None
+    note: str | None = None
+
+
+@app.patch("/leads/{lead_id}")
+def lead_update(lead_id: int, body: LeadPatch, user=Depends(current_user)):
+    _require_lead_viewer(user)
+    if body.status is not None and body.status not in LEAD_STATUSES:
+        raise HTTPException(422, "Trạng thái không hợp lệ")
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE leads SET status=coalesce(%s,status), note=coalesce(%s,note),
+                                  handled_by=%s, handled_at=now()
+                            WHERE id=%s RETURNING id""",
+                        (body.status, body.note, user["id"], lead_id))
+            if not cur.fetchone():
+                raise HTTPException(404, "Không thấy khách quan tâm")
+        db.audit(conn, user["id"], "lead_update", "leads", lead_id,
+                 {"status": body.status, "note": bool(body.note)})
+    return {"ok": True}
+
+
+# ---- 12b. Nhật ký hệ thống xem trên web (chỉ đọc; bảng có trigger cấm sửa/xoá) ----
+def _require_audit_viewer(user):
+    require(user, SEE_ALL)
+
+
+def tom_tat_audit(action: str, entity: str | None, entity_id, detail) -> str:
+    """Một dòng tiếng Việt dễ đọc cho từng bản ghi — người quản trị không phải
+    đọc JSON."""
+    d = detail if isinstance(detail, dict) else {}
+    ten = {
+        "chat_query": "Hỏi AI", "auto_learn": "Bộ quét học tài liệu",
+        "auto_relabel": "Bộ quét gắn lại nhãn", "approve_label": "Duyệt nhãn tài liệu",
+        "approve": "Duyệt", "delete_conversation": "Xoá hội thoại",
+        "preview_document": "Xem trước tài liệu", "download_document": "Tải tài liệu",
+        "generate_draft_version": "Sinh phiên bản bản thảo", "create_draft": "Tạo bản nháp",
+        "delete_draft": "Xoá bản nháp", "approve_draft": "Duyệt bản thảo",
+        "export_draft": "Xuất bản thảo", "export_draft_compare": "Xuất so sánh phiên bản",
+        "run_draft_check": "Kiểm tra mâu thuẫn bản thảo",
+        "update_setting": "Đổi cài đặt AI", "chat_temp_upload": "Đính kèm file trong chat",
+        "edit_document_content": "Sửa nội dung tài liệu kho", "create_user": "Tạo người dùng",
+        "login": "Đăng nhập", "lead_create": "Khách để lại liên hệ",
+        "lead_update": "Xử lý khách quan tâm", "legal_checklist": "Rà soát rủi ro hợp đồng",
+        "learn_review": "Duyệt câu trả lời (tự học)", "feedback_review": "Xử lý phản hồi",
+    }.get(action, action)
+    phu = []
+    for k in ("question", "title", "file", "version", "edit_reason", "status", "model"):
+        if d.get(k) not in (None, "", []):
+            phu.append(f"{k}={str(d[k])[:80]}")
+    dau = f"{ten}"
+    if entity and entity_id is not None:
+        dau += f" · {entity}#{entity_id}"
+    return dau + (" · " + ", ".join(phu) if phu else "")
+
+
+@app.get("/audit")
+def audit_list(user=Depends(current_user), limit: int = 200, offset: int = 0,
+               action: str = "", user_id: int | None = None, q: str = ""):
+    _require_audit_viewer(user)
+    limit = max(1, min(limit, 1000)); offset = max(0, offset)
+    sql = """SELECT a.id,a.user_id,u.full_name,u.email,a.action,a.entity,a.entity_id,
+                    a.detail,a.created_at
+               FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE true"""
+    params: list = []
+    if action:
+        sql += " AND a.action=%s"; params.append(action)
+    if user_id is not None:
+        sql += " AND a.user_id=%s"; params.append(user_id)
+    if q.strip():
+        sql += " AND (a.detail::text ILIKE %s OR a.action ILIKE %s OR a.entity ILIKE %s)"
+        like = f"%{q.strip()}%"; params += [like, like, like]
+    sql += " ORDER BY a.id DESC LIMIT %s OFFSET %s"; params += [limit, offset]
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+            cur.execute("SELECT count(*) FROM audit_log")
+            tong = cur.fetchone()[0]
+    items = []
+    for r in rows:
+        detail = r[7] if isinstance(r[7], dict) else (json.loads(r[7]) if r[7] else {})
+        items.append({"id": r[0], "user_id": r[1], "user_name": r[2] or ("Hệ thống" if r[1] is None else None),
+                      "user_email": r[3], "action": r[4], "entity": r[5], "entity_id": r[6],
+                      "detail": detail, "created_at": r[8],
+                      "tom_tat": tom_tat_audit(r[4], r[5], r[6], detail)})
+    return {"items": items, "total": tong, "limit": limit, "offset": offset}
+
+
+@app.get("/audit/actions")
+def audit_actions(user=Depends(current_user)):
+    _require_audit_viewer(user)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT action,count(*) FROM audit_log GROUP BY 1 ORDER BY 2 DESC")
+            rows = cur.fetchall()
+    return {"items": [{"action": r[0], "count": r[1],
+                       "label": tom_tat_audit(r[0], None, None, None)} for r in rows]}
+
+
+# ---- 12c. Lịch sử phiên bản tài liệu kho + so sánh ----
+def _noi_dung_phien_ban_tai_lieu(doc_id: int, version_no: int) -> str:
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT content FROM document_versions WHERE document_id=%s AND version_no=%s",
+                        (doc_id, version_no))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, f"Không thấy phiên bản {version_no}")
+    return row[0] or ""
+
+
+@app.get("/documents/{doc_id}/versions")
+def document_versions(doc_id: int, user=Depends(current_user)):
+    require_reviewer(user)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT title FROM documents WHERE id=%s", (doc_id,))
+            if not cur.fetchone():
+                raise HTTPException(404, "Không thấy tài liệu")
+            cur.execute("""SELECT v.version_no,v.edit_reason,v.edit_note,v.created_at,
+                                  u.full_name,length(v.content)
+                             FROM document_versions v LEFT JOIN users u ON u.id=v.edited_by
+                            WHERE v.document_id=%s ORDER BY v.version_no DESC""", (doc_id,))
+            rows = cur.fetchall()
+    return {"document_id": doc_id, "reasons": EDIT_REASONS, "items": [{
+        "version_no": r[0], "edit_reason": r[1],
+        "edit_reason_label": EDIT_REASONS.get(r[1], "Bản gốc" if r[1] == "ban_goc" else r[1]),
+        "edit_note": r[2], "created_at": r[3], "edited_by_name": r[4] or "Hệ thống",
+        "characters": r[5],
+    } for r in rows]}
+
+
+@app.get("/documents/{doc_id}/versions/compare")
+def document_versions_compare(doc_id: int, tu: int, den: int, user=Depends(current_user)):
+    require_reviewer(user)
+    if tu == den:
+        raise HTTPException(409, "Chọn hai phiên bản khác nhau")
+    cu = _noi_dung_phien_ban_tai_lieu(doc_id, tu)
+    moi = _noi_dung_phien_ban_tai_lieu(doc_id, den)
+    ket_qua = so_sanh.so_sanh_van_ban(cu, moi)
+    return {"document_id": doc_id, "tu": tu, "den": den, **ket_qua,
+            "tom_tat": so_sanh.tom_tat_thay_doi(ket_qua)}
+
+
+@app.get("/documents/{doc_id}/versions/compare/export")
+def document_versions_compare_export(doc_id: int, tu: int, den: int, user=Depends(current_user)):
+    require_reviewer(user)
+    if tu == den:
+        raise HTTPException(409, "Chọn hai phiên bản khác nhau")
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT title FROM documents WHERE id=%s", (doc_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Không thấy tài liệu")
+    cu = _noi_dung_phien_ban_tai_lieu(doc_id, tu)
+    moi = _noi_dung_phien_ban_tai_lieu(doc_id, den)
+    payload = so_sanh.xuat_docx_theo_doi(cu, moi, f"{row[0]} — so sánh v{tu} → v{den}",
+                                         tac_gia=user.get("name") or "HDS AI")
+    return Response(payload,
+                    media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition":
+                             f"attachment; filename=\"document_{doc_id}_compare_v{tu}_v{den}.docx\""})
+
+
+@app.get("/documents/{doc_id}/versions/{version_no}")
+def document_version_get(doc_id: int, version_no: int, user=Depends(current_user)):
+    require_reviewer(user)
+    return {"document_id": doc_id, "version_no": version_no,
+            "content": _noi_dung_phien_ban_tai_lieu(doc_id, version_no)}
+
+
+# ---- 12d. Rà soát rủi ro theo danh mục điều khoản chuẩn (kế hoạch ngày 7–8) ----
+RA_SOAT_MAX_CHARS = 500_000
+RA_SOAT_TRA_LUAT_TOI_DA = 8
+
+
+class RaSoatIn(BaseModel):
+    text: str | None = None
+    temp_file_id: int | None = None      # file đính kèm trong chat (dùng xong bỏ)
+    draft_id: int | None = None          # bản thảo ở tab Soạn tài liệu
+    document_id: int | None = None       # tài liệu trong kho
+    loai: str | None = None              # ép loại hợp đồng; None = tự nhận diện
+    tieu_de: str | None = None
+    tra_luat: bool = True                # kèm đoạn luật trong kho cho mục cảnh báo/thiếu
+
+
+def _van_ban_de_ra_soat(body: RaSoatIn, user) -> tuple[str, str]:
+    """(nội dung, tiêu đề) từ đúng MỘT nguồn; mọi nguồn đều qua đúng cửa
+    quyền hiện có (file tạm phải là của người hỏi; bản thảo qua _get_draft;
+    tài liệu kho qua can_open_doc)."""
+    if body.text and body.text.strip():
+        return body.text, body.tieu_de or "Văn bản dán vào"
+    if body.temp_file_id is not None:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT t.filename,t.content,t.user_id,c.user_id
+                                 FROM temp_files t LEFT JOIN conversations c ON c.id=t.conversation_id
+                                WHERE t.id=%s AND t.expires_at > now()""", (body.temp_file_id,))
+                row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "File đính kèm không còn (đã quá 6 giờ) hoặc không tồn tại")
+        if user["id"] not in (row[2], row[3]):
+            raise HTTPException(403, "File đính kèm này không thuộc hội thoại của bạn")
+        return row[1] or "", body.tieu_de or row[0] or "File đính kèm"
+    if body.draft_id is not None:
+        from app import draft_api
+        detail = draft_api._detail(user, body.draft_id)
+        latest = detail.get("latest_version") or {}
+        if not latest.get("content_markdown"):
+            raise HTTPException(409, "Bản nháp chưa có nội dung")
+        return latest["content_markdown"], body.tieu_de or detail["title"]
+    if body.document_id is not None:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT d.id,d.title,d.doc_type,d.access_level,d.client_id,
+                                      d.department_id,dep.name
+                                 FROM documents d LEFT JOIN departments dep ON dep.id=d.department_id
+                                WHERE d.id=%s""", (body.document_id,))
+                d = cur.fetchone()
+                if not d:
+                    raise HTTPException(404, "Không thấy tài liệu")
+                doc = {"id": d[0], "title": d[1], "doc_type": d[2], "access_level": d[3],
+                       "client_id": d[4], "department_id": d[5], "department_name": d[6]}
+                if not rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"], doc,
+                                        can_finance=user["can_finance"],
+                                        rules=rag.load_access_rules(),
+                                        dept_codes=user["dept_codes"]):
+                    raise HTTPException(403, "Không có quyền mở tài liệu này")
+                cur.execute("SELECT content FROM chunks WHERE document_id=%s ORDER BY chunk_index",
+                            (body.document_id,))
+                text = "\n\n".join(_CTX_HEADER_RE.sub("", r[0] or "", count=1) for r in cur.fetchall())
+        return text, body.tieu_de or d[1] or "Tài liệu kho"
+    raise HTTPException(422, "Cần một nguồn: text, temp_file_id, draft_id hoặc document_id")
+
+
+def _kem_can_cu_kho(muc: list[dict], user) -> None:
+    """Gắn đoạn luật thật trong kho cho mục cảnh báo/thiếu — người đọc thấy
+    nguyên văn điều luật, không chỉ số điều do danh mục gợi ý."""
+    dem = 0
+    for m in muc:
+        if m.get("trang_thai") == "dat" or dem >= RA_SOAT_TRA_LUAT_TOI_DA:
+            continue
+        dem += 1
+        try:
+            rows = rag.retrieve(ra_soat_rui_ro.cau_hoi_tra_luat(m), "internal",
+                                dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
+                                doc_types=["law"], top_k=2, neighbours=False)
+        except Exception:
+            rows = []
+        m["can_cu_kho"] = [{
+            "document_id": r.get("document_id"), "chunk_id": r.get("chunk_id"),
+            "title": r.get("title"), "so_hieu": r.get("so_hieu"),
+            "trich": " ".join((r.get("content") or "").split())[:400],
+        } for r in rows or []]
+
+
+@app.get("/legal/ra-soat/loai")
+def ra_soat_loai(user=Depends(current_user)):
+    require(user, set(db.ROLE_TO_DBLEVEL) - CLIENT_ROLES - {"public"})
+    return {"items": [{"ma": ma, "ten": cfg["ten"],
+                       "so_dieu_khoan": len(cfg.get("dieu_khoan", [])),
+                       "so_nguong": len(cfg.get("nguong", []))}
+                      for ma, cfg in ra_soat_rui_ro.LOAI_HOP_DONG.items()]}
+
+
+@app.post("/legal/ra-soat")
+def ra_soat_hop_dong(body: RaSoatIn, user=Depends(current_user)):
+    """Đối chiếu một hợp đồng với danh mục điều khoản chuẩn theo loại + ngưỡng
+    bất thường theo luật → bảng Đạt / Cảnh báo / Thiếu, kèm đoạn luật trong kho."""
+    require(user, set(db.ROLE_TO_DBLEVEL) - CLIENT_ROLES - {"public"})
+    if body.loai and body.loai not in ra_soat_rui_ro.LOAI_HOP_DONG:
+        raise HTTPException(422, "Loại hợp đồng không có trong danh mục")
+    text, tieu_de = _van_ban_de_ra_soat(body, user)
+    if len(text.strip()) < 100:
+        raise HTTPException(422, "Văn bản quá ngắn để rà soát (dưới 100 ký tự)")
+    if len(text) > RA_SOAT_MAX_CHARS:
+        raise HTTPException(413, f"Văn bản vượt {RA_SOAT_MAX_CHARS:,} ký tự")
+    t0 = time.perf_counter()
+    ket_qua = ra_soat_rui_ro.ra_soat(text, tieu_de, body.loai)
+    if body.tra_luat:
+        _kem_can_cu_kho(ket_qua.get("muc") or [], user)
+    ket_qua.update(tieu_de=tieu_de, so_ky_tu=len(text),
+                   thoi_gian_ms=int((time.perf_counter() - t0) * 1000))
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "legal_checklist", "documents", body.document_id, {
+            "title": tieu_de[:120], "loai": ket_qua.get("loai"),
+            "tong_ket": ket_qua.get("tong_ket"), "draft_id": body.draft_id,
+            "temp_file_id": body.temp_file_id,
+        })
+    return ket_qua
+
+
+class RaSoatExportIn(BaseModel):
+    ket_qua: dict
+    tieu_de: str | None = None
+
+
+@app.post("/legal/ra-soat/export")
+def ra_soat_export(body: RaSoatExportIn, user=Depends(current_user)):
+    require(user, set(db.ROLE_TO_DBLEVEL) - CLIENT_ROLES - {"public"})
+    if not isinstance(body.ket_qua.get("muc"), list):
+        raise HTTPException(422, "ket_qua không hợp lệ")
+    tieu_de = body.tieu_de or body.ket_qua.get("tieu_de") or "Hợp đồng"
+    payload = ra_soat_rui_ro.xuat_bao_cao_docx(body.ket_qua, tieu_de,
+                                               nguoi_lap=user.get("name") or "")
+    fname = re.sub(r"[^\w\-. ]+", "_", f"ra-soat-{tieu_de}")[:80] + ".docx"
+    return Response(payload,
+                    media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition":
+                             f"attachment; filename=\"ra-soat.docx\"; filename*=UTF-8''{quote(fname)}"})
+
+
 from app.draft_api import build_router as _build_draft_router
 app.include_router(_build_draft_router(current_user, require_reviewer))
 

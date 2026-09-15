@@ -11,6 +11,8 @@ import { BrowseDocsTab } from './BrowseDocsTab';
 import { AiSettingsTab } from './AiSettingsTab';
 import { FeedbackReviewTab } from './FeedbackReviewTab';
 import { BoMauTab } from './BoMauTab';
+import { LeadsTab } from './LeadsTab';
+import { AuditLogTab } from './AuditLogTab';
 import {
   LayoutDashboard,
   FileCheck2,
@@ -24,6 +26,8 @@ import {
   Search,
   SlidersHorizontal,
   Layers,
+  UserRound,
+  ScrollText,
 } from 'lucide-react';
 
 type TabDef = {
@@ -32,6 +36,8 @@ type TabDef = {
   icon: React.ComponentType<{ className?: string }>;
   group: 'operate' | 'knowledge';
   adminOnly?: boolean;
+  /** admin + Ban quản trị (backend: SEE_ALL). */
+  banQtOnly?: boolean;
 };
 
 const TABS: TabDef[] = [
@@ -41,8 +47,12 @@ const TABS: TabDef[] = [
   // Khác tab trên: đây là NHẬT KÝ đánh giá đầy đủ, cả 👍 lẫn 👎, từng dòng một —
   // xem được câu nào người dùng khen để nạp vào kho, không chỉ câu bị chê.
   { id: 'feedback', label: 'Đánh giá của người dùng', icon: ThumbsUp, group: 'operate' },
+  // Người dân để lại liên hệ từ khung chat nhúng website (kế hoạch ngày 4–5).
+  { id: 'leads', label: 'Khách quan tâm (website)', icon: UserRound, group: 'operate', banQtOnly: true },
   { id: 'users', label: 'Người dùng & Phòng ban', icon: Users, group: 'operate', adminOnly: true },
   { id: 'settings', label: 'Cài đặt AI', icon: SlidersHorizontal, group: 'operate', adminOnly: true },
+  // Nhật ký chỉ đọc — bảng audit_log có trigger cấm sửa/xoá (kế hoạch ngày 3).
+  { id: 'audit', label: 'Nhật ký hệ thống', icon: ScrollText, group: 'operate', banQtOnly: true },
 
   { id: 'browse_docs', label: 'Tra cứu tài liệu', icon: Search, group: 'knowledge' },
   { id: 'review', label: 'Duyệt nhãn tài liệu', icon: FileCheck2, group: 'knowledge' },
@@ -61,8 +71,9 @@ const GROUP_LABEL: Record<TabDef['group'], string> = {
 export const AdminLayout: React.FC = () => {
   const { adminTab, setAdminTab, currentUser } = useApp();
   const isAdmin = currentUser?.role === 'admin';
+  const isBanQt = isAdmin || currentUser?.role === 'ban_qt';
 
-  const tabs = TABS.filter((t) => !t.adminOnly || isAdmin);
+  const tabs = TABS.filter((t) => (!t.adminOnly || isAdmin) && (!t.banQtOnly || isBanQt));
 
   const renderTabButton = (tab: TabDef) => {
     const Icon = tab.icon;
@@ -137,6 +148,8 @@ export const AdminLayout: React.FC = () => {
           {adminTab === 'documents' && <LearnedDocsTab />}
           {adminTab === 'methods' && <MethodTemplatesTab />}
           {adminTab === 'bo_mau' && <BoMauTab />}
+          {adminTab === 'leads' && isBanQt && <LeadsTab />}
+          {adminTab === 'audit' && isBanQt && <AuditLogTab />}
         </div>
       </div>
     </div>

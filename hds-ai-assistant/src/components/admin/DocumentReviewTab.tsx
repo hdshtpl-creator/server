@@ -32,7 +32,18 @@ interface ContentEditor {
   content: string;
   chunkCount: number | null;
   status: string | null;
+  /** Lý do sửa — bắt buộc (kế hoạch ngày 3); backend cất bản cũ kèm lý do. */
+  reason: string;
+  note: string;
 }
+
+const EDIT_REASONS: Array<{ value: string; label: string }> = [
+  { value: 'sua_loi_trich_xuat', label: 'Sửa lỗi trích xuất / OCR' },
+  { value: 'luat_thay_doi', label: 'Luật thay đổi' },
+  { value: 'rui_ro', label: 'Rủi ro' },
+  { value: 'yeu_cau_khach', label: 'Yêu cầu khách hàng' },
+  { value: 'khac', label: 'Khác' },
+];
 
 const inputClass =
   'w-full px-3 py-2 border rounded-xl bg-white dark:bg-slate-800 dark:text-slate-100 border-slate-300 dark:border-slate-700 focus:ring-2 focus:ring-hds-blue focus:outline-none font-medium transition-colors';
@@ -97,6 +108,7 @@ export const DocumentReviewTab: React.FC = () => {
       [docId]: {
         open: false, loading: false, saving: false,
         content: '', chunkCount: null, status: null,
+        reason: 'sua_loi_trich_xuat', note: '',
         ...prev[docId], ...patch,
       },
     }));
@@ -141,9 +153,13 @@ export const DocumentReviewTab: React.FC = () => {
       showToast('Nội dung sau sửa quá ngắn (dưới 30 ký tự).', 'error');
       return;
     }
+    if (!cur.reason) {
+      showToast('Chọn lý do sửa trước khi lưu.', 'error');
+      return;
+    }
     patchEditor(key, { saving: true });
     try {
-      const res = await api.saveReviewContent(docId, cur.content);
+      const res = await api.saveReviewContent(docId, cur.content, cur.reason, cur.note);
       patchEditor(key, { saving: false, chunkCount: res.chunks ?? null, status: 'edited' });
       // Backend vừa bóc LẠI danh tính từ bản đã sửa. Không nạp lại vào form thì
       // nút Duyệt ngay sau đó gửi số hiệu bóc từ bản OCR CŨ — đè lại đúng con
@@ -315,6 +331,15 @@ export const DocumentReviewTab: React.FC = () => {
                         ⚠ Học không ổn — soát nội dung
                       </span>
                     )}
+                    {typeof (doc as any).ty_le_rac === 'number' &&
+                      (doc as any).ty_le_rac > 0.2 && (
+                        <span
+                          title="Lượt duyệt hàng loạt đã giữ tài liệu này lại: phần lớn chữ đọc ra không thành từ. Mở bản gốc đối chiếu trước khi duyệt."
+                          className="text-[10px] bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-800 px-2 py-0.5 rounded-full font-bold"
+                        >
+                          ⚠ Đọc lỗi {Math.round((doc as any).ty_le_rac * 100)}%
+                        </span>
+                      )}
                     {(doc as any).extraction_status === 'edited' && (
                       <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 px-2 py-0.5 rounded-full font-bold">
                         ✓ Đã sửa tay
@@ -383,7 +408,21 @@ export const DocumentReviewTab: React.FC = () => {
                                 spellCheck={false}
                                 className="w-full text-xs font-mono leading-relaxed p-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-hds-blue focus:outline-none resize-y"
                               />
-                              <div className="flex justify-end">
+                              <div className="flex flex-wrap items-center justify-end gap-2">
+                                <select
+                                  value={ed.reason}
+                                  onChange={(e) => patchEditor(key, { reason: e.target.value })}
+                                  className="px-2 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px]"
+                                  title="Lý do sửa — được ghi vào lịch sử phiên bản của tài liệu"
+                                >
+                                  {EDIT_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                                </select>
+                                <input
+                                  value={ed.note}
+                                  onChange={(e) => patchEditor(key, { note: e.target.value })}
+                                  placeholder="Ghi chú sửa (tuỳ chọn)"
+                                  className="flex-1 min-w-[160px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px]"
+                                />
                                 <button
                                   onClick={() => saveEditor(doc.id)}
                                   disabled={ed.saving}

@@ -191,6 +191,10 @@ DEFAULTS = {
     # (chủ dự án 15/09/2026). Mỗi file là một lời gọi model (~30-60 giây trên
     # GPU 16GB) — máy yếu hoặc dùng chung nhiều người thì đặt trần ở đây.
     "doc_factory_max_files": "0",
+    # Kiểm tra mâu thuẫn pháp lý chạy NỀN sau mỗi lần lưu bản thảo (kế hoạch
+    # ngày 9). 1 = bật. Mỗi lượt tốn ~1–3 phút model trên GPU; máy dùng chung
+    # nhiều người thấy chậm thì đặt 0 và bấm "Kiểm tra lại" tay khi cần.
+    "draft_check_auto": "1",
     # Model sinh câu trả lời (Ollama). Chính sách 20/08/2026: chạy FULL
     # qwen3:14b cho mọi câu — không tự hạ xuống model nhỏ. Admin đổi trên web
     # nếu máy không kham nổi. KHÔNG áp cho model tạo vector (bge-m3): mọi đoạn

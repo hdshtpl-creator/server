@@ -149,6 +149,11 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS person_folder TEXT;
 -- Danh tính nguồn CŨ trước khi chuyển kho từ Drive về máy chủ (27/08/2026).
 -- Giữ lại để `python -m app.local_learn --chuyen-doi --nguoc` còn đường lùi.
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS prev_source_key TEXT;
+-- Tỉ lệ token KHÔNG đọc được trong nội dung đã trích xuất (app/chat_luong.py),
+-- do `python -m app.duyet_hang_loat` chấm. Dùng để duyệt nhãn hàng loạt mà vẫn
+-- giữ file OCR hỏng lại cho mắt người, và để tab Duyệt nhãn xếp cái tệ lên
+-- trước. NULL = chưa chấm bao giờ.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ty_le_rac REAL;
 CREATE INDEX IF NOT EXISTS idx_doc_ready_active
   ON documents(active, extraction_status, approved, label_verified);
 -- Bộ quét thư mục dò file ĐỔI TÊN / CHUYỂN THƯ MỤC bằng md5 nội dung: không có
@@ -889,3 +894,48 @@ CREATE INDEX IF NOT EXISTS idx_bo_mau_file_bo ON bo_mau_file(bo_mau_id, thu_tu, 
 -- temp_files 29/08/2026.
 GRANT SELECT, INSERT, UPDATE, DELETE ON bo_mau, bo_mau_file TO hds_app;
 GRANT USAGE, SELECT ON SEQUENCE bo_mau_id_seq, bo_mau_file_id_seq TO hds_app;
+
+-- ============================================================
+-- HOÀN THIỆN GIAI ĐOẠN 1 (15/09/2026)
+-- ------------------------------------------------------------
+-- (a) Lý do sửa nội dung tài liệu kho — kế hoạch ngày 3: "mỗi lần chỉnh sửa
+--     ghi nhận lý do (Luật thay đổi / Rủi ro / Yêu cầu khách hàng)". Bảng
+--     document_versions có từ đầu nhưng chưa ai ghi vào; nay PUT
+--     /review/{id}/content lưu bản cũ + bản mới kèm lý do.
+ALTER TABLE document_versions ADD COLUMN IF NOT EXISTS edit_reason TEXT;
+GRANT SELECT, INSERT ON document_versions TO hds_app;
+GRANT USAGE, SELECT ON SEQUENCE document_versions_id_seq TO hds_app;
+
+-- (b) Kiểm tra mâu thuẫn pháp lý CHẠY NỀN sau mỗi lần lưu bản thảo (kế hoạch
+--     ngày 9). Một dòng cho mỗi (bản nháp, phiên bản); items là bảng từng
+--     cam kết/thời hạn/con số với kết luận hop_le / canh_bao / khong_ro.
+CREATE TABLE IF NOT EXISTS draft_checks (
+  id            SERIAL PRIMARY KEY,
+  draft_id      INT NOT NULL REFERENCES document_drafts(id) ON DELETE CASCADE,
+  version_no    INT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'running',   -- running | done | error
+  ket_luan      TEXT,                              -- hop_le | canh_bao | khong_ro
+  so_canh_bao   INT DEFAULT 0,
+  so_muc        INT DEFAULT 0,
+  phuong_phap   TEXT,
+  items         JSONB DEFAULT '[]'::jsonb,
+  error         TEXT,
+  started_at    TIMESTAMPTZ DEFAULT now(),
+  finished_at   TIMESTAMPTZ,
+  UNIQUE (draft_id, version_no)
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON draft_checks TO hds_app;
+GRANT USAGE, SELECT ON SEQUENCE draft_checks_id_seq TO hds_app;
+
+-- (c) Khách quan tâm từ khung chat nhúng website (kế hoạch ngày 4–5). Bảng
+--     leads có sẵn nhưng chưa có cột xử lý; nay thêm trạng thái để Ban QT
+--     theo dõi đã liên hệ chưa.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'moi';  -- moi | da_lien_he | bo_qua
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS handled_by INT REFERENCES users(id);
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS handled_at TIMESTAMPTZ;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'website';
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ip TEXT;
+CREATE INDEX IF NOT EXISTS idx_leads_status_time ON leads(status, created_at DESC);
+GRANT SELECT, INSERT, UPDATE ON leads TO hds_app;
+GRANT USAGE, SELECT ON SEQUENCE leads_id_seq TO hds_app;

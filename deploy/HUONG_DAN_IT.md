@@ -606,9 +606,27 @@ Gần như luôn là **trình duyệt còn chạy bản cũ**, không phải mã
 
 ## 7. SAO LƯU VÀ PHỤC HỒI
 
-> **Hệ thống KHÔNG tự sao lưu.** Không có cron, không có timer nào cho việc này. Bạn phải tự đặt lịch.
+> **Từ 15/09/2026 có script sao lưu + lịch hằng đêm** (`deploy/sao-luu.sh`, không cần root).
+> Bản sao mặc định nằm ở `~/hds-backup` **cùng ổ với bản gốc** — chống được xoá nhầm,
+> KHÔNG chống được hỏng ổ. Gắn ổ ngoài/ổ mạng rồi đặt `HDS_BACKUP_DIR` trong `hds-ai/.env`.
 
-### 7.1 Sao lưu
+### 7.0 Script sao-luu.sh (cách chính thức)
+
+```bash
+bash deploy/sao-luu.sh --run            # sao lưu ngay: pg_dump -Fc + rsync kho (lần đầu ~15 phút, sau đó nhanh)
+bash deploy/sao-luu.sh --run --chi-db   # chỉ CSDL (vài phút)
+bash deploy/sao-luu.sh --restore-test   # phục hồi bản mới nhất vào CSDL TẠM rồi đếm bảng/tài liệu/đoạn — CSDL thật không bị đụng
+bash deploy/sao-luu.sh --status         # bản gần nhất, dung lượng, lịch
+bash deploy/sao-luu.sh --install-cron   # 02:30 hằng đêm (crontab của user chạy backend)
+```
+
+- Đích: `$HDS_BACKUP_DIR/db/hdsai-YYYYmmdd-HHMM.dump` (định dạng `pg_restore`, giữ 14 bản mới nhất — đổi bằng `HDS_BACKUP_KEEP`),
+  `$HDS_BACKUP_DIR/kho/` (rsync `--delete` của kho tài liệu), `$HDS_BACKUP_DIR/env.backup` (bản chép `.env`, quyền 600).
+- Nhật ký: `hds-ai/data/sao_luu.log` (lượt gần nhất) và `hds-ai/data/sao_luu_lich_su.log` (một dòng mỗi lượt, có `rc=`).
+- Lượt đầu tiên chạy 15/09/2026: CSDL 3,9 GB + kho 71 GB trong 14 phút, thử phục hồi đạt.
+- **Mỗi tháng chạy `--restore-test` một lần** — bản sao chưa từng phục hồi được thì chưa phải bản sao.
+
+### 7.1 Sao lưu bằng tay (cách cũ, vẫn đúng)
 
 ```bash
 mkdir -p /root/backup && chmod 700 /root/backup
@@ -640,8 +658,10 @@ Nên xoay vòng: giữ 7 bản gần nhất + 1 bản mỗi tháng, và **chép 
 
 ### 7.2 Phục hồi
 
+Bản do `sao-luu.sh` tạo (`~/hds-backup/db/*.dump`) cũng là định dạng `pg_restore`:
+
 ```bash
-docker exec -i hds-postgres pg_restore -U hds -d hdsai --clean --if-exists < /root/backup/hdsai_2026-08-26.dump
+docker exec -i hds-postgres pg_restore -U hds -d hdsai --clean --if-exists < ~/hds-backup/db/hdsai-20260915-1353.dump
 sudo systemctl restart hds-ai-backend
 ```
 
@@ -875,6 +895,20 @@ Ba script đầu **chỉ đọc, không sửa gì**, chạy lúc nào cũng an t
 
 ---
 
+## 10b. TÍNH NĂNG HOÀN THIỆN GIAI ĐOẠN 1 (15/09/2026)
+
+| Tính năng | Nằm đâu | Ghi chú vận hành |
+|---|---|---|
+| Khung chat nhúng website + form liên hệ | `hds-ai-assistant/public/embed/chat.html`, `hds-chat.js` → sau build nằm ở `https://<tên miền>/embed/` | Nhúng vào website HDS bằng `<script src="https://app.hdslaw.vn/embed/hds-chat.js" defer></script>`. Chỉ gọi `/api/chat/public` (30 câu/giờ/IP) và `/api/leads`. Khách để lại liên hệ → **Quản trị → Khách quan tâm (website)** (admin/Ban QT). Bảng `leads`. |
+| Nhật ký hệ thống trên web | **Quản trị → Nhật ký hệ thống** (admin/Ban QT), API `GET /audit` | Chỉ đọc; bảng `audit_log` có trigger cấm UPDATE/DELETE. |
+| Lịch sử phiên bản tài liệu kho | Duyệt nhãn → sửa nội dung phải chọn **lý do** (luật thay đổi / rủi ro / yêu cầu khách / sửa OCR / khác); xem ở **Kho tài liệu đã học → Chi tiết → Lịch sử sửa nội dung**, so sánh, xuất Word track changes | Bảng `document_versions` (v1 = bản trích xuất ban đầu, tự cất ở lần sửa đầu). |
+| So sánh phiên bản bản thảo | **Soạn tài liệu → So sánh phiên bản** (cần ≥ 2 phiên bản) | `GET /drafts/{id}/compare`, `/compare/export` → .docx có `w:ins`/`w:del` thật (Word: chấp nhận/từ chối). Mô-đun `app/so_sanh.py`, chỉ stdlib. |
+| Kiểm tra mâu thuẫn pháp lý chạy nền | Thẻ **Kiểm tra mâu thuẫn pháp lý** ở tab Soạn tài liệu; tự chạy sau mỗi lần Sinh/Sửa; nút *Kiểm tra lại* | Bảng `draft_checks`; cài đặt `draft_check_auto` (1/0) ở Cài đặt AI. Mỗi lượt 1–3 phút model local (không ra ngoài). Mô-đun `app/kiem_tra_mau_thuan.py`. |
+| Rà soát rủi ro theo danh mục điều khoản | **Kiểm tra pháp lý & mẫu → Rà soát rủi ro** (cần file đính kèm đọc xong) → bảng Đạt/Cảnh báo/Thiếu + đoạn luật trong kho + **Xuất báo cáo Word** | `POST /legal/ra-soat`; danh mục 10 loại hợp đồng + ngưỡng (lãi ≤ 20 %/năm, phạt ≤ 8 %, thử việc ≤ 60 ngày…) trong `app/ra_soat_rui_ro.py` — bổ sung loại mới bằng cách thêm vào `LOAI_HOP_DONG`. |
+| Sao lưu tự động | `deploy/sao-luu.sh` + cron 02:30 | Xem mục 7. |
+
+---
+
 ## 11. TRIỆU CHỨNG → LỆNH XỬ LÝ
 
 | Triệu chứng | Lệnh đầu tiên |
@@ -912,6 +946,8 @@ journalctl -u ollama -n 50                 # model
 ---
 
 ## 12. VIỆC ĐỊNH KỲ
+
+> Hằng đêm 02:30 `sao-luu.sh --cron` tự chạy (nếu đã `--install-cron`). Hằng tháng: `bash deploy/sao-luu.sh --restore-test` và chép một bản dump ra máy khác.
 
 **Hằng ngày (2 phút)** — mở **Quản trị → Tổng quan**:
 - Ô **"Thiếu chủ sở hữu"** phải bằng **0**. Khác 0 là có hồ sơ khách chưa gán chủ → xử lý ngay.

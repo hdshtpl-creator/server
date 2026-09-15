@@ -479,11 +479,156 @@ export async function getReviewContent(id) {
 }
 
 /** Lưu nội dung người duyệt đã sửa: backend chia đoạn + tạo vector lại. */
-export async function saveReviewContent(id, content) {
+// PUT /review/{id}/content — lưu bản sửa KÈM LÝ DO (kế hoạch ngày 3: mỗi lần
+// chỉnh sửa ghi nhận vì sao). Backend cất bản cũ vào document_versions.
+export async function saveReviewContent(id, content, edit_reason = 'sua_loi_trich_xuat', edit_note = '') {
   return request(`/review/${id}/content`, {
     method: 'PUT',
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, edit_reason, edit_note: edit_note || null }),
   });
+}
+
+// ==================== HOÀN THIỆN GIAI ĐOẠN 1 (15/09/2026) ====================
+
+/** Tải file về từ một endpoint GET có xác thực; tên file lấy từ Content-Disposition. */
+async function downloadGet(path, fallbackName) {
+  if (useMockBackend) {
+    triggerDownload(new Blob(['Bản demo — chỉ xuất tệp khi kết nối backend thật.'], {
+      type: 'text/plain;charset=utf-8',
+    }), fallbackName.replace(/\.docx$/, '.txt'));
+    return;
+  }
+  const res = await fetch(`${apiBaseUrl}${path}`, {
+    method: 'GET',
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+  });
+  if (!res.ok) {
+    const rawText = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(rawText, res.status));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*=UTF-8''([^;]+)/i) || cd.match(/filename="?([^";]+)"?/i);
+  triggerDownload(blob, m ? decodeURIComponent(m[1]) : fallbackName);
+}
+
+async function downloadPost(path, body, fallbackName) {
+  if (useMockBackend) {
+    triggerDownload(new Blob(['Bản demo — chỉ xuất tệp khi kết nối backend thật.'], {
+      type: 'text/plain;charset=utf-8',
+    }), fallbackName.replace(/\.docx$/, '.txt'));
+    return;
+  }
+  const res = await fetch(`${apiBaseUrl}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const rawText = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(rawText, res.status));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*=UTF-8''([^;]+)/i) || cd.match(/filename="?([^";]+)"?/i);
+  triggerDownload(blob, m ? decodeURIComponent(m[1]) : fallbackName);
+}
+
+// --- So sánh phiên bản bản thảo (kế hoạch ngày 8) ---
+export async function compareDraftVersions(draftId, tu, den) {
+  const qs = new URLSearchParams();
+  if (tu) qs.set('tu', String(tu));
+  if (den) qs.set('den', String(den));
+  const q = qs.toString();
+  return request(`/drafts/${toIntOrNull(draftId)}/compare${q ? `?${q}` : ''}`, { method: 'GET' });
+}
+export async function exportDraftCompare(draftId, tu, den, filename) {
+  return downloadGet(
+    `/drafts/${toIntOrNull(draftId)}/compare/export?tu=${tu}&den=${den}`,
+    filename || `so-sanh-v${tu}-v${den}.docx`,
+  );
+}
+
+// --- Kiểm tra mâu thuẫn pháp lý chạy nền (kế hoạch ngày 9) ---
+export async function getDraftChecks(draftId) {
+  const data = await request(`/drafts/${toIntOrNull(draftId)}/checks`, { method: 'GET' });
+  return Array.isArray(data) ? data : data?.items || [];
+}
+export async function runDraftCheck(draftId, dongBo = false) {
+  const data = await request(`/drafts/${toIntOrNull(draftId)}/checks${dongBo ? '?dong_bo=true' : ''}`, {
+    method: 'POST',
+  });
+  return data?.items || [];
+}
+
+// --- Khách quan tâm từ website ---
+export async function getLeads(status = '', limit = 200) {
+  const qs = new URLSearchParams();
+  if (status) qs.set('status', status);
+  qs.set('limit', String(limit));
+  return request(`/leads?${qs.toString()}`, { method: 'GET' });
+}
+export async function updateLead(leadId, { status, note } = {}) {
+  return request(`/leads/${toIntOrNull(leadId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: status || null, note: note ?? null }),
+  });
+}
+
+// --- Nhật ký hệ thống (chỉ đọc) ---
+export async function getAuditLog({ limit = 100, offset = 0, action = '', user_id = null, q = '' } = {}) {
+  const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (action) qs.set('action', action);
+  if (user_id) qs.set('user_id', String(user_id));
+  if (q) qs.set('q', q);
+  return request(`/audit?${qs.toString()}`, { method: 'GET' });
+}
+export async function getAuditActions() {
+  const data = await request('/audit/actions', { method: 'GET' });
+  return data?.items || [];
+}
+
+// --- Lịch sử phiên bản tài liệu kho + so sánh ---
+export async function getDocumentVersions(docId) {
+  return request(`/documents/${toIntOrNull(docId)}/versions`, { method: 'GET' });
+}
+export async function getDocumentVersion(docId, versionNo) {
+  return request(`/documents/${toIntOrNull(docId)}/versions/${versionNo}`, { method: 'GET' });
+}
+export async function compareDocumentVersions(docId, tu, den) {
+  return request(`/documents/${toIntOrNull(docId)}/versions/compare?tu=${tu}&den=${den}`, { method: 'GET' });
+}
+export async function exportDocumentCompare(docId, tu, den, filename) {
+  return downloadGet(
+    `/documents/${toIntOrNull(docId)}/versions/compare/export?tu=${tu}&den=${den}`,
+    filename || `tai-lieu-${docId}-so-sanh-v${tu}-v${den}.docx`,
+  );
+}
+
+// --- Rà soát rủi ro theo danh mục điều khoản chuẩn (kế hoạch ngày 7–8) ---
+export async function getRaSoatLoai() {
+  const data = await request('/legal/ra-soat/loai', { method: 'GET' });
+  return data?.items || [];
+}
+export async function raSoatHopDong({ text, temp_file_id, draft_id, document_id, loai, tieu_de, tra_luat = true } = {}) {
+  return request('/legal/ra-soat', {
+    method: 'POST',
+    body: JSON.stringify({
+      text: text || null,
+      temp_file_id: toIntOrNull(temp_file_id),
+      draft_id: toIntOrNull(draft_id),
+      document_id: toIntOrNull(document_id),
+      loai: loai || null,
+      tieu_de: tieu_de || null,
+      tra_luat: Boolean(tra_luat),
+    }),
+  });
+}
+export async function exportRaSoat(ket_qua, tieu_de, filename) {
+  return downloadPost('/legal/ra-soat/export', { ket_qua, tieu_de }, filename || 'ra-soat-rui-ro.docx');
 }
 
 export async function approveReview(id, { doc_type, access_level, client_id, ...vanBanMeta }) {
@@ -2459,6 +2604,99 @@ Với câu hỏi "${question}":
         return { ok: true, id: d.id };
       }
     }
+  }
+
+  // ---------- Hoàn thiện giai đoạn 1 (15/09/2026): mock đủ để xem thử giao diện ----------
+  const cmpMatch = endpoint.match(/^\/drafts\/(\d+)\/compare(?:\?.*)?$/);
+  if (cmpMatch) {
+    return {
+      draft_id: Number(cmpMatch[1]), tu: 1, den: 2,
+      doan: [
+        { op: 'equal', cu: '# Hợp đồng dịch vụ pháp lý', moi: '# Hợp đồng dịch vụ pháp lý', phan: [{ op: 'equal', text: '# Hợp đồng dịch vụ pháp lý' }] },
+        { op: 'replace', cu: 'Thời hạn hợp đồng là 12 tháng kể từ ngày ký.', moi: 'Thời hạn hợp đồng là 24 tháng kể từ ngày ký.',
+          phan: [{ op: 'equal', text: 'Thời hạn hợp đồng là ' }, { op: 'delete', text: '12' }, { op: 'insert', text: '24' }, { op: 'equal', text: ' tháng kể từ ngày ký.' }] },
+        { op: 'delete', cu: 'Phí dịch vụ thanh toán một lần.', moi: null, phan: [{ op: 'delete', text: 'Phí dịch vụ thanh toán một lần.' }] },
+        { op: 'insert', cu: null, moi: 'Phí dịch vụ thanh toán theo 2 đợt: 50% khi ký, 50% khi nghiệm thu.', phan: [{ op: 'insert', text: 'Phí dịch vụ thanh toán theo 2 đợt: 50% khi ký, 50% khi nghiệm thu.' }] },
+      ],
+      thong_ke: { them: 14, xoa: 7, doan_them: 1, doan_xoa: 1, doan_sua: 1, giong_nhau: 0.62 },
+      tom_tat: 'Thêm 14 từ, xoá 7 từ; 1 đoạn sửa, 1 đoạn thêm, 1 đoạn xoá; giống nhau 62%',
+    };
+  }
+  const chkMatch = endpoint.match(/^\/drafts\/(\d+)\/checks(?:\?.*)?$/);
+  if (chkMatch) {
+    mockState.draftChecks = mockState.draftChecks || {};
+    const id = chkMatch[1];
+    if (method === 'POST') {
+      mockState.draftChecks[id] = [{
+        version_no: 2, status: 'done', ket_luan: 'canh_bao', so_canh_bao: 1, so_muc: 3, phuong_phap: 'quy_tac+ai',
+        items: [
+          { loai: 'lai_suat', trich: 'lãi suất chậm thanh toán 3%/tháng', vi_tri: 'Điều 5', ket_luan: 'canh_bao', ly_do: 'Quy ra 36%/năm, vượt trần 20%/năm', can_cu: 'Điều 468 Bộ luật Dân sự 2015' },
+          { loai: 'phat_vi_pham', trich: 'phạt vi phạm 8% giá trị phần nghĩa vụ bị vi phạm', vi_tri: 'Điều 7', ket_luan: 'hop_le', ly_do: 'Đúng mức tối đa', can_cu: 'Điều 301 Luật Thương mại 2005' },
+          { loai: 'thoi_han', trich: 'trong vòng 15 ngày làm việc', vi_tri: 'Điều 4', ket_luan: 'khong_ro', ly_do: 'Thoả thuận, không có ngưỡng luật' },
+        ],
+        started_at: new Date().toISOString(), finished_at: new Date().toISOString(),
+      }];
+    }
+    return { ok: true, items: mockState.draftChecks[id] || [] };
+  }
+  if (endpoint.startsWith('/leads')) {
+    mockState.leads = mockState.leads || [
+      { id: 1, name: 'Nguyễn Văn An', phone: '0912345678', email: null, need: 'Tranh chấp hợp đồng thuê mặt bằng, muốn được tư vấn khởi kiện.', status: 'moi', created_at: '2026-09-15 09:12', source: 'website' },
+      { id: 2, name: 'Trần Thị Bích', phone: null, email: 'bich.tran@example.com', need: 'Đăng ký nhãn hiệu cho quán cà phê.', status: 'da_lien_he', note: 'Đã gọi, hẹn gặp thứ 5', created_at: '2026-09-14 15:40', handled_at: '2026-09-14 16:00', handled_by_name: 'Giám đốc (Ban QT)', source: 'website' },
+    ];
+    const lm = endpoint.match(/^\/leads\/(\d+)$/);
+    if (lm && method === 'PATCH') {
+      const body = JSON.parse(options.body || '{}');
+      const l = mockState.leads.find((x) => String(x.id) === lm[1]);
+      if (l) { if (body.status) l.status = body.status; if (body.note != null) l.note = body.note; l.handled_at = new Date().toISOString(); l.handled_by_name = me.full_name; }
+      return { ok: true };
+    }
+    const counts = { moi: 0, da_lien_he: 0, bo_qua: 0 };
+    mockState.leads.forEach((l) => { counts[l.status] = (counts[l.status] || 0) + 1; });
+    return { items: [...mockState.leads], counts, statuses: { moi: 'Mới', da_lien_he: 'Đã liên hệ', bo_qua: 'Bỏ qua' } };
+  }
+  if (endpoint === '/audit/actions') {
+    return { items: [{ action: 'chat_query', count: 368, label: 'Hỏi AI' }, { action: 'approve_label', count: 99, label: 'Duyệt nhãn tài liệu' }, { action: 'auto_learn', count: 40043, label: 'Bộ quét học tài liệu' }] };
+  }
+  if (endpoint.startsWith('/audit')) {
+    const rows = [
+      { id: 40714, user_id: 1, user_name: 'Quản trị hệ thống', action: 'chat_query', entity: 'conversations', entity_id: 43, detail: { question: 'Thời hiệu khởi kiện tranh chấp hợp đồng?' }, created_at: '2026-09-15 11:20', tom_tat: 'Hỏi AI · conversations#43 · question=Thời hiệu khởi kiện tranh chấp hợp đồng?' },
+      { id: 40713, user_id: 2, user_name: 'Giám đốc (Ban QT)', action: 'approve_label', entity: 'documents', entity_id: 40291, detail: { doc_type: 'ho_so_kh' }, created_at: '2026-09-15 10:02', tom_tat: 'Duyệt nhãn tài liệu · documents#40291' },
+      { id: 40712, user_id: null, user_name: 'Hệ thống', action: 'auto_learn', entity: 'documents', entity_id: 40290, detail: { file: 'BCTC.pdf' }, created_at: '2026-09-15 09:58', tom_tat: 'Bộ quét học tài liệu · documents#40290 · file=BCTC.pdf' },
+    ];
+    return { items: rows, total: 40714, limit: 100, offset: 0 };
+  }
+  const verCmp = endpoint.match(/^\/documents\/(\d+)\/versions\/compare/);
+  if (verCmp) {
+    return { document_id: Number(verCmp[1]), tu: 1, den: 2,
+      doan: [{ op: 'replace', cu: 'Số: 91/2015/QH13', moi: 'Số: 91/2015/QH13 (đã soát OCR)', phan: [{ op: 'equal', text: 'Số: 91/2015/QH13' }, { op: 'insert', text: ' (đã soát OCR)' }] }],
+      thong_ke: { them: 3, xoa: 0, doan_them: 0, doan_xoa: 0, doan_sua: 1, giong_nhau: 0.9 }, tom_tat: 'Thêm 3 từ, xoá 0 từ; 1 đoạn sửa, 0 đoạn thêm, 0 đoạn xoá; giống nhau 90%' };
+  }
+  const verList = endpoint.match(/^\/documents\/(\d+)\/versions$/);
+  if (verList) {
+    return { document_id: Number(verList[1]), reasons: { luat_thay_doi: 'Luật thay đổi', rui_ro: 'Rủi ro', yeu_cau_khach: 'Yêu cầu khách hàng', sua_loi_trich_xuat: 'Sửa lỗi trích xuất / OCR', khac: 'Khác' },
+      items: [
+        { version_no: 2, edit_reason: 'sua_loi_trich_xuat', edit_reason_label: 'Sửa lỗi trích xuất / OCR', edit_note: 'Chữa số hiệu OCR đọc sai', created_at: '2026-09-15 10:30', edited_by_name: 'Giám đốc (Ban QT)', characters: 12040 },
+        { version_no: 1, edit_reason: 'ban_goc', edit_reason_label: 'Bản gốc', edit_note: 'Bản trích xuất ban đầu', created_at: '2026-09-15 10:30', edited_by_name: 'Hệ thống', characters: 12010 },
+      ] };
+  }
+  if (endpoint === '/legal/ra-soat/loai') {
+    return { items: [
+      { ma: 'hop_dong_lao_dong', ten: 'Hợp đồng lao động', so_dieu_khoan: 10, so_nguong: 5 },
+      { ma: 'hop_dong_dich_vu', ten: 'Hợp đồng dịch vụ', so_dieu_khoan: 10, so_nguong: 2 },
+      { ma: 'hop_dong_thue', ten: 'Hợp đồng thuê', so_dieu_khoan: 8, so_nguong: 1 },
+    ] };
+  }
+  if (endpoint === '/legal/ra-soat' && method === 'POST') {
+    return {
+      loai: 'hop_dong_dich_vu', ten_loai: 'Hợp đồng dịch vụ', do_tin_cay: 0.8, so_dieu_khoan: 9, tieu_de: 'HĐ dịch vụ (demo)', so_ky_tu: 8210, thoi_gian_ms: 120,
+      muc: [
+        { ma: 'tranh_chap', ten: 'Giải quyết tranh chấp', trang_thai: 'thieu', giai_thich: 'Không thấy điều khoản chọn toà án / trọng tài.', de_xuat: 'Bổ sung điều khoản giải quyết tranh chấp (toà án có thẩm quyền hoặc trọng tài).', can_cu: 'Điều 513–520 Bộ luật Dân sự 2015', can_cu_kho: [{ document_id: 12, title: 'Bộ luật Dân sự 2015', so_hieu: '91/2015/QH13', trich: 'Điều 513. Hợp đồng dịch vụ…' }] },
+        { ma: 'phat_vi_pham', ten: 'Phạt vi phạm', trang_thai: 'canh_bao', dieu_khoan: 'Điều 8. Phạt vi phạm', trich: 'phạt 12% giá trị hợp đồng', giai_thich: 'Mức phạt 12% vượt trần 8% với hợp đồng thương mại.', de_xuat: 'Hạ mức phạt về tối đa 8% giá trị phần nghĩa vụ bị vi phạm.', can_cu: 'Điều 301 Luật Thương mại 2005' },
+        { ma: 'gia_thanh_toan', ten: 'Giá và thanh toán', trang_thai: 'dat', dieu_khoan: 'Điều 3. Phí dịch vụ', trich: 'Phí dịch vụ 120.000.000 đồng, thanh toán 2 đợt', giai_thich: 'Có điều khoản.', de_xuat: '', can_cu: 'Điều 519 Bộ luật Dân sự 2015' },
+      ],
+      tong_ket: { dat: 1, canh_bao: 1, thieu: 1, muc_rui_ro: 'cao' },
+    };
   }
 
   throw new Error(`Đường dẫn chưa được hỗ trợ trong chế độ giả lập: ${endpoint}`);

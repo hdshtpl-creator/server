@@ -173,6 +173,15 @@ AI trả về bốn phần: mẫu yêu cầu những mục nào; **bảng đối
 
 ---
 
+
+### 4.5 Rà soát rủi ro hợp đồng theo danh mục điều khoản
+
+Đính kèm hợp đồng (.docx/.pdf), đợi chip file đọc xong → bấm **Rà soát rủi ro** → chọn loại hợp đồng
+(hoặc để *Tự nhận diện*) → **Rà soát**. Kết quả là bảng từng mục: **ĐẠT / CẢNH BÁO / THIẾU**,
+giải thích, đề xuất sửa, căn cứ (kèm đoạn luật thật trong kho). Bấm **Xuất báo cáo Word** để gửi
+luật sư phụ trách. Ngưỡng bất thường máy tự soi: lãi suất > 20 %/năm, phạt > 8 %, thử việc > 60 ngày,
+lương thử việc < 85 %, hợp đồng lao động > 36 tháng, giờ làm > 8 giờ/ngày…
+
 ## 5. TAB SOẠN TÀI LIỆU
 
 Dùng cho văn bản dài, nhiều phiên bản, cần duyệt trước khi phát hành (thư tư vấn, báo cáo vụ việc).
@@ -188,6 +197,15 @@ Quy trình: **Tạo bản nháp** (chọn mẫu, chọn tài liệu nguồn, ghi
 - Câu hỏi *"soạn đơn kháng cáo cần những nội dung gì?"* là câu tra cứu, bot trả lời chứ không tạo file.
 
 ---
+
+
+**Mới 15/09/2026 ở tab này:**
+
+- **So sánh phiên bản** (khi bản nháp có ≥ 2 phiên bản): hai cột bản cũ / bản mới, phần xoá gạch đỏ,
+  phần thêm xanh; **Word (track changes)** tải về file Word thật có theo dõi thay đổi để chấp nhận / từ chối từng chỗ.
+- **Kiểm tra mâu thuẫn pháp lý** (thẻ bên phải): sau mỗi lần *Sinh nội dung* / *Yêu cầu sửa*, máy tự chạy nền
+  1–3 phút, trích các cam kết / thời hạn / con số trong bản thảo, đối chiếu luật và kết luận **Hợp lệ / Cảnh báo / Chưa rõ**
+  cho từng mục kèm căn cứ. Bấm **Kiểm tra lại** khi cần. Cảnh báo là gợi ý để luật sư xem, không tự sửa bản thảo.
 
 ## 6. TAB QUẢN TRỊ
 
@@ -218,6 +236,15 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 > **PDF luôn phải người duyệt**, kể cả khi hệ thống đang bật tự duyệt — vì OCR sai một con số là sai một căn cứ pháp lý.
 
 ---
+
+
+**Mới 15/09/2026 trong Quản trị:**
+
+- **Khách quan tâm (website)** (admin/Ban QT): người dân hỏi qua khung chat trên website HDS rồi để lại
+  tên, số điện thoại/email, nhu cầu → đánh dấu *Đã liên hệ* / *Bỏ qua* kèm ghi chú.
+- **Nhật ký hệ thống** (admin/Ban QT): ai làm gì, lúc nào — lọc theo thao tác, tìm theo chữ. Chỉ đọc, không xoá được.
+- **Duyệt nhãn → sửa nội dung trích xuất** nay bắt buộc chọn **lý do sửa** (Luật thay đổi / Rủi ro /
+  Yêu cầu khách hàng / Sửa lỗi OCR / Khác). Bản cũ không mất: xem và so sánh ở *Kho tài liệu đã học → Chi tiết → Lịch sử sửa nội dung*.
 
 ## 7. ĐƯA TÀI LIỆU VÀO KHO CHO AI HỌC
 

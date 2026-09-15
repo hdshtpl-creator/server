@@ -10,6 +10,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -17,7 +18,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app import autofill, db, drafting, rag
+from app import autofill, db, drafting, kiem_tra_mau_thuan, rag, so_sanh
 
 
 INTERNAL_ROLES = {"admin", "ban_qt", "truong_bph", "chuyen_vien", "tro_ly"}
@@ -390,7 +391,142 @@ def _save_version(user, draft: dict, result: dict, source_ids: list[int],
             "placeholder_count": result["placeholder_count"],
             "source_document_ids": source_ids, "latency_ms": result.get("latency_ms", 0),
         })
+    # Kế hoạch ngày 9: kiểm tra mâu thuẫn pháp lý CHẠY NỀN sau mỗi lần lưu.
+    # Đặt SAU khi phiên đã commit — luồng nền đọc lại bản thảo từ CSDL.
+    khoi_dong_kiem_tra(draft["id"], version_no, result["content_markdown"])
     return version_no
+
+
+# ---------------------------------------------------------------------------
+# KIỂM TRA MÂU THUẪN PHÁP LÝ (chạy nền) + SO SÁNH PHIÊN BẢN
+# ---------------------------------------------------------------------------
+# Kiểm tra chạy trong một luồng daemon: lưu bản thảo phải trả về ngay, còn
+# việc trích cam kết + tra luật + hỏi model mất 1–3 phút trên GPU. Kết quả
+# ghi vào draft_checks; giao diện thăm dò GET /drafts/{id}/checks.
+KIEM_TRA_TOI_DA_AI = 10
+
+
+def _tim_luat_cho_kiem_tra(cau_hoi: str) -> list[dict]:
+    """Callback tra kho luật cho mô-đun kiểm tra: chỉ văn bản luật, 3 đoạn,
+    không lấy đoạn lân cận (mỗi mục một câu hỏi ngắn, cần nhanh)."""
+    rows = rag.retrieve(cau_hoi, "internal", is_banqt=True, doc_types=["law"],
+                        top_k=3, neighbours=False)
+    return [{
+        "title": r.get("title"), "content": r.get("content") or "",
+        "so_hieu": r.get("so_hieu"), "document_id": r.get("document_id"),
+        "chunk_id": r.get("chunk_id"),
+    } for r in rows or []]
+
+
+def _llm_cho_kiem_tra(model: str | None):
+    """Bản thảo mang dữ liệu khách → luôn chạy model TRÊN MÁY CHỦ, không ra
+    ngoài (cùng luật với models.model_soan_thao)."""
+    from app import models
+
+    def goi(prompt: str, system: str = "") -> str:
+        ans, _ms = models.llm(prompt, system, temperature=0.1,
+                              model=model or models.local_default_model())
+        return ans or ""
+    return goi
+
+
+def _chay_kiem_tra_nen(draft_id: int, version_no: int, content: str):
+    try:
+        ket_qua = kiem_tra_mau_thuan.chay_kiem_tra(
+            content, llm=_llm_cho_kiem_tra(None), tim_luat=_tim_luat_cho_kiem_tra,
+            toi_da_ai=KIEM_TRA_TOI_DA_AI,
+        )
+        tk = ket_qua.get("tong_ket") or {}
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE draft_checks SET status='done', ket_luan=%s, so_canh_bao=%s,
+                              so_muc=%s, phuong_phap=%s, items=%s, error=NULL,
+                              finished_at=now()
+                        WHERE draft_id=%s AND version_no=%s""",
+                    (tk.get("ket_luan"), tk.get("so_canh_bao", 0), tk.get("so_muc", 0),
+                     ket_qua.get("phuong_phap"),
+                     json.dumps(ket_qua.get("muc") or [], ensure_ascii=False),
+                     draft_id, version_no),
+                )
+    except Exception as exc:  # luồng nền: ghi lỗi vào dòng, không nổ
+        try:
+            with db.session(role="internal", admin=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE draft_checks SET status='error', error=%s, finished_at=now()
+                            WHERE draft_id=%s AND version_no=%s""",
+                        (str(exc)[:500], draft_id, version_no),
+                    )
+        except Exception:
+            pass
+
+
+def khoi_dong_kiem_tra(draft_id: int, version_no: int, content: str,
+                       dong_bo: bool = False) -> bool:
+    """Ghi dòng 'running' rồi chạy kiểm tra (nền hoặc đồng bộ). Tắt bằng cài
+    đặt draft_check_auto=0 (máy yếu / dùng chung nhiều người)."""
+    from app import settings
+    if not dong_bo and str(settings.get("draft_check_auto", "1")).strip() in {"0", "false", "no"}:
+        return False
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO draft_checks (draft_id, version_no, status)
+                         VALUES (%s,%s,'running')
+                         ON CONFLICT (draft_id, version_no) DO UPDATE
+                           SET status='running', error=NULL, started_at=now(), finished_at=NULL""",
+                    (draft_id, version_no),
+                )
+    except Exception:
+        return False   # thiếu bảng (chưa migrate) — không được chặn việc lưu
+    if dong_bo:
+        _chay_kiem_tra_nen(draft_id, version_no, content)
+    else:
+        threading.Thread(target=_chay_kiem_tra_nen, name=f"kiem-tra-{draft_id}",
+                         args=(draft_id, version_no, content), daemon=True).start()
+    return True
+
+
+def _doc_kiem_tra(draft_id: int) -> list[dict]:
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT version_no,status,ket_luan,so_canh_bao,so_muc,phuong_phap,items,
+                          error,started_at,finished_at
+                     FROM draft_checks WHERE draft_id=%s ORDER BY version_no DESC""",
+                (draft_id,),
+            )
+            rows = cur.fetchall()
+    return [{
+        "version_no": r[0], "status": r[1], "ket_luan": r[2], "so_canh_bao": r[3],
+        "so_muc": r[4], "phuong_phap": r[5], "items": _json_value(r[6], []),
+        "error": r[7], "started_at": r[8], "finished_at": r[9],
+    } for r in rows]
+
+
+def _noi_dung_phien_ban(draft_id: int, version_no: int) -> str:
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT content_markdown FROM document_draft_versions WHERE draft_id=%s AND version_no=%s",
+                (draft_id, version_no),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, f"Không thấy phiên bản {version_no}")
+    return row[0] or ""
+
+
+def _cap_phien_ban(draft: dict, tu: int | None, den: int | None) -> tuple[int, int]:
+    """Mặc định so bản hiện tại với bản ngay trước; đòi ít nhất 2 phiên bản."""
+    hien_tai = draft["current_version"]
+    den = den or hien_tai
+    tu = tu or (den - 1)
+    if hien_tai < 2 or tu < 1 or den < 1 or tu == den:
+        raise HTTPException(409, "Cần ít nhất hai phiên bản khác nhau để so sánh")
+    return tu, den
 
 
 def _markdown_with_evidence(content: str, evidence: list[dict]) -> str:
@@ -790,5 +926,63 @@ def build_router(current_user, require_reviewer) -> APIRouter:
             "X-Draft-Version": str(latest["version_no"]),
             "X-Draft-Status": detail["status"],
         })
+
+    # ---- So sánh phiên bản (kế hoạch ngày 8) --------------------------------
+    @router.get("/drafts/{draft_id}/compare")
+    def drafts_compare(draft_id: int, tu: int | None = None, den: int | None = None,
+                       user=Depends(current_user)):
+        """Hai bản thảo: đoạn nào thêm / xoá / sửa, mức từ. Mặc định bản hiện
+        tại so với bản ngay trước."""
+        draft = _get_draft(user, draft_id)
+        tu, den = _cap_phien_ban(draft, tu, den)
+        cu, moi = _noi_dung_phien_ban(draft_id, tu), _noi_dung_phien_ban(draft_id, den)
+        ket_qua = so_sanh.so_sanh_van_ban(cu, moi)
+        return {"draft_id": draft_id, "tu": tu, "den": den, **ket_qua,
+                "tom_tat": so_sanh.tom_tat_thay_doi(ket_qua)}
+
+    @router.get("/drafts/{draft_id}/compare/export")
+    def drafts_compare_export(draft_id: int, tu: int | None = None, den: int | None = None,
+                              user=Depends(current_user)):
+        """File Word có TRACK CHANGES thật — mở bằng Word bấm chấp nhận/từ chối
+        từng chỗ, đúng cách luật sư vẫn làm với bản thảo."""
+        draft = _get_draft(user, draft_id)
+        tu, den = _cap_phien_ban(draft, tu, den)
+        cu, moi = _noi_dung_phien_ban(draft_id, tu), _noi_dung_phien_ban(draft_id, den)
+        payload = so_sanh.xuat_docx_theo_doi(
+            cu, moi, f"{draft['title']} — so sánh v{tu} → v{den}",
+            tac_gia=user.get("name") or "HDS AI",
+        )
+        filename = drafting.safe_export_name(f"{draft['title']}-so-sanh-v{tu}-v{den}", "docx")
+        with db.session(role="internal", admin=True) as conn:
+            db.audit(conn, user["id"], "export_draft_compare", "document_drafts", draft_id,
+                     {"tu": tu, "den": den})
+        return Response(
+            payload,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition":
+                     f"attachment; filename=\"draft_{draft_id}_compare.docx\"; "
+                     f"filename*=UTF-8''{quote(filename)}"},
+        )
+
+    # ---- Kiểm tra mâu thuẫn pháp lý (kế hoạch ngày 9) -----------------------
+    @router.get("/drafts/{draft_id}/checks")
+    def drafts_checks(draft_id: int, user=Depends(current_user)):
+        _get_draft(user, draft_id)
+        return {"items": _doc_kiem_tra(draft_id)}
+
+    @router.post("/drafts/{draft_id}/checks")
+    def drafts_check_now(draft_id: int, dong_bo: bool = False, user=Depends(current_user)):
+        """Chạy lại kiểm tra cho bản hiện tại (nền; dong_bo=true để đợi kết
+        quả — dùng cho kiểm thử)."""
+        draft = _get_draft(user, draft_id)
+        if draft["current_version"] < 1:
+            raise HTTPException(409, "Bản nháp chưa có nội dung để kiểm tra")
+        content = _noi_dung_phien_ban(draft_id, draft["current_version"])
+        if not khoi_dong_kiem_tra(draft_id, draft["current_version"], content, dong_bo=dong_bo):
+            raise HTTPException(503, "Không khởi động được kiểm tra (chưa migrate bảng draft_checks?)")
+        with db.session(role="internal", admin=True) as conn:
+            db.audit(conn, user["id"], "run_draft_check", "document_drafts", draft_id,
+                     {"version": draft["current_version"], "dong_bo": dong_bo})
+        return {"ok": True, "items": _doc_kiem_tra(draft_id)}
 
     return router

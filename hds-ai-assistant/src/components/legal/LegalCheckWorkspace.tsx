@@ -5,6 +5,8 @@ import type {
   BoMau,
   ChatMessage,
   ConversationSummary,
+  RaSoatKetQua,
+  RaSoatLoai,
   TempAttachment,
   TemplateFile,
 } from '../../types';
@@ -30,7 +32,156 @@ import {
   Square,
   Plus,
   Trash2,
+  ShieldAlert,
 } from 'lucide-react';
+
+/** Rà soát rủi ro theo danh mục điều khoản chuẩn (kế hoạch ngày 7–8). */
+const RA_SOAT_BADGE: Record<string, { label: string; cls: string }> = {
+  dat: { label: 'ĐẠT', cls: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300' },
+  canh_bao: { label: 'CẢNH BÁO', cls: 'bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300' },
+  thieu: { label: 'THIẾU', cls: 'bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300' },
+};
+const RUI_RO_LABEL: Record<string, { label: string; cls: string }> = {
+  thap: { label: 'Rủi ro thấp', cls: 'text-emerald-700 dark:text-emerald-300' },
+  trung_binh: { label: 'Rủi ro trung bình', cls: 'text-amber-700 dark:text-amber-300' },
+  cao: { label: 'Rủi ro cao', cls: 'text-red-700 dark:text-red-300' },
+};
+
+const RaSoatModal: React.FC<{
+  attachments: TempAttachment[];
+  onClose: () => void;
+  showToast: (msg: string, kind?: 'success' | 'error' | 'info') => void;
+}> = ({ attachments, onClose, showToast }) => {
+  const usable = attachments.filter((a) => a.id != null);
+  const [fileId, setFileId] = useState<number | null>(usable[0]?.id ?? null);
+  const [loai, setLoai] = useState('');
+  const [loaiList, setLoaiList] = useState<RaSoatLoai[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [ketQua, setKetQua] = useState<RaSoatKetQua | null>(null);
+
+  useEffect(() => {
+    api.getRaSoatLoai().then(setLoaiList).catch(() => setLoaiList([]));
+  }, []);
+
+  const run = async () => {
+    if (fileId == null) return;
+    setBusy(true);
+    try {
+      const att = usable.find((a) => a.id === fileId);
+      const res = await api.raSoatHopDong({ temp_file_id: fileId, loai: loai || null, tieu_de: att?.filename });
+      setKetQua(res);
+    } catch (err: any) {
+      showToast(err?.message || 'Không rà soát được.', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const exportDocx = async () => {
+    if (!ketQua) return;
+    setExporting(true);
+    try {
+      await api.exportRaSoat(ketQua, ketQua.tieu_de || 'hop-dong', `ra-soat-${(ketQua.tieu_de || 'hop-dong').replace(/\.[^.]+$/, '')}.docx`);
+    } catch (err: any) {
+      showToast(err?.message || 'Không xuất được báo cáo.', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const rr = ketQua ? RUI_RO_LABEL[ketQua.tong_ket?.muc_rui_ro] || RUI_RO_LABEL.thap : null;
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose} role="presentation">
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-4xl max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl">
+        <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3 sticky top-0 bg-white dark:bg-slate-900 rounded-t-2xl">
+          <div>
+            <h3 className="font-bold text-sm flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-hds-gold" /> Rà soát rủi ro theo danh mục điều khoản</h3>
+            <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+              Đối chiếu hợp đồng với danh mục điều khoản bắt buộc theo loại + ngưỡng bất thường theo luật (lãi suất, phạt, thử việc…). Mỗi mục: Đạt / Cảnh báo / Thiếu, giải thích, đề xuất sửa, căn cứ và đoạn luật trong kho.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Đóng"><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="flex flex-wrap gap-2 items-end">
+            <label className="space-y-1 flex-1 min-w-[220px]">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">Hợp đồng đính kèm</span>
+              <select value={fileId ?? ''} onChange={(e) => setFileId(e.target.value ? Number(e.target.value) : null)} className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 dark:bg-slate-800 text-xs">
+                {usable.length === 0 && <option value="">(chưa có file đính kèm đọc xong)</option>}
+                {usable.map((a) => <option key={a.id ?? a.filename} value={a.id ?? ''}>{a.filename}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1 min-w-[200px]">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">Loại hợp đồng</span>
+              <select value={loai} onChange={(e) => setLoai(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 dark:bg-slate-800 text-xs">
+                <option value="">Tự nhận diện</option>
+                {loaiList.map((l) => <option key={l.ma} value={l.ma}>{l.ten}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={run} disabled={busy || fileId == null} className="px-4 py-2 rounded-lg bg-hds-navy text-hds-gold text-xs font-bold flex items-center gap-1.5 disabled:opacity-50">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ListChecks className="w-4 h-4" />} Rà soát
+            </button>
+            {ketQua && (
+              <button type="button" onClick={exportDocx} disabled={exporting} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 disabled:opacity-50">
+                {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Xuất báo cáo Word
+              </button>
+            )}
+          </div>
+
+          {ketQua && (
+            <>
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <span>Loại: <strong>{ketQua.ten_loai}</strong> {ketQua.do_tin_cay ? `(${Math.round(ketQua.do_tin_cay * 100)}%)` : ''}</span>
+                <span>· {ketQua.so_dieu_khoan} điều khoản</span>
+                <span className={`font-bold ${rr?.cls}`}>· {rr?.label}</span>
+                <span className="text-slate-500">· {ketQua.tong_ket.dat} đạt, {ketQua.tong_ket.canh_bao} cảnh báo, {ketQua.tong_ket.thieu} thiếu</span>
+              </div>
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800 text-[10px] uppercase text-slate-500">
+                    <tr>
+                      <th className="text-left px-3 py-2 w-8">#</th>
+                      <th className="text-left px-3 py-2">Mục</th>
+                      <th className="text-left px-3 py-2 w-24">Trạng thái</th>
+                      <th className="text-left px-3 py-2">Giải thích · Đề xuất · Căn cứ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ketQua.muc.map((m, i) => {
+                      const b = RA_SOAT_BADGE[m.trang_thai] || RA_SOAT_BADGE.dat;
+                      return (
+                        <tr key={m.ma + i} className="border-t border-slate-100 dark:border-slate-800 align-top">
+                          <td className="px-3 py-2 text-slate-400">{i + 1}</td>
+                          <td className="px-3 py-2">
+                            <span className="font-bold text-slate-800 dark:text-slate-100">{m.ten}</span>
+                            {m.dieu_khoan && <span className="block text-[10px] text-slate-500">{m.dieu_khoan}</span>}
+                            {m.trich && <span className="block mt-1 text-[10px] italic text-slate-500 border-l-2 border-slate-300 pl-2">{m.trich}</span>}
+                          </td>
+                          <td className="px-3 py-2"><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${b.cls}`}>{b.label}</span></td>
+                          <td className="px-3 py-2 text-slate-700 dark:text-slate-300 space-y-1">
+                            {m.giai_thich && <p>{m.giai_thich}</p>}
+                            {m.de_xuat && m.trang_thai !== 'dat' && <p><span className="font-semibold">Đề xuất:</span> {m.de_xuat}</p>}
+                            {m.can_cu && <p className="text-[10px] text-slate-500">Căn cứ: {m.can_cu}</p>}
+                            {m.can_cu_kho?.map((c, j) => (
+                              <p key={j} className="text-[10px] text-slate-500 border-l-2 border-hds-gold pl-2">
+                                <span className="font-semibold">{c.title}{c.so_hieu ? ` (${c.so_hieu})` : ''}:</span> {c.trich}
+                              </p>
+                            ))}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[10px] text-slate-500">AI hỗ trợ rà soát theo danh mục; luật sư HDS rà soát và chịu trách nhiệm cuối cùng.</p>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 /**
  * Tab "Kiểm tra pháp lý & tạo file mẫu" — yêu cầu chủ dự án 26/08/2026.
@@ -143,6 +294,7 @@ export const LegalCheckWorkspace: React.FC = () => {
   // (hồ sơ đính kèm + hội thoại) vào từng file .docx của bộ. Rỗng = cả bộ.
   const [selectedBoMau, setSelectedBoMau] = useState<BoMau | null>(null);
   const [boMauFileIds, setBoMauFileIds] = useState<number[]>([]);
+  const [raSoatOpen, setRaSoatOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -888,6 +1040,22 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
               <ListChecks className="w-3.5 h-3.5" />
               Đối chiếu với mẫu
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!attachments.some((a) => a.id != null)) {
+                  showToast('Đính kèm hợp đồng (.docx/.pdf) trước, đợi đọc xong rồi bấm Rà soát rủi ro.', 'info');
+                  return;
+                }
+                setRaSoatOpen(true);
+              }}
+              disabled={busy || uploading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500 text-amber-800 dark:text-amber-300 text-xs font-bold hover:bg-amber-50 dark:hover:bg-amber-950/40 disabled:opacity-50 transition-colors"
+              title="Đối chiếu hợp đồng đính kèm với danh mục điều khoản bắt buộc theo loại + ngưỡng bất thường theo luật; xuất báo cáo Word"
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              Rà soát rủi ro
+            </button>
             {selectedTemplate && (
               <button
                 type="button"
@@ -982,6 +1150,9 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
           )}
         </div>
       </form>
+      {raSoatOpen && (
+        <RaSoatModal attachments={attachments} onClose={() => setRaSoatOpen(false)} showToast={showToast} />
+      )}
     </div>
   );
 };

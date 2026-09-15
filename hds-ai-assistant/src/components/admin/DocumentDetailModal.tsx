@@ -12,7 +12,7 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
-import type { DocRelation, DocumentDetail } from '../../types';
+import type { DocRelation, DocumentDetail, DocumentVersion, SoSanhKetQua } from '../../types';
 import {
   HIEU_LUC_BADGE_CLASS,
   HIEU_LUC_LABELS,
@@ -20,8 +20,94 @@ import {
   RELATION_TYPES,
 } from '../../constants';
 import {
-  BookOpen, Calendar, Eye, Link2, Loader2, Plus, RefreshCw, Trash2, X,
+  BookOpen, Calendar, Eye, Link2, Loader2, Plus, RefreshCw, Trash2, X, History, Download, GitCompare,
 } from 'lucide-react';
+import { DiffView } from '../common/DiffView';
+
+/**
+ * Lịch sử sửa nội dung (document_versions) — kế hoạch ngày 3: "mỗi tài liệu
+ * lưu theo từng phiên bản, không ghi đè; ai sửa, lúc nào, lý do". Chỉ người
+ * có quyền duyệt xem được (nội dung đầy đủ của tài liệu).
+ */
+const VersionHistory: React.FC<{ docId: number; title: string; showToast: (m: string, k?: any) => void }> = ({ docId, title, showToast }) => {
+  const [items, setItems] = useState<DocumentVersion[] | null>(null);
+  const [tu, setTu] = useState<number | null>(null);
+  const [den, setDen] = useState<number | null>(null);
+  const [ketQua, setKetQua] = useState<SoSanhKetQua | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.getDocumentVersions(docId)
+      .then((res) => {
+        const list: DocumentVersion[] = res?.items || [];
+        setItems(list);
+        if (list.length >= 2) { setDen(list[0].version_no); setTu(list[1].version_no); }
+      })
+      .catch(() => setItems([]));
+  }, [docId]);
+
+  const compare = async () => {
+    if (tu == null || den == null || tu === den) return;
+    setBusy(true);
+    try {
+      setKetQua(await api.compareDocumentVersions(docId, tu, den));
+    } catch (err: any) {
+      showToast(err?.message || 'Không so sánh được.', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!items) return null;
+  return (
+    <div>
+      <h4 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5 mb-1">
+        <History className="w-3.5 h-3.5 text-hds-navy dark:text-blue-300" />
+        Lịch sử sửa nội dung
+      </h4>
+      {items.length === 0 ? (
+        <p className="text-slate-400 italic">Nội dung chưa từng được sửa tay — đang dùng bản trích xuất ban đầu.</p>
+      ) : (
+        <>
+          <ul className="space-y-1">
+            {items.map((v) => (
+              <li key={v.version_no} className="flex flex-wrap items-center gap-2 text-[11px]">
+                <span className="font-mono font-bold">v{v.version_no}</span>
+                <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{v.edit_reason_label || v.edit_reason}</span>
+                <span className="text-slate-500">{v.edited_by_name} · {String(v.created_at).slice(0, 16).replace('T', ' ')}</span>
+                {v.edit_note && <span className="text-slate-600 dark:text-slate-300">— {v.edit_note}</span>}
+              </li>
+            ))}
+          </ul>
+          {items.length >= 2 && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <select value={tu ?? ''} onChange={(e) => setTu(Number(e.target.value))} className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-800 text-[11px]">
+                {items.map((v) => <option key={v.version_no} value={v.version_no}>v{v.version_no}</option>)}
+              </select>
+              <span className="text-slate-400">→</span>
+              <select value={den ?? ''} onChange={(e) => setDen(Number(e.target.value))} className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-800 text-[11px]">
+                {items.map((v) => <option key={v.version_no} value={v.version_no}>v{v.version_no}</option>)}
+              </select>
+              <button type="button" onClick={compare} disabled={busy || tu === den} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-hds-navy text-hds-gold text-[11px] font-bold disabled:opacity-50">
+                {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <GitCompare className="w-3 h-3" />} So sánh
+              </button>
+              {ketQua && (
+                <button
+                  type="button"
+                  onClick={() => api.exportDocumentCompare(docId, ketQua.tu, ketQua.den, `${title}-so-sanh-v${ketQua.tu}-v${ketQua.den}.docx`).catch((e: any) => showToast(e?.message || 'Không xuất được.', 'error'))}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 text-[11px] font-bold"
+                >
+                  <Download className="w-3 h-3" /> Word (track changes)
+                </button>
+              )}
+            </div>
+          )}
+          {ketQua && <div className="mt-2"><DiffView ketQua={ketQua} labelCu={`v${ketQua.tu}`} labelMoi={`v${ketQua.den}`} /></div>}
+        </>
+      )}
+    </div>
+  );
+};
 
 interface Props {
   docId: number;
@@ -288,6 +374,8 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
                 Tải lại
               </button>
             </div>
+
+            {canReview && <VersionHistory docId={detail.id} title={detail.title} showToast={showToast} />}
 
             {/* Văn bản liên quan — chiều NGƯỢC trước: "bị ai thay thế" là điều
                 người tra cứu cần biết nhất về một văn bản. */}

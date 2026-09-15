@@ -4,12 +4,15 @@ import { useApp } from '../../context/AppContext';
 import type {
   BrowseDocument,
   Client,
+  DraftCheck,
   DraftCreateInput,
   DraftDocument,
   DraftTemplate,
+  SoSanhKetQua,
   Source,
 } from '../../types';
 import { DOC_TYPES, DOC_TYPE_LABELS } from '../../constants';
+import { DiffView } from '../common/DiffView';
 import {
   AlertTriangle,
   BookOpen,
@@ -18,18 +21,33 @@ import {
   Download,
   FilePenLine,
   FilePlus2,
+  GitCompare,
   ListChecks,
   Loader2,
   Plus,
   RefreshCw,
   ScanLine,
   Search,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Trash2,
   WandSparkles,
   X,
 } from 'lucide-react';
+
+/** Nhãn kết luận của kiểm tra mâu thuẫn pháp lý (app/kiem_tra_mau_thuan.py). */
+const KET_LUAN_META: Record<string, { label: string; cls: string }> = {
+  hop_le: { label: 'Hợp lệ', cls: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300' },
+  canh_bao: { label: 'Cảnh báo', cls: 'bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300' },
+  khong_ro: { label: 'Chưa rõ', cls: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' },
+};
+const LOAI_MUC_LABEL: Record<string, string> = {
+  lai_suat: 'Lãi suất', phat_vi_pham: 'Phạt vi phạm', thu_viec: 'Thử việc', luong_thu_viec: 'Lương thử việc',
+  thoi_han_hop_dong: 'Thời hạn hợp đồng', gio_lam_viec_ngay: 'Giờ làm việc/ngày', gio_lam_viec_tuan: 'Giờ làm việc/tuần',
+  lam_them_thang: 'Làm thêm/tháng', lam_them_nam: 'Làm thêm/năm', bao_truoc: 'Báo trước', dat_coc: 'Đặt cọc',
+  so_tien: 'Số tiền', ty_le: 'Tỷ lệ', thoi_han: 'Thời hạn', ngay: 'Mốc ngày', cam_ket: 'Cam kết',
+};
 
 /** Khớp đúng dạng placeholder backend sinh ra (app/drafting.py PLACEHOLDER_RE). */
 const PLACEHOLDER_PATTERN = /\[(?:CẦN BỔ SUNG|CAN BO SUNG)(?::\s*([^\]]*))?\]/gi;
@@ -121,6 +139,73 @@ export const DraftsWorkspace: React.FC = () => {
   const [fieldLabels, setFieldLabels] = useState<Record<string, string>>({});
   const [showFill, setShowFill] = useState(false);
   const [fillValues, setFillValues] = useState<string[]>([]);
+  // Kiểm tra mâu thuẫn pháp lý chạy nền (kế hoạch ngày 9) + so sánh phiên bản (ngày 8).
+  const [checks, setChecks] = useState<DraftCheck[]>([]);
+  const [showAllCheckItems, setShowAllCheckItems] = useState(false);
+  const [showCompare, setShowCompare] = useState(false);
+  const [cmpTu, setCmpTu] = useState<number>(1);
+  const [cmpDen, setCmpDen] = useState<number>(2);
+  const [cmpResult, setCmpResult] = useState<SoSanhKetQua | null>(null);
+  const [cmpBusy, setCmpBusy] = useState(false);
+
+  const selectedId = selected?.id ?? null;
+  const selectedVersion = selected?.current_version ?? 0;
+  useEffect(() => {
+    if (!selectedId) { setChecks([]); return; }
+    let alive = true;
+    let timer: number | undefined;
+    const tick = async () => {
+      try {
+        const rows = await api.getDraftChecks(selectedId);
+        if (!alive) return;
+        setChecks(rows);
+        // Còn lượt đang chạy thì thăm dò tiếp mỗi 6 giây — model mất 1–3 phút.
+        if (rows.some((c: DraftCheck) => c.status === 'running')) timer = window.setTimeout(tick, 6000);
+      } catch {
+        /* chưa migrate bảng draft_checks hoặc mất mạng: im lặng, thẻ hiện "chưa có" */
+      }
+    };
+    void tick();
+    return () => { alive = false; if (timer) window.clearTimeout(timer); };
+  }, [selectedId, selectedVersion]);
+
+  const runCheck = async () => {
+    if (!selected) return;
+    setBusy('check');
+    try {
+      const rows = await api.runDraftCheck(selected.id);
+      setChecks(rows);
+      showToast('Đã bắt đầu kiểm tra mâu thuẫn pháp lý (chạy nền, 1–3 phút).', 'info');
+    } catch (err: any) {
+      showToast(err?.message || 'Không khởi động được kiểm tra.', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openCompare = () => {
+    if (!selected || (selected.current_version || 0) < 2) return;
+    const den = selected.current_version || 2;
+    setCmpTu(den - 1);
+    setCmpDen(den);
+    setCmpResult(null);
+    setShowCompare(true);
+  };
+  const runCompare = async (tu: number, den: number) => {
+    if (!selected || tu === den) return;
+    setCmpBusy(true);
+    try {
+      setCmpResult(await api.compareDraftVersions(selected.id, tu, den));
+    } catch (err: any) {
+      showToast(err?.message || 'Không so sánh được.', 'error');
+    } finally {
+      setCmpBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (showCompare) void runCompare(cmpTu, cmpDen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCompare, cmpTu, cmpDen]);
   const [form, setForm] = useState<DraftCreateInput>({
     title: '',
     document_type: 'advisory',
@@ -603,6 +688,14 @@ export const DraftsWorkspace: React.FC = () => {
                     {busy === 'export' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                     Tải PDF
                   </button>
+                  <button
+                    onClick={openCompare}
+                    disabled={(selected.current_version || 0) < 2 || Boolean(busy)}
+                    title={(selected.current_version || 0) < 2 ? 'Cần ít nhất 2 phiên bản để so sánh' : 'Tô sáng phần thêm / xoá / sửa giữa hai phiên bản; xuất Word có track changes'}
+                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 disabled:opacity-40"
+                  >
+                    <GitCompare className="w-4 h-4" /> So sánh phiên bản
+                  </button>
                   {canDelete(selected) && (
                     <button
                       onClick={() => void removeDraft(selected)}
@@ -642,6 +735,74 @@ export const DraftsWorkspace: React.FC = () => {
                     </div>
                   </div>
 
+                  {(() => {
+                    // Kiểm tra mâu thuẫn pháp lý — kết quả cho bản hiện tại (chạy nền sau mỗi lần lưu).
+                    const cur = checks.find((c) => c.version_no === (selected.current_version || 0)) || checks[0];
+                    const meta = cur?.ket_luan ? KET_LUAN_META[cur.ket_luan] : null;
+                    const items = cur?.items || [];
+                    const shown = showAllCheckItems ? items : items.filter((i) => i.ket_luan !== 'hop_le').slice(0, 6);
+                    return (
+                      <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+                        <h3 className="font-bold text-xs flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-amber-600" /> Kiểm tra mâu thuẫn pháp lý</h3>
+                        <div className="mt-2 text-[11px] text-slate-600 dark:text-slate-300 space-y-2">
+                          {!content ? (
+                            <p className="text-slate-500">Chạy sau khi có nội dung.</p>
+                          ) : !cur ? (
+                            <p className="text-slate-500">Chưa kiểm tra bản này.</p>
+                          ) : cur.status === 'running' ? (
+                            <p className="flex items-center gap-1.5 text-slate-500"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Đang trích cam kết, thời hạn, con số và đối chiếu luật… (1–3 phút)</p>
+                          ) : cur.status === 'error' ? (
+                            <p className="text-red-600">Lỗi: {cur.error || 'không rõ'}</p>
+                          ) : (
+                            <>
+                              <p className="flex flex-wrap items-center gap-2">
+                                <span className={`px-2 py-0.5 rounded-full font-bold ${meta?.cls || ''}`}>{meta?.label || cur.ket_luan}</span>
+                                <span className="text-slate-500">{cur.so_canh_bao} cảnh báo / {cur.so_muc} mục · v{cur.version_no}{cur.phuong_phap ? ` · ${cur.phuong_phap === 'quy_tac' ? 'quy tắc' : 'quy tắc + AI'}` : ''}</span>
+                              </p>
+                              {shown.length > 0 && (
+                                <ul className="space-y-1.5 max-h-[320px] overflow-y-auto">
+                                  {shown.map((it, i) => {
+                                    const m = KET_LUAN_META[it.ket_luan] || KET_LUAN_META.khong_ro;
+                                    return (
+                                      <li key={i} className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800">
+                                        <p className="flex flex-wrap items-center gap-1.5">
+                                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${m.cls}`}>{m.label}</span>
+                                          <span className="font-semibold">{LOAI_MUC_LABEL[it.loai] || it.loai}</span>
+                                          {it.vi_tri && <span className="text-slate-400">· {it.vi_tri}</span>}
+                                        </p>
+                                        {it.trich && <p className="mt-1 italic text-slate-500 border-l-2 border-slate-300 pl-2 break-words">{it.trich}</p>}
+                                        {it.ly_do && <p className="mt-1">{it.ly_do}</p>}
+                                        {it.can_cu && <p className="mt-0.5 text-[10px] text-slate-500">Căn cứ: {it.can_cu}</p>}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+                              {items.length > shown.length && (
+                                <button type="button" onClick={() => setShowAllCheckItems(true)} className="text-hds-navy dark:text-blue-300 font-semibold hover:underline">
+                                  Xem tất cả {items.length} mục (kể cả hợp lệ)
+                                </button>
+                              )}
+                              {showAllCheckItems && items.length > 0 && (
+                                <button type="button" onClick={() => setShowAllCheckItems(false)} className="text-slate-500 hover:underline">Thu gọn</button>
+                              )}
+                            </>
+                          )}
+                          {content && (
+                            <button
+                              type="button"
+                              onClick={() => void runCheck()}
+                              disabled={Boolean(busy) || cur?.status === 'running'}
+                              className="mt-1 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-amber-400 text-amber-800 dark:text-amber-300 font-bold text-[11px] disabled:opacity-50"
+                            >
+                              {busy === 'check' ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldAlert className="w-3 h-3" />} Kiểm tra lại
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800">
                     <h3 className="font-bold text-xs flex items-center gap-2"><BookOpen className="w-4 h-4 text-hds-gold" /> Bằng chứng ({evidence.length})</h3>
                     {evidence.length ? (
@@ -666,6 +827,46 @@ export const DraftsWorkspace: React.FC = () => {
           )}
         </main>
       </div>
+
+      {showCompare && selected && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowCompare(false)} role="presentation">
+          <div onClick={(event) => event.stopPropagation()} className="w-full max-w-5xl max-h-[92vh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 sticky top-0 bg-white dark:bg-slate-900 rounded-t-2xl">
+              <div className="min-w-0">
+                <h3 className="font-bold text-sm flex items-center gap-2"><GitCompare className="w-4 h-4 text-hds-gold" /> So sánh phiên bản — {selected.title}</h3>
+                <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">Phần xoá gạch đỏ, phần thêm xanh; xuất Word có track changes để chấp nhận / từ chối từng chỗ.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <select value={cmpTu} onChange={(e) => setCmpTu(Number(e.target.value))} className="px-2 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 dark:bg-slate-800">
+                  {Array.from({ length: selected.current_version || 0 }, (_, i) => i + 1).map((v) => <option key={v} value={v}>v{v}</option>)}
+                </select>
+                <span className="text-slate-400">→</span>
+                <select value={cmpDen} onChange={(e) => setCmpDen(Number(e.target.value))} className="px-2 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 dark:bg-slate-800">
+                  {Array.from({ length: selected.current_version || 0 }, (_, i) => i + 1).map((v) => <option key={v} value={v}>v{v}</option>)}
+                </select>
+                <button
+                  type="button"
+                  disabled={!cmpResult}
+                  onClick={() => api.exportDraftCompare(selected.id, cmpTu, cmpDen, `${selected.title}-so-sanh-v${cmpTu}-v${cmpDen}.docx`).catch((e: any) => showToast(e?.message || 'Không xuất được.', 'error'))}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 font-bold flex items-center gap-1.5 disabled:opacity-40"
+                >
+                  <Download className="w-3.5 h-3.5" /> Word (track changes)
+                </button>
+                <button type="button" onClick={() => setShowCompare(false)} aria-label="Đóng"><X className="w-5 h-5 text-slate-400" /></button>
+              </div>
+            </div>
+            <div className="p-5">
+              {cmpBusy ? (
+                <div className="py-10 flex items-center justify-center gap-2 text-xs text-slate-500"><Loader2 className="w-4 h-4 animate-spin" /> Đang so sánh…</div>
+              ) : cmpTu === cmpDen ? (
+                <p className="text-xs text-slate-500">Chọn hai phiên bản khác nhau.</p>
+              ) : cmpResult ? (
+                <DiffView ketQua={cmpResult} labelCu={`Phiên bản ${cmpResult.tu}`} labelMoi={`Phiên bản ${cmpResult.den}`} />
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showCreate && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setShowCreate(false)} role="presentation">

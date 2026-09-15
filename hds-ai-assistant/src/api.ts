@@ -269,7 +269,9 @@ export const getReviewContent = ApiJs.getReviewContent as (id: number) => Promis
 /** Lưu nội dung đã sửa — backend chia đoạn và tạo vector lại. */
 export const saveReviewContent = ApiJs.saveReviewContent as (
   id: number,
-  content: string
+  content: string,
+  edit_reason?: string,
+  edit_note?: string
 ) => Promise<{
   ok?: boolean;
   document_id?: number;
@@ -533,3 +535,47 @@ export const taiLenKho = ApiJs.taiLenKho as (params: {
   auto_approve?: boolean;
   onProgress?: (percent: number) => void;
 }) => Promise<KhoTaiLenKetQua>;
+
+// ==================== HOÀN THIỆN GIAI ĐOẠN 1 (15/09/2026) ====================
+export const compareDraftVersions = ApiJs.compareDraftVersions as (
+  draftId: number, tu?: number | null, den?: number | null
+) => Promise<import('./types').SoSanhKetQua & { draft_id: number }>;
+export const exportDraftCompare = ApiJs.exportDraftCompare as (
+  draftId: number, tu: number, den: number, filename?: string
+) => Promise<void>;
+export const getDraftChecks = ApiJs.getDraftChecks as (draftId: number) => Promise<import('./types').DraftCheck[]>;
+export const runDraftCheck = ApiJs.runDraftCheck as (
+  draftId: number, dongBo?: boolean
+) => Promise<import('./types').DraftCheck[]>;
+
+export const getLeads = ApiJs.getLeads as (status?: string, limit?: number) => Promise<import('./types').LeadsResponse>;
+export const updateLead = ApiJs.updateLead as (
+  leadId: number, data: { status?: string | null; note?: string | null }
+) => Promise<{ ok: boolean }>;
+
+export const getAuditLog = ApiJs.getAuditLog as (params?: {
+  limit?: number; offset?: number; action?: string; user_id?: number | null; q?: string;
+}) => Promise<import('./types').AuditResponse>;
+export const getAuditActions = ApiJs.getAuditActions as () => Promise<Array<{ action: string; count: number; label: string }>>;
+
+export const getDocumentVersions = ApiJs.getDocumentVersions as (docId: number) => Promise<{
+  document_id: number; reasons: Record<string, string>; items: import('./types').DocumentVersion[];
+}>;
+export const getDocumentVersion = ApiJs.getDocumentVersion as (
+  docId: number, versionNo: number
+) => Promise<{ document_id: number; version_no: number; content: string }>;
+export const compareDocumentVersions = ApiJs.compareDocumentVersions as (
+  docId: number, tu: number, den: number
+) => Promise<import('./types').SoSanhKetQua & { document_id: number }>;
+export const exportDocumentCompare = ApiJs.exportDocumentCompare as (
+  docId: number, tu: number, den: number, filename?: string
+) => Promise<void>;
+
+export const getRaSoatLoai = ApiJs.getRaSoatLoai as () => Promise<import('./types').RaSoatLoai[]>;
+export const raSoatHopDong = ApiJs.raSoatHopDong as (params: {
+  text?: string | null; temp_file_id?: number | null; draft_id?: number | null;
+  document_id?: number | null; loai?: string | null; tieu_de?: string | null; tra_luat?: boolean;
+}) => Promise<import('./types').RaSoatKetQua>;
+export const exportRaSoat = ApiJs.exportRaSoat as (
+  ket_qua: import('./types').RaSoatKetQua, tieu_de?: string, filename?: string
+) => Promise<void>;

@@ -594,6 +594,8 @@ export interface DocumentDetail {
   ngay_hieu_luc?: string | null;
   trang_thai_hieu_luc?: string | null;
   extraction_status?: string | null;
+  /** Tỉ lệ token đọc lỗi (0-1) do lượt duyệt hàng loạt chấm; null = chưa chấm. */
+  ty_le_rac?: number | null;
   so_doan: number;
   can_open: boolean;
   /** Văn bản này nói về ai (thay thế/sửa đổi/căn cứ văn bản nào). */
@@ -862,4 +864,141 @@ export interface KhoHocKetQua {
 export interface KhoTaiLenKetQua {
   ok: boolean;
   ket_qua: KhoHocKetQua[];
+}
+
+// ===================== HOÀN THIỆN GIAI ĐOẠN 1 (15/09/2026) =====================
+
+/** Một mảnh trong đoạn đã so sánh mức từ (app/so_sanh.py). */
+export interface SoSanhPhan {
+  op: 'equal' | 'delete' | 'insert';
+  text: string;
+}
+export interface SoSanhDoan {
+  op: 'equal' | 'delete' | 'insert' | 'replace';
+  cu: string | null;
+  moi: string | null;
+  phan: SoSanhPhan[];
+}
+export interface SoSanhKetQua {
+  tu: number;
+  den: number;
+  doan: SoSanhDoan[];
+  thong_ke: {
+    them: number;
+    xoa: number;
+    doan_them: number;
+    doan_xoa: number;
+    doan_sua: number;
+    giong_nhau: number;
+  };
+  tom_tat: string;
+}
+
+/** Một mục trong kết quả kiểm tra mâu thuẫn pháp lý (app/kiem_tra_mau_thuan.py). */
+export interface DraftCheckItem {
+  loai: string;
+  trich?: string;
+  vi_tri?: string | null;
+  gia_tri?: number | null;
+  don_vi?: string | null;
+  ket_luan: 'hop_le' | 'canh_bao' | 'khong_ro' | string;
+  ly_do?: string;
+  can_cu?: string;
+  phuong_phap?: string;
+  noi_dung?: string;
+  nguon?: Array<{ document_id?: number; chunk_id?: number; title?: string }>;
+}
+export interface DraftCheck {
+  version_no: number;
+  status: 'running' | 'done' | 'error' | string;
+  ket_luan: 'hop_le' | 'canh_bao' | 'khong_ro' | null;
+  so_canh_bao: number;
+  so_muc: number;
+  phuong_phap?: string | null;
+  items: DraftCheckItem[];
+  error?: string | null;
+  started_at?: string;
+  finished_at?: string | null;
+}
+
+/** Khách để lại liên hệ từ khung chat nhúng website. */
+export interface Lead {
+  id: number;
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  need?: string | null;
+  status: 'moi' | 'da_lien_he' | 'bo_qua' | string;
+  note?: string | null;
+  source?: string | null;
+  conversation_id?: number | null;
+  created_at: string;
+  handled_at?: string | null;
+  handled_by_name?: string | null;
+}
+export interface LeadsResponse {
+  items: Lead[];
+  counts: Record<string, number>;
+  statuses: Record<string, string>;
+}
+
+/** Một dòng nhật ký hệ thống (audit_log — chỉ đọc). */
+export interface AuditEntry {
+  id: number;
+  user_id: number | null;
+  user_name?: string | null;
+  user_email?: string | null;
+  action: string;
+  entity?: string | null;
+  entity_id?: number | null;
+  detail: Record<string, unknown>;
+  created_at: string;
+  tom_tat: string;
+}
+export interface AuditResponse {
+  items: AuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Phiên bản nội dung của một tài liệu kho (document_versions). */
+export interface DocumentVersion {
+  version_no: number;
+  edit_reason?: string | null;
+  edit_reason_label?: string;
+  edit_note?: string | null;
+  created_at: string;
+  edited_by_name?: string;
+  characters?: number;
+}
+
+/** Kết quả rà soát rủi ro theo danh mục điều khoản (app/ra_soat_rui_ro.py). */
+export interface RaSoatMuc {
+  ma: string;
+  ten: string;
+  trang_thai: 'dat' | 'canh_bao' | 'thieu' | string;
+  dieu_khoan?: string | null;
+  trich?: string | null;
+  giai_thich?: string;
+  de_xuat?: string;
+  can_cu?: string;
+  can_cu_kho?: Array<{ document_id?: number; title?: string; so_hieu?: string | null; trich?: string }>;
+}
+export interface RaSoatKetQua {
+  loai: string;
+  ten_loai: string;
+  do_tin_cay: number;
+  so_dieu_khoan: number;
+  muc: RaSoatMuc[];
+  tong_ket: { dat: number; canh_bao: number; thieu: number; muc_rui_ro: 'thap' | 'trung_binh' | 'cao' | string };
+  tieu_de?: string;
+  so_ky_tu?: number;
+  thoi_gian_ms?: number;
+}
+export interface RaSoatLoai {
+  ma: string;
+  ten: string;
+  so_dieu_khoan: number;
+  so_nguong: number;
 }

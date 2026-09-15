@@ -3996,9 +3996,19 @@ def can_open_doc(role_level, dept_ids, is_banqt, doc, can_finance=False,
         if rules:
             return _rules_allow_open(rules, role_level, dept_codes, doc_type)
         return True
-    # hồ sơ khách: phải cùng phòng, VÀ ma trận phải cho phép mở loại này
+    # Hồ sơ khách: cùng phòng thì mở, VÀ ma trận phải cho phép mở loại này.
+    #
+    # Tài liệu CHƯA GÁN phòng phụ trách (department_id NULL) coi như dùng
+    # chung cho nội bộ — cùng luật với endpoint /clients/{id}/360, vốn đã cho
+    # mọi nội bộ xem khách chưa gán phòng. Quyết định của chủ dự án
+    # 15/09/2026: bộ quét kho tạo hồ sơ khách với department_id NULL, nên
+    # chốt cũ ('NULL là chặn') khoá sạch 6.303 tài liệu khách với tất cả
+    # những ai không thuộc Ban QT — kể cả tài liệu đã duyệt nhãn.
+    #
+    # Gán phòng phụ trách cho khách là SIẾT LẠI ngay tại dữ liệu, không phải
+    # sửa mã: hễ department_id có giá trị thì dòng dưới chặn như cũ.
     dep = doc.get("department_id")
-    if dep is None or dep not in (dept_ids or []):
+    if dep is not None and dep not in (dept_ids or []):
         return False
     if rules:
         return _rules_allow_open(rules, role_level, dept_codes, doc_type)
