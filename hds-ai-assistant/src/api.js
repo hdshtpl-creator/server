@@ -1385,9 +1385,9 @@ let mockState = {
     { id: 6, email: 'lienhe@sungroup.vn', full_name: 'Đại diện SunGroup', role: 'client_plus', can_review: false, can_view_finance: false, active: true, client_id: 1, department_ids: [], head_of: [], monthly_quota: 50 },
   ],
   clients: [
-    { id: 1, name: 'Tập đoàn SunGroup', code: 'SUNGROUP', department: 'Doanh nghiệp - Đầu tư' },
-    { id: 2, name: 'Công ty CP Vinapharma', code: 'VINAPHARMA', department: 'Tranh tụng' },
-    { id: 3, name: 'Công ty TechLogistics', code: 'TECHLOG', department: 'Sở hữu trí tuệ' },
+    { id: 1, name: 'Tập đoàn SunGroup', code: '1729', department: 'Doanh nghiệp - Đầu tư' },
+    { id: 2, name: 'Công ty CP Vinapharma', code: '9', department: 'Tranh tụng' },
+    { id: 3, name: 'Công ty TechLogistics', code: '712', department: 'Sở hữu trí tuệ' },
   ],
   clientProfiles: {
     1: {
@@ -1429,6 +1429,8 @@ let mockState = {
     ],
     2: [
       { id: 13, title: 'Dự thảo Hợp đồng Chuyển nhượng Cổ phần Vinapharma.docx', doc_type: 'contract', summary: 'Chuyển nhượng 500.000 cổ phần phổ thông.', created_at: '2026-08-02' },
+      // Nạp từ hội thoại → không có tệp gốc: nút Xem / Tải về phải tắt sẵn.
+      { id: 15, title: 'Ghi chú trao đổi về điều khoản bảo đảm (nạp từ hội thoại)', doc_type: 'advisory', summary: 'Tóm tắt trao đổi, không có tệp đính kèm gốc.', created_at: '2026-08-11', has_file: false },
     ],
     3: [
       { id: 14, title: 'Ý kiến Pháp lý Thuế TNDN chuyển nhượng vốn.pdf', doc_type: 'advisory', summary: 'Phân tích nghĩa vụ thuế TNDN 20% khi chuyển nhượng vốn.', created_at: '2026-07-22' },
@@ -2227,7 +2229,13 @@ Với câu hỏi "${question}":
           suggestions: null,
         },
       matters: mockState.clientMatters[client.id] || [],
-      documents: mockState.clientDocuments[client.id] || [],
+      // Backend thật trả kèm has_file/can_open (cửa can_open_doc) — giả lập
+      // theo để nút Xem / Tải về hiện đúng trạng thái khi xem thử giao diện.
+      documents: (mockState.clientDocuments[client.id] || []).map((d) => ({
+        has_file: true,
+        can_open: true,
+        ...d,
+      })),
     };
   }
 

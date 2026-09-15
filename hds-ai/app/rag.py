@@ -4035,9 +4035,15 @@ def client_360(client_id, requester_dept_ids=None, is_banqt=False):
             cur.execute("""SELECT id,code,title,matter_type,status,deadline,opened_at
                            FROM matters WHERE client_id=%s ORDER BY opened_at DESC""", (client_id,))
             matters = cur.fetchall()
-            cur.execute("""SELECT id,title,doc_type,summary,created_at,matter_id
-                           FROM documents WHERE client_id=%s AND label_verified
-                           ORDER BY created_at DESC""", (client_id,))
+            # source_path + nhãn quyền đi kèm để api.py dựng được cửa
+            # can_open_doc/mask_title và biết giấy tờ nào còn tệp gốc để mở.
+            cur.execute("""SELECT d.id,d.title,d.doc_type,d.summary,d.created_at,
+                                  d.matter_id,d.source_path,d.access_level,
+                                  d.department_id,dep.name
+                             FROM documents d
+                             LEFT JOIN departments dep ON dep.id=d.department_id
+                            WHERE d.client_id=%s AND d.label_verified
+                            ORDER BY d.created_at DESC""", (client_id,))
             docs = cur.fetchall()
     return {
         "client": {"id": row[0], "name": row[1], "code": row[2], "department": row[3]},
@@ -4046,5 +4052,13 @@ def client_360(client_id, requester_dept_ids=None, is_banqt=False):
                      "status": m[4], "deadline": str(m[5]) if m[5] else None,
                      "opened_at": str(m[6])} for m in matters],
         "documents": [{"id": d[0], "title": d[1], "doc_type": DOC_TYPE_VN.get(d[2], d[2]),
-                       "summary": d[3], "created_at": str(d[4])[:10], "matter_id": d[5]} for d in docs],
+                       "summary": d[3], "created_at": str(d[4])[:10], "matter_id": d[5],
+                       # Nạp từ hội thoại thì không có tệp gốc — nút Xem/Tải về
+                       # phải tắt sẵn thay vì bấm vào ăn 404.
+                       "has_file": bool(d[6]),
+                       # Nguyên liệu cho cửa quyền ở api.py, không phải dữ liệu
+                       # hiển thị: doc_type_raw giữ mã enum vì doc_type ở trên
+                       # đã đổi sang nhãn tiếng Việt.
+                       "doc_type_raw": d[2], "access_level": d[7],
+                       "department_id": d[8], "department_name": d[9]} for d in docs],
     }

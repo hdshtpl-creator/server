@@ -2023,6 +2023,23 @@ def client_dossier(client_id: int, user=Depends(current_user)):
     dossier = rag.client_360(client_id, user["dept_ids"], user["is_banqt"])
     if not dossier:
         raise HTTPException(404, "Không dựng được hồ sơ")
+    # Giấy tờ trong hồ sơ mở được ngay tại chỗ (nút Xem/Tải về gọi
+    # /files/{id}/preview|download) nên phải đi qua ĐÚNG cửa quyền của hai
+    # endpoint đó — cùng một hàm can_open_doc, không mở cửa thứ hai. Đọc ma
+    # trận MỘT LẦN cho cả danh sách.
+    rules = rag.load_access_rules()
+    for d in dossier["documents"]:
+        doc = {"access_level": d["access_level"], "department_id": d["department_id"],
+               "doc_type": d.pop("doc_type_raw"), "client_id": client_id,
+               "title": d["title"], "department_name": d["department_name"]}
+        can_open = rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"],
+                                    doc, can_finance=user["can_finance"],
+                                    rules=rules, dept_codes=user["dept_codes"])
+        d["title"] = rag.mask_title(doc, can_open)
+        d["can_open"] = can_open
+        if not can_open:
+            d["summary"] = None
+            d["has_file"] = False
     return dossier
 
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { Client, Client360Data } from '../../types';
@@ -17,10 +17,40 @@ import {
   Users2,
   CalendarClock,
   Loader2,
+  Search,
+  ArrowDownUp,
+  Eye,
+  Download,
+  Lock,
 } from 'lucide-react';
 
 const inputClass =
   'w-full px-3 py-2 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl focus:ring-2 focus:ring-hds-blue focus:outline-none transition-colors';
+
+const selectClass =
+  'px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs font-bold focus:ring-2 focus:ring-hds-blue focus:outline-none disabled:opacity-60 transition-colors';
+
+type SortMode = 'code_asc' | 'code_desc' | 'name_asc';
+
+const SORT_OPTIONS: { value: SortMode; label: string }[] = [
+  { value: 'code_asc', label: 'Mã khách: nhỏ → lớn' },
+  { value: 'code_desc', label: 'Mã khách: lớn → nhỏ' },
+  { value: 'name_asc', label: 'Tên khách: A → Z' },
+];
+
+// Mã khách trong kho phần lớn là SỐ ('9', '712', '1729') nên so sánh chuỗi
+// thuần sẽ xếp '1729' trước '9'. numeric:true đọc cụm chữ số như số thật.
+const compareCode = (a: string, b: string) =>
+  (a || '').localeCompare(b || '', 'vi', { numeric: true, sensitivity: 'base' });
+
+// Bỏ dấu để gõ 'vinapharma' vẫn ra 'Vinapharma', gõ 'co phan' ra 'Cổ phần'.
+const boDau = (s: string) =>
+  (s || '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
 
 export const Client360Tab: React.FC = () => {
   const { showToast } = useApp();
@@ -31,6 +61,11 @@ export const Client360Tab: React.FC = () => {
   const [isLoading360, setIsLoading360] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+
+  // Ô tìm tên khách và thứ tự của danh sách chọn khách
+  const [clientQuery, setClientQuery] = useState('');
+  const [sortMode, setSortMode] = useState<SortMode>('code_asc');
 
   // Ghi chú bổ sung (nối thêm) và hai trường ghi đè
   const [historyNote, setHistoryNote] = useState('');
@@ -38,12 +73,64 @@ export const Client360Tab: React.FC = () => {
   const [warnings, setWarnings] = useState('');
   const [suggestions, setSuggestions] = useState('');
 
+  const sortedClients = useMemo(() => {
+    const list = [...clients];
+    if (sortMode === 'name_asc') {
+      list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
+    } else {
+      list.sort((a, b) => compareCode(a.code, b.code));
+      if (sortMode === 'code_desc') list.reverse();
+    }
+    return list;
+  }, [clients, sortMode]);
+
+  const matchedClients = useMemo(() => {
+    const q = boDau(clientQuery.trim());
+    if (!q) return sortedClients;
+    return sortedClients.filter(
+      (c) => boDau(c.name).includes(q) || boDau(c.code).includes(q)
+    );
+  }, [sortedClients, clientQuery]);
+
+  // Gõ tìm mà khách đang xem rớt khỏi kết quả thì ô chọn sẽ trống trơn trong
+  // khi hồ sơ bên dưới vẫn là của họ. Ghim khách đang xem lên đầu danh sách
+  // thay vì tự nhảy sang khách khác — nhảy là kéo theo một lượt tải hồ sơ
+  // mới sau mỗi phím gõ.
+  const optionClients = useMemo(() => {
+    const current = clients.find((c) => String(c.id) === selectedClientId);
+    if (!current || matchedClients.some((c) => c.id === current.id)) {
+      return matchedClients.map((c) => ({ client: c, ghim: false }));
+    }
+    return [
+      { client: current, ghim: true },
+      ...matchedClients.map((c) => ({ client: c, ghim: false })),
+    ];
+  }, [matchedClients, clients, selectedClientId]);
+
+  const handlePreview = async (docId: number) => {
+    try {
+      await api.previewDocument(docId);
+    } catch (err: any) {
+      showToast(err?.message || 'Không mở được bản xem trước.', 'error');
+    }
+  };
+
+  const handleDownload = async (docId: number, title: string) => {
+    setDownloadingId(docId);
+    try {
+      await api.downloadDocument(docId, title);
+    } catch (err: any) {
+      showToast(err?.message || 'Không tải được tệp gốc.', 'error');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const fetchClientsList = async () => {
     setIsLoadingList(true);
     try {
       const list = await api.getClients();
       setClients(list);
-      if (list.length > 0) setSelectedClientId((prev) => prev || String(list[0].id));
     } catch (err: any) {
       showToast(err?.message || 'Lỗi khi tải danh sách khách hàng', 'error');
     } finally {
@@ -76,6 +163,15 @@ export const Client360Tab: React.FC = () => {
     fetchClientsList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Chọn sẵn khách đầu tiên THEO THỨ TỰ ĐANG HIỂN THỊ, không theo thứ tự API
+  // trả về — nếu không, danh sách xếp theo mã mà hồ sơ mở sẵn lại là khách
+  // khác với dòng đầu.
+  useEffect(() => {
+    if (!selectedClientId && sortedClients.length > 0) {
+      setSelectedClientId(String(sortedClients[0].id));
+    }
+  }, [sortedClients, selectedClientId]);
 
   useEffect(() => {
     if (selectedClientId) fetch360Detail(selectedClientId);
@@ -158,31 +254,77 @@ export const Client360Tab: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 w-full lg:w-auto">
-          <Building2 className="w-4 h-4 text-slate-400 shrink-0" />
-          <select
-            value={selectedClientId}
-            onChange={(e) => setSelectedClientId(e.target.value)}
-            disabled={isLoadingList || clients.length === 0}
-            aria-label="Chọn khách hàng"
-            className="px-3.5 py-2 border border-slate-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs font-bold focus:ring-2 focus:ring-hds-blue focus:outline-none flex-1 lg:w-72 disabled:opacity-60 transition-colors"
-          >
-            {clients.length === 0 && <option value="">Không có khách hàng nào</option>}
-            {clients.map((c) => (
-              <option key={c.id} value={String(c.id)}>
-                [{c.code}] {c.name}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={() => fetch360Detail(selectedClientId)}
-            disabled={!selectedClientId}
-            className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl transition-colors shrink-0 disabled:opacity-50"
-            title="Tải lại hồ sơ"
-            aria-label="Tải lại hồ sơ"
-          >
-            <RefreshCw className={`w-4 h-4 ${isLoading360 ? 'animate-spin' : ''}`} />
-          </button>
+        <div className="w-full lg:w-auto space-y-2">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            {/* Ô tìm tên khách — lọc ngay danh sách chọn bên dưới, không gọi
+                máy chủ, nên gõ tới đâu thấy tới đó. */}
+            <div className="relative flex-1 lg:w-64">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="search"
+                value={clientQuery}
+                onChange={(e) => setClientQuery(e.target.value)}
+                disabled={isLoadingList || clients.length === 0}
+                placeholder="Tìm tên hoặc mã khách…"
+                aria-label="Tìm khách hàng"
+                className="w-full pl-9 pr-3 py-2 text-xs border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl focus:ring-2 focus:ring-hds-blue focus:outline-none disabled:opacity-60 transition-colors"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <ArrowDownUp className="w-4 h-4 text-slate-400 shrink-0" />
+              <select
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value as SortMode)}
+                disabled={isLoadingList || clients.length === 0}
+                aria-label="Sắp xếp danh sách khách hàng"
+                className={`${selectClass} flex-1 sm:flex-none`}
+              >
+                {SORT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-slate-400 shrink-0" />
+            <select
+              value={selectedClientId}
+              onChange={(e) => setSelectedClientId(e.target.value)}
+              disabled={isLoadingList || clients.length === 0}
+              aria-label="Chọn khách hàng"
+              className={`${selectClass} flex-1 lg:w-80`}
+            >
+              {clients.length === 0 && <option value="">Không có khách hàng nào</option>}
+              {clients.length > 0 && optionClients.length === 0 && (
+                <option value={selectedClientId}>Không có khách nào khớp từ khoá</option>
+              )}
+              {optionClients.map(({ client: c, ghim }) => (
+                <option key={c.id} value={String(c.id)}>
+                  [{c.code}] {c.name}
+                  {ghim ? ' — đang xem' : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => fetch360Detail(selectedClientId)}
+              disabled={!selectedClientId}
+              className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl transition-colors shrink-0 disabled:opacity-50"
+              title="Tải lại hồ sơ"
+              aria-label="Tải lại hồ sơ"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading360 ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 text-right">
+            {clientQuery.trim()
+              ? `${matchedClients.length}/${clients.length} khách khớp từ khoá`
+              : `${clients.length} khách hàng`}
+          </p>
         </div>
       </div>
 
@@ -373,35 +515,82 @@ export const Client360Tab: React.FC = () => {
               </p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs min-w-[640px]">
+                <table className="w-full text-left text-xs min-w-[820px]">
                   <thead className="bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold uppercase tracking-wider">
                     <tr>
                       <th scope="col" className="p-3">Tên tài liệu</th>
                       <th scope="col" className="p-3">Loại</th>
                       <th scope="col" className="p-3">Tóm tắt</th>
                       <th scope="col" className="p-3">Ngày nạp</th>
+                      <th scope="col" className="p-3 text-right">Bản gốc</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {data360.documents.map((doc) => (
-                      <tr
-                        key={doc.id}
-                        className="hover:bg-hds-soft/60 dark:hover:bg-slate-800/50 transition-colors"
-                      >
-                        <td className="p-3 font-semibold text-slate-900 dark:text-slate-100 break-words max-w-xs">
-                          {doc.title}
-                        </td>
-                        <td className="p-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                          {DOC_TYPE_LABELS[doc.doc_type] || doc.doc_type}
-                        </td>
-                        <td className="p-3 text-slate-600 dark:text-slate-400 max-w-sm leading-relaxed">
-                          {doc.summary || '—'}
-                        </td>
-                        <td className="p-3 text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">
-                          {doc.created_at}
-                        </td>
-                      </tr>
-                    ))}
+                    {data360.documents.map((doc) => {
+                      // Backend đã che tên và tắt has_file cho tài liệu ngoài
+                      // quyền; can_open vắng mặt (bản cũ) thì coi như mở được
+                      // và để máy chủ tự chặn ở /files/{id}.
+                      const canOpen = doc.can_open !== false;
+                      const hasFile = canOpen && doc.has_file !== false;
+                      const lyDo = !canOpen
+                        ? 'Tài khoản chưa có quyền mở tài liệu này'
+                        : 'Tài liệu nạp từ hội thoại — không có tệp gốc để mở';
+
+                      return (
+                        <tr
+                          key={doc.id}
+                          className="hover:bg-hds-soft/60 dark:hover:bg-slate-800/50 transition-colors"
+                        >
+                          <td className="p-3 font-semibold text-slate-900 dark:text-slate-100 break-words max-w-xs">
+                            {doc.title}
+                          </td>
+                          <td className="p-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                            {DOC_TYPE_LABELS[doc.doc_type] || doc.doc_type}
+                          </td>
+                          <td className="p-3 text-slate-600 dark:text-slate-400 max-w-sm leading-relaxed">
+                            {doc.summary || '—'}
+                          </td>
+                          <td className="p-3 text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">
+                            {doc.created_at}
+                          </td>
+                          <td className="p-3 text-right whitespace-nowrap">
+                            {hasFile ? (
+                              <>
+                                <button
+                                  onClick={() => handlePreview(doc.id)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 mr-1.5 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg border border-blue-200 dark:border-slate-700 text-[11px] transition-colors"
+                                  title="Mở bản gốc ngay trong trình duyệt"
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  <span>Xem</span>
+                                </button>
+                                <button
+                                  onClick={() => handleDownload(doc.id, doc.title)}
+                                  disabled={downloadingId === doc.id}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg border border-blue-200 dark:border-slate-700 text-[11px] disabled:opacity-50 transition-colors"
+                                  title="Tải bản gốc về máy"
+                                >
+                                  {downloadingId === doc.id ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Download className="w-3 h-3" />
+                                  )}
+                                  <span>Tải về</span>
+                                </button>
+                              </>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 text-slate-400 dark:text-slate-500 text-[11px] font-semibold"
+                                title={lyDo}
+                              >
+                                <Lock className="w-3 h-3" />
+                                <span>{canOpen ? 'Không có tệp gốc' : 'Chưa có quyền mở'}</span>
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

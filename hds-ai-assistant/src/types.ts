@@ -635,6 +635,13 @@ export interface ClientDocument {
   summary?: string | null;
   created_at: string;
   matter_id?: number | null;
+  /** Còn tệp gốc trên máy chủ → mới bật được nút Xem / Tải về. */
+  has_file?: boolean;
+  /** Cùng cửa quyền với /files/{id}/download; false thì tên đã bị che. */
+  can_open?: boolean;
+  access_level?: string | null;
+  department_id?: number | null;
+  department_name?: string | null;
 }
 
 export interface Client360Data {
