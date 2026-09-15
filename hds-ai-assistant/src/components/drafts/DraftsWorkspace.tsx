@@ -26,6 +26,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Trash2,
   WandSparkles,
   X,
 } from 'lucide-react';
@@ -134,6 +135,19 @@ export const DraftsWorkspace: React.FC = () => {
     currentUser &&
       (currentUser.role === 'admin' || currentUser.role === 'ban_qt' || currentUser.can_review)
   );
+  const isBanQt = Boolean(
+    currentUser && (currentUser.is_banqt || currentUser.role === 'admin' || currentUser.role === 'ban_qt')
+  );
+
+  /** Cùng luật với backend (DELETE /drafts): người tạo xoá bản của mình khi
+   *  CHƯA duyệt; Ban quản trị xoá được mọi bản. Máy chủ vẫn kiểm lại — đây
+   *  chỉ để không chìa nút cho người chắc chắn bị từ chối. */
+  const canDelete = (draft: DraftDocument | null): boolean => {
+    if (!draft || !currentUser) return false;
+    if (isBanQt) return true;
+    const own = draft.created_by == null || draft.created_by === currentUser.id;
+    return own && draft.status !== 'approved';
+  };
 
   const closeApprove = () => {
     setShowApprove(false);
@@ -287,6 +301,27 @@ export const DraftsWorkspace: React.FC = () => {
       showToast('Đã tạo phiên bản sửa để kiểm tra lại.', 'success');
     } catch (err: any) {
       setError(err?.message || 'Không tạo được phiên bản sửa.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeDraft = async (draft: DraftDocument) => {
+    if (busy) return;
+    const message =
+      draft.status === 'approved'
+        ? `Xoá bản ĐÃ DUYỆT "${draft.title}"? Mọi phiên bản và ghi nhận phê duyệt sẽ mất, không khôi phục được.`
+        : `Xoá bản nháp "${draft.title}"? Mọi phiên bản của nó sẽ mất, không khôi phục được.`;
+    if (!window.confirm(message)) return;
+    setBusy('delete');
+    setError(null);
+    try {
+      await api.deleteDraft(draft.id);
+      setDrafts((prev) => prev.filter((item) => item.id !== draft.id));
+      if (selected?.id === draft.id) setSelected(null);
+      showToast('Đã xoá bản nháp.', 'success');
+    } catch (err: any) {
+      setError(err?.message || 'Không xoá được bản nháp.');
     } finally {
       setBusy(null);
     }
@@ -448,26 +483,42 @@ export const DraftsWorkspace: React.FC = () => {
                 {drafts.map((draft) => {
                   const meta = getStatusMeta(draft.status);
                   return (
-                    <button
+                    <div
                       key={draft.id}
-                      type="button"
-                      onClick={() => openDraft(draft)}
-                      className={`w-full text-left p-3 rounded-xl border transition-colors ${
+                      className={`flex items-stretch gap-1 rounded-xl border transition-colors ${
                         selected?.id === draft.id
                           ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-800'
                           : 'bg-white dark:bg-slate-900 border-transparent hover:bg-slate-50 dark:hover:bg-slate-800'
                       }`}
                     >
-                      <span className="block text-xs font-bold text-slate-800 dark:text-slate-100 line-clamp-2">
-                        {draft.title}
-                      </span>
-                      <span className="mt-2 flex items-center justify-between gap-2">
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${meta.cls}`}>
-                          {meta.label}
+                      <button
+                        type="button"
+                        onClick={() => openDraft(draft)}
+                        className="flex-1 min-w-0 text-left p-3"
+                      >
+                        <span className="block text-xs font-bold text-slate-800 dark:text-slate-100 line-clamp-2">
+                          {draft.title}
                         </span>
-                        <span className="text-[9px] text-slate-400">{displayDate(draft.updated_at)}</span>
-                      </span>
-                    </button>
+                        <span className="mt-2 flex items-center justify-between gap-2">
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${meta.cls}`}>
+                            {meta.label}
+                          </span>
+                          <span className="text-[9px] text-slate-400">{displayDate(draft.updated_at)}</span>
+                        </span>
+                      </button>
+                      {canDelete(draft) && (
+                        <button
+                          type="button"
+                          onClick={() => void removeDraft(draft)}
+                          disabled={Boolean(busy)}
+                          className="shrink-0 self-start mt-2 mr-1.5 p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="Xoá bản nháp này (không khôi phục được)"
+                          aria-label={`Xoá bản nháp ${draft.title}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -552,6 +603,17 @@ export const DraftsWorkspace: React.FC = () => {
                     {busy === 'export' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                     Tải PDF
                   </button>
+                  {canDelete(selected) && (
+                    <button
+                      onClick={() => void removeDraft(selected)}
+                      disabled={Boolean(busy)}
+                      title="Xoá bản nháp này (không khôi phục được)"
+                      className="px-3 py-2 rounded-xl border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/40 text-xs font-bold flex items-center gap-1.5 disabled:opacity-40"
+                    >
+                      {busy === 'delete' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                      Xoá
+                    </button>
+                  )}
                 </div>
               </div>
 

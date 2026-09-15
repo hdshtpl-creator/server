@@ -437,6 +437,10 @@ export const listDraftTemplates = ApiJs.listDraftTemplates as () => Promise<Draf
 
 export const getDraft = ApiJs.getDraft as (draftId: number) => Promise<DraftDocument>;
 
+export const deleteDraft = ApiJs.deleteDraft as (
+  draftId: number
+) => Promise<{ ok: boolean; id: number }>;
+
 export const createDraft = ApiJs.createDraft as (
   data: DraftCreateInput
 ) => Promise<DraftDocument & { ok?: boolean; draft_id?: number }>;

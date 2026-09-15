@@ -404,6 +404,9 @@ export interface DraftDocument {
   created_at?: string;
   updated_at?: string;
   approved_at?: string | null;
+  /** id người tạo — giao diện dựa vào đây để chỉ chìa nút xoá cho đúng người. */
+  created_by?: number;
+  creator_name?: string | null;
   error?: string | null;
   versions?: DraftVersion[];
   latest_version?: DraftVersion | null;

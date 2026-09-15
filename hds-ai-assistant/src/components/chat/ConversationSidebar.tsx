@@ -306,7 +306,10 @@ export const ConversationSidebar: React.FC = () => {
                         <Check className="w-3.5 h-3.5" />
                       </button>
                     ) : (
-                      <span className="flex items-center pr-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                      /* Hiện thường trực (mờ, rê chuột thì rõ): trước đây ẩn tới
+                         khi rê chuột nên trên màn cảm ứng không bao giờ thấy,
+                         người dùng tưởng không có nút xoá. */
+                      <span className="flex items-center pr-1 opacity-60 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                         <button
                           onClick={() => startRename(c.id, c.title)}
                           className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-white/10"

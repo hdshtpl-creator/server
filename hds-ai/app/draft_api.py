@@ -587,6 +587,32 @@ def build_router(current_user, require_reviewer) -> APIRouter:
     def drafts_get(draft_id: int, user=Depends(current_user)):
         return _detail(user, draft_id)
 
+    @router.delete("/drafts/{draft_id}")
+    def drafts_delete(draft_id: int, user=Depends(current_user)):
+        """Xoá hẳn một bản nháp; phiên bản, nguồn, bằng chứng đi theo (schema
+        đặt ON DELETE CASCADE). Cùng luật với sửa: người tạo hoặc Ban quản trị.
+
+        Bản ĐÃ DUYỆT chỉ Ban quản trị mới xoá được — đó là văn bản đã có người
+        ký duyệt; chuyên viên xoá rồi soạn lại là mất dấu bản đã duyệt. Trạng
+        thái được kiểm LẦN NỮA dưới khoá hàng: giữa lúc giao diện hỏi "xoá
+        không?" và lúc bấm, reviewer có thể vừa duyệt xong bản đó."""
+        _get_draft(user, draft_id, edit=True)
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                current = _draft_row(cur, draft_id, lock=True)
+                if not current:
+                    raise HTTPException(404, "Không thấy bản nháp")
+                if current["status"] == "approved" and not user["is_banqt"]:
+                    raise HTTPException(
+                        409, "Bản đã duyệt chỉ Ban quản trị mới xoá được"
+                    )
+                cur.execute("DELETE FROM document_drafts WHERE id=%s", (draft_id,))
+            db.audit(conn, user["id"], "delete_draft", "document_drafts", draft_id, {
+                "title": current["title"], "status": current["status"],
+                "current_version": current["current_version"],
+            })
+        return {"ok": True, "id": draft_id}
+
     @router.post("/drafts/{draft_id}/generate")
     def drafts_generate(draft_id: int, body: DraftGenerateIn, user=Depends(current_user)):
         _check_size(body.instructions, "Yêu cầu soạn thảo", MAX_INSTRUCTIONS_CHARS)

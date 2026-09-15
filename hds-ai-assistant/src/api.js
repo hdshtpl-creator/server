@@ -880,6 +880,11 @@ export async function getDraft(draftId) {
   return request(`/drafts/${toIntOrNull(draftId)}`, { method: 'GET' });
 }
 
+// DELETE /drafts/{id} — xoá hẳn bản nháp cùng mọi phiên bản (không khôi phục).
+export async function deleteDraft(draftId) {
+  return request(`/drafts/${toIntOrNull(draftId)}`, { method: 'DELETE' });
+}
+
 export async function createDraft(data) {
   return request('/drafts', {
     method: 'POST',
@@ -2408,6 +2413,44 @@ Với câu hỏi "${question}":
     mockState.stats.bao_cao_cho_xu_ly = Math.max(0, mockState.stats.bao_cao_cho_xu_ly - 1);
     if (body.action === 'apply') mockState.stats.da_hoc += 1;
     return { ok: true, feedback_id: Number(fid), action: body.action };
+  }
+
+  // ---------- Soạn tài liệu: chỉ đủ để thử danh sách / mở / xoá bản nháp ----------
+  if (endpoint.startsWith('/drafts')) {
+    if (!mockState.drafts) {
+      mockState.drafts = [
+        { id: 501, title: 'Đơn khởi kiện tranh chấp hợp đồng thuê đất', document_type: 'petition', status: 'draft', current_version: 1, created_by: 4, creator_name: 'Chuyên viên Tranh tụng', updated_at: '2026-09-14 16:20', client_id: 1 },
+        { id: 502, title: 'Thư tư vấn phát hành trái phiếu', document_type: 'advisory', status: 'approved', current_version: 2, created_by: 4, creator_name: 'Chuyên viên Tranh tụng', updated_at: '2026-09-10 10:05', approved_at: '2026-09-11 08:00', client_id: 1 },
+        { id: 503, title: 'Hợp đồng dịch vụ pháp lý Vinapharma', document_type: 'contract', status: 'generated', current_version: 1, created_by: 1, creator_name: 'Quản trị hệ thống', updated_at: '2026-09-12 14:40', client_id: 2 },
+      ];
+    }
+    if (endpoint === '/drafts' && method === 'GET') return { items: [...mockState.drafts] };
+    const dm = endpoint.match(/^\/drafts\/(\d+)$/);
+    if (dm) {
+      const idx = mockState.drafts.findIndex((d) => String(d.id) === dm[1]);
+      if (idx < 0) throw new Error('Không thấy bản nháp (404)');
+      const d = mockState.drafts[idx];
+      if (method === 'GET') {
+        return {
+          ...d,
+          input_data: {},
+          source_documents: [],
+          versions: [],
+          latest_version: d.current_version
+            ? { version_no: d.current_version, content_markdown: `# ${d.title}\n\n(nội dung giả lập)`, evidence: [] }
+            : null,
+        };
+      }
+      if (method === 'DELETE') {
+        // Cùng luật với DELETE /drafts thật: người tạo xoá bản chưa duyệt; Ban QT xoá mọi bản.
+        const me = mockState.users.find((u) => String(u.id) === String(uid)) || mockState.users[0];
+        const banQt = me.role === 'admin' || me.role === 'ban_qt';
+        if (!banQt && d.created_by !== me.id) throw new Error('Chỉ người tạo hoặc Ban quản trị được sửa bản nháp (403)');
+        if (!banQt && d.status === 'approved') throw new Error('Bản đã duyệt chỉ Ban quản trị mới xoá được (409)');
+        mockState.drafts.splice(idx, 1);
+        return { ok: true, id: d.id };
+      }
+    }
   }
 
   throw new Error(`Đường dẫn chưa được hỗ trợ trong chế độ giả lập: ${endpoint}`);
