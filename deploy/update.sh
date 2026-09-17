@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # ====================================================================
-# HDS AI — Cập nhật sau khi đã git pull mã mới.
-# Cài lại thư viện, build lại giao diện, khởi động lại backend, reload nginx.
+# HDS AI — Lấy mã mới về rồi cập nhật máy chủ.
+# Kéo mã từ GitHub, cài lại thư viện, build lại giao diện, khởi động lại
+# backend, reload nginx.
 #
 #   cd hds-ai-full
-#   git pull
 #   sudo bash deploy/update.sh
+#
+# Bỏ qua bước kéo mã (deploy đúng thứ đang có trên đĩa):
+#   sudo bash deploy/update.sh --khong-keo-ma
 # ====================================================================
 set -euo pipefail
 
@@ -27,6 +30,43 @@ if [ "$SERVICE_USER" = "root" ]; then
   run_as() { bash -c "$1"; }
 else
   run_as() { sudo -u "$SERVICE_USER" bash -c "$1"; }
+fi
+
+KEO_MA=1
+for tham_so in "$@"; do
+  case "$tham_so" in
+    --khong-keo-ma) KEO_MA=0 ;;
+    *) die "Tham số lạ: $tham_so (chỉ có --khong-keo-ma)" ;;
+  esac
+done
+
+# Bước 0: lấy mã mới. Trước đây phải tự 'git pull' trước khi gọi script này,
+# và quên bước đó nghĩa là build lại đúng bản cũ mà mọi thông báo vẫn xanh.
+#
+# --ff-only là CỐ Ý: máy chủ không được tự merge. Lệch nhánh thì dừng ngay ở
+# đây để người xử lý, thay vì đẻ ra commit merge rồi lần sau xung đột nặng hơn.
+# Chạy qua run_as nên file không rơi vào tay root.
+if [ "$KEO_MA" -eq 1 ] && [ -d "$REPO_ROOT/.git" ]; then
+  c_info "0/5  Lấy mã mới từ GitHub"
+  TRUOC="$(run_as "cd '$REPO_ROOT' && git rev-parse --short HEAD")"
+  if ! run_as "cd '$REPO_ROOT' && git fetch --quiet origin && git merge --ff-only origin/main"; then
+    die "Không kéo được mã: máy chủ đã lệch nhánh với GitHub.
+   Xem phần lệch THẬT (bỏ qua khác biệt xuống dòng):
+     git diff --stat --ignore-cr-at-eol HEAD origin/main
+   Nếu chỉ còn mã cũ của máy chủ thì:  git reset --hard origin/main"
+  fi
+  SAU="$(run_as "cd '$REPO_ROOT' && git rev-parse --short HEAD")"
+  if [ "$TRUOC" = "$SAU" ]; then
+    c_ok "Đã là bản mới nhất ($SAU)"
+  else
+    c_ok "$TRUOC → $SAU"
+  fi
+  # Mã dán tay từ Windows hay dính xuống dòng CRLF, và bash chết ngay khi gặp
+  # (chuyện thật ngày 15/09/2026). .gitattributes đã chặn từ gốc; đây chỉ là
+  # chuông báo nếu vẫn lọt — cảnh báo cho người sửa, không tự ý ghi đè mã.
+  if grep -q "$(printf '\r')" "$REPO_ROOT/deploy"/*.sh 2>/dev/null; then
+    c_warn "Vài script trong deploy/ còn ký tự xuống dòng Windows (\r) — xem .gitattributes"
+  fi
 fi
 
 c_info "1/5  Cập nhật thư viện Python"

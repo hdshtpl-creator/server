@@ -175,7 +175,7 @@ chạy thật**.
 
 ```bash
 cd /opt/hds-ai-full
-sudo bash deploy/hoc-tu-thu-muc.sh --install-timer   # quét mỗi 15 phút
+sudo bash deploy/hoc-tu-thu-muc.sh --install-timer   # quét mỗi 3 phút
 systemctl list-timers hds-ai-quet-kho.timer
 journalctl -u hds-ai-quet-kho.service -n 40 --no-pager
 ```
@@ -183,7 +183,7 @@ journalctl -u hds-ai-quet-kho.service -n 40 --no-pager
 Lệnh cài lịch cũng **tự tắt** lịch học Drive cũ nếu còn.
 
 Không có quyền root (hoặc không muốn đụng systemd) thì dùng **crontab của chính
-user chạy backend** — cùng chu kỳ 15 phút, tự khoá chống chạy chồng và không
+user chạy backend** — cùng chu kỳ 3 phút, tự khoá chống chạy chồng và không
 chen vào lượt quét bấm từ web:
 
 ```bash
@@ -289,7 +289,7 @@ Quy trình hằng ngày của nhân viên đổi một chỗ duy nhất: **thả
 
 Việc cần theo dõi tuần đầu:
 
-- **Quản trị → Kho tài liệu đã học**: thẻ “Quét lần cuối” phải trong vòng 15 phút.
+- **Quản trị → Kho tài liệu đã học**: thẻ “Quét lần cuối” phải trong vòng 3 phút.
 - Danh sách vàng *“chưa xác định được nhãn”* — thường do nhân viên tạo thư mục
   mới không đúng quy ước.
 - Danh sách đỏ *“bot chưa đọc được”* — file scan mờ.

@@ -248,7 +248,7 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 
 ## 7. ĐƯA TÀI LIỆU VÀO KHO CHO AI HỌC
 
-Cách chuẩn để bổ sung tri thức: **thả file vào đúng thư mục trong kho tài liệu**. Hệ thống tự quét **15 phút một lần**, chỉ đọc file mới hoặc file vừa sửa.
+Cách chuẩn để bổ sung tri thức: **thả file vào đúng thư mục trong kho tài liệu**. Hệ thống tự quét **3 phút một lần**, chỉ đọc file mới hoặc file vừa sửa.
 
 > **Từ 27/08/2026 kho nằm trên máy chủ công ty, không dùng Google Drive nữa.**
 > Trên máy bạn, kho hiện ra như một **ổ mạng** (thường là ổ `Z:` — IT nối giúp
@@ -294,7 +294,7 @@ Quy tắc bắt buộc:
 - Định dạng đọc được: `.pdf` (tự OCR tiếng Việt), `.docx`, `.doc`, `.txt`, `.md`, `.xlsx`, `.csv`, ảnh `.jpg .png .webp .tif .bmp`. **File Google Docs/Sheets gốc thì bot không đọc được** — mở trên Google, chọn *Tệp → Tải xuống → Word (.docx)* rồi mới thả vào kho.
 - Số thứ tự trong tên thư mục chỉ để sắp xếp, hệ thống bỏ qua khi so khớp — đổi số không sao, **đổi tên chữ thì phải báo IT**.
 
-Sau khi thả file: chờ ≤15 phút → vào **Quản trị → Duyệt nhãn tài liệu** duyệt → bot dùng được.
+Sau khi thả file: chờ ≤3 phút → vào **Quản trị → Duyệt nhãn tài liệu** duyệt → bot dùng được.
 
 ---
 
@@ -303,7 +303,7 @@ Sau khi thả file: chờ ≤15 phút → vào **Quản trị → Duyệt nhãn 
 Theo thứ tự phổ biến:
 
 1. **Chưa duyệt nhãn.** File đã học nhưng đang nằm trong hàng chờ. → **Quản trị → Duyệt nhãn tài liệu**. Đây là nguyên nhân số 1.
-2. **Chưa tới lượt quét.** Đồng bộ 15 phút/lần. → Xem **Kho tài liệu đã học → Quét kho tài liệu → Quét lần cuối**.
+2. **Chưa tới lượt quét.** Đồng bộ 3 phút/lần. → Xem **Kho tài liệu đã học → Quét kho tài liệu → Quét lần cuối**.
 3. **Bot đọc file không ra chữ.** Bản scan mờ, ảnh chụp nghiêng. → Thẻ đỏ **"tài liệu có trong thư mục nhưng bot chưa đọc được"** ở cùng màn hình, kèm lý do và cách sửa. Chụp/scan lại rõ hơn, hoặc gõ tay nội dung ở **Duyệt nhãn → Xem & sửa nội dung trích xuất**.
 4. **Thư mục sai quy tắc.** Thư mục khách thiếu mã, hoặc tên thư mục chưa có trong bản đồ. → Thẻ vàng **"tệp trong kho chưa xác định được nhãn"**, kèm vị trí file. Sửa tên thư mục hoặc báo IT thêm vào bản đồ.
 5. **Bạn không có quyền mở loại tài liệu đó.** → Hiện tên kèm 🔒. Báo admin nếu cần quyền.

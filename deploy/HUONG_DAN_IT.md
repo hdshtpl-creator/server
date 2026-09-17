@@ -37,7 +37,7 @@ Trình duyệt ──HTTPS──▶ nginx ──▶ /            → giao diện
                                                           ├─ qwen3:14b  — sinh câu trả lời
                                                           └─ bge-m3     — tạo vector 1024 chiều
 
-Kho tài liệu ──15 phút/lần──▶ app.local_learn (systemd timer) ──▶ PostgreSQL
+Kho tài liệu ──3 phút/lần───▶ app.local_learn (cron / systemd timer) ──▶ PostgreSQL
 (thư mục trên máy chủ, chia sẻ cho nhân viên qua ổ mạng Samba)
 ```
 
@@ -50,7 +50,7 @@ Bốn tiến trình cần nhớ:
 | Model AI | `ollama` | `curl -s http://localhost:11434/api/tags` |
 | Web server | `nginx` | `nginx -t && systemctl status nginx` |
 
-Timer **tuỳ chọn**, không tự cài: `hds-ai-quet-kho.timer` — quét kho tài liệu mỗi 15 phút (`sudo bash deploy/hoc-tu-thu-muc.sh --install-timer`). Không có root thì `bash deploy/hoc-tu-thu-muc.sh --install-cron` (crontab của user, cùng chu kỳ). Xem mục 4 và 12.
+Timer **tuỳ chọn**, không tự cài: `hds-ai-quet-kho.timer` — quét kho tài liệu mỗi 3 phút (`sudo bash deploy/hoc-tu-thu-muc.sh --install-timer`). Không có root thì `bash deploy/hoc-tu-thu-muc.sh --install-cron` (crontab của user, cùng chu kỳ). Xem mục 4 và 12.
 
 **Backend chỉ lắng nghe 127.0.0.1:8000** — mọi thứ đi vào phải qua nginx `/api/`.
 
@@ -79,7 +79,7 @@ hds-ai-full/                          ← repo, đặt ở /home/<user>/ hoặc 
 │   ├── setup.sh          cài lần đầu
 │   ├── update.sh         cập nhật sau git pull
 │   ├── go-public.sh      mở ra Internet + HTTPS
-│   ├── hoc-tu-thu-muc.sh    quét kho trên máy chủ / cài timer 15 phút
+│   ├── hoc-tu-thu-muc.sh    quét kho trên máy chủ / cài lịch 3 phút
 │   ├── theo-doi-nguon-web.sh theo dõi nguồn văn bản trên mạng / timer 6 giờ
 │   ├── auto-learn.sh        (cũ) học từ Google Drive — giữ để còn đường lùi
 │   ├── luu-tru-drive.sh     (cũ) kéo toàn bộ Drive về, dùng lúc chuyển đổi
@@ -234,7 +234,7 @@ Nhân viên nối ổ trên Windows: `\\<IP máy chủ>\KhoTaiLieu`.
 ```bash
 cd hds-ai && .venv/bin/python -m app.local_learn --dry-run   # chỉ liệt kê
 cd .. && bash deploy/hoc-tu-thu-muc.sh                       # quét và học một lần
-sudo bash deploy/hoc-tu-thu-muc.sh --install-timer           # lịch 15 phút/lần (systemd)
+sudo bash deploy/hoc-tu-thu-muc.sh --install-timer           # lịch 3 phút/lần (systemd)
 systemctl list-timers hds-ai-quet-kho.timer
 journalctl -u hds-ai-quet-kho.service -n 40 --no-pager
 # Không có root: crontab của user, cùng chu kỳ, tự khoá chống chạy chồng
@@ -255,7 +255,7 @@ Bộ quét **tự dừng** trong ba tình huống nguy hiểm, đọc kỹ thôn
 
 | Đường | Thao tác | Duyệt |
 |---|---|---|
-| **Ổ mạng (kho)** | Thả file vào đúng thư mục, chờ ≤15 phút | Chờ duyệt nhãn (PDF **luôn luôn** phải duyệt) |
+| **Ổ mạng (kho)** | Thả file vào đúng thư mục, chờ ≤3 phút | Chờ duyệt nhãn (PDF **luôn luôn** phải duyệt) |
 | **Trang Tổng quan → Kho tài liệu** | Chọn thư mục → *Tải lên vào đây* (học ngay, không đợi quét) | Chờ duyệt, trừ khi người có quyền tick "Duyệt luôn" (xem 4.8) |
 | **Tải lên web** | Chat → Tải tài liệu → *Lưu vào kho* | Chờ duyệt, trừ khi người có quyền tick "Duyệt luôn" |
 | **Từ hội thoại** | Người dùng 👎 → admin sửa → *Đạt — nạp học* | Chính admin là bước duyệt |
@@ -266,6 +266,26 @@ bộ chắc chắn an toàn, tuyệt đối không dùng cho hồ sơ khách:
 ```bash
 cd hds-ai && .venv/bin/python -m app.ingest data/raw law
 ```
+
+### 4.4b Tệp không đọc được — bộ quét KHÔNG thử lại mãi (16/09/2026)
+
+Tệp học hỏng (PDF scan không có lớp chữ, tệp rỗng, tệp quá lớn…) được ghi vào
+danh sách *tài liệu không học được* **kèm md5**. Lượt quét sau, nếu nội dung tệp
+còn y nguyên thì bộ quét **bỏ qua**, không đọc lại.
+
+Vì sao: trước đó 65 tệp loại này bị OCR lại ở mọi lượt và chiếm hơn 5 phút mỗi
+lượt quét — một tệp đã thử 924 lần kể từ 19/08 mà vẫn hỏng y như vậy.
+
+- Sửa tệp (quét lại cho rõ, lưu lại bằng Word…) → md5 đổi → **tự học lại**, không
+  phải làm gì thêm.
+- Ép thử lại toàn bộ: `cd ~/hds-ai-full/hds-ai && .venv/bin/python -m app.local_learn --thu-lai-loi`
+- Dòng tổng kết mỗi lượt có thêm cột `N hỏng (bỏ qua)`.
+
+Nếu một tệp lẽ ra đọc được mà cứ nằm trong danh sách: mở bản gốc xem có phải bản
+scan mờ không, hoặc chạy lệnh `--thu-lai-loi` ở trên rồi xem log
+`hds-ai/data/quet_kho.log`.
+
+---
 
 ### 4.5 Điều bộ quét làm và KHÔNG làm
 
@@ -571,13 +591,32 @@ sudo certbot renew --dry-run
 
 ## 6. CẬP NHẬT PHIÊN BẢN MỚI
 
+**Đường đi của mã (chốt 16/09/2026): máy phát triển → GitHub → máy chủ.**
+Không chép tệp thẳng vào máy chủ, kể cả khi chỉ sửa một dòng — làm vậy là máy
+chủ và GitHub lệch nhau, lần cập nhật sau dừng giữa chừng.
+
 ```bash
-cd /opt/hds-ai-full
-git pull
+cd ~/hds-ai-full
 sudo bash deploy/update.sh
 ```
 
-`update.sh` chạy 5 bước theo đúng thứ tự: cài thư viện Python → bổ sung công cụ OCR/Office còn thiếu → **nạp lược đồ CSDL** → **chạy toàn bộ test** → build giao diện → khởi động lại backend + nginx.
+`update.sh` tự kéo mã từ GitHub ở bước 0 (không phải `git pull` tay nữa).
+Deploy đúng thứ đang có trên đĩa, bỏ qua bước kéo: thêm `--khong-keo-ma`.
+
+**Khi bước 0 báo "máy chủ đã lệch nhánh với GitHub":** ai đó đã sửa/commit
+thẳng trên máy chủ, hoặc lịch sử trên GitHub vừa được viết lại. Kiểm phần lệch
+THẬT rồi lấy đúng bản trên GitHub:
+
+```bash
+git diff --stat --ignore-cr-at-eol HEAD origin/main   # xem khác gì thật sự
+git fetch origin && git reset --hard origin/main      # lấy đúng bản GitHub
+```
+
+`git reset --hard` **không** đụng `hds-ai/.env` và `deploy/deploy.env` vì hai
+tệp này nằm ngoài git (`.gitignore`). Đừng chạy `git clean` — lệnh đó mới xoá
+chúng.
+
+`update.sh` chạy các bước theo đúng thứ tự: cài thư viện Python → bổ sung công cụ OCR/Office còn thiếu → **nạp lược đồ CSDL** → **chạy toàn bộ test** → build giao diện → khởi động lại backend + nginx.
 
 **Test là cổng chặn**: test hỏng thì backend cũ vẫn chạy nguyên, code mới không được khởi động. Nhưng lưu ý **lược đồ CSDL đã được nạp trước đó** — thất bại ở bước test không có nghĩa là chưa động gì tới CSDL.
 
@@ -586,6 +625,7 @@ Gặp lỗi:
 | Thông báo | Xử lý |
 |---|---|
 | `Hãy chạy bằng quyền root` | thêm `sudo` |
+| `Không kéo được mã: máy chủ đã lệch nhánh` | xem hai lệnh ở đầu mục 6 |
 | `Thiếu APP_DB_PASSWORD trong .env` | `hds-ai/.env` bị hỏng/thiếu — khôi phục từ bản chép tay |
 | `Migration schema thất bại` | đọc lỗi psql phía trên; kiểm tra `docker ps \| grep hds-postgres` |
 | `Backend test thất bại` | chạy tay `cd hds-ai && .venv/bin/python -m unittest discover -s tests -v`; cần thì `git checkout <commit cũ>` rồi update lại |
@@ -880,7 +920,7 @@ hơn không đọc được gì.
 | **kiem-tra-toc-do.sh** | Bot chậm, lỗi 524, "network error" | `bash deploy/kiem-tra-toc-do.sh` |
 | **kiem-tra-vector.sh** | Bot nói "không có thông tin" với mọi câu | `sudo bash deploy/kiem-tra-vector.sh` |
 | **soi-ho-so.sh** | Bot không biết gì về một người, dù hồ sơ có trong kho | `bash deploy/soi-ho-so.sh Mai` |
-| **hoc-tu-thu-muc.sh** | Muốn quét kho ngay, không chờ 15 phút | `bash deploy/hoc-tu-thu-muc.sh` |
+| **hoc-tu-thu-muc.sh** | Muốn quét kho ngay, không chờ 3 phút | `bash deploy/hoc-tu-thu-muc.sh` |
 | **hoc-lai-file.sh** | Vài tài liệu OCR ra chữ rác | `bash deploy/hoc-lai-file.sh --hong --thu` rồi bỏ `--thu` |
 | **hoc-lai-tu-dau.sh** | Đổi cách chia đoạn / kho vector hỏng | `sudo bash deploy/hoc-lai-tu-dau.sh` |
 | **luu-tru-drive.sh** | (cũ) Kéo toàn bộ Drive về — chỉ dùng lúc chuyển đổi | `bash deploy/luu-tru-drive.sh` |
@@ -952,7 +992,7 @@ journalctl -u ollama -n 50                 # model
 **Hằng ngày (2 phút)** — mở **Quản trị → Tổng quan**:
 - Ô **"Thiếu chủ sở hữu"** phải bằng **0**. Khác 0 là có hồ sơ khách chưa gán chủ → xử lý ngay.
 - **Chờ duyệt nhãn** không nên dồn quá lâu.
-- **Quét kho tài liệu** (trong *Kho tài liệu đã học*): "Quét lần cuối" phải trong vòng 15 phút; và kiểm hai danh sách **"đang phục vụ vừa rơi lại hàng chờ duyệt"** và **"không còn tệp trong thư mục"**.
+- **Quét kho tài liệu** (trong *Kho tài liệu đã học*): "Quét lần cuối" phải trong vòng 3 phút; và kiểm hai danh sách **"đang phục vụ vừa rơi lại hàng chờ duyệt"** và **"không còn tệp trong thư mục"**.
 
 **Hằng tuần**
 ```bash

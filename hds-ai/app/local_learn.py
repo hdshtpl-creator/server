@@ -35,6 +35,9 @@ BỐN CHỐT AN TOÀN (đều do rà soát đối kháng 27/08/2026 chỉ ra, đ
 
 Chạy tay:      python -m app.local_learn              # học file mới/sửa
                python -m app.local_learn --dry-run    # chỉ liệt kê, không ghi
+               python -m app.local_learn --thu-lai-loi # đọc lại cả tệp đã hỏng
+                                                       # (mặc định: bỏ qua tệp
+                                                       #  hỏng có md5 chưa đổi)
 Chuyển đổi:    python -m app.local_learn --chuyen-doi # gắn lại danh tính cho
                tài liệu đã học từ Drive (chạy MỘT LẦN, TRƯỚC mọi lượt quét)
                thêm --nguoc để trả lại danh tính Drive cũ
@@ -196,6 +199,19 @@ def save_fingerprint_cache(cache: dict, keep=None, path=None):
         print(f"[CẢNH BÁO] Không ghi được đệm md5 ({path}): {e}")
 
 
+def nen_bo_qua_tep_hong(failed_fp: dict, key: str, fingerprint: str, row) -> bool:
+    """Có bỏ qua tệp này vì lượt trước đọc hỏng và nội dung chưa đổi không?
+
+    Đúng khi CẢ HAI: md5 hiện tại trùng md5 đã ghi lúc hỏng, VÀ việc sắp làm
+    là ĐỌC LẠI tệp (chưa có bản ghi, hoặc bản ghi mang md5 khác nên sẽ học đè).
+    Tệp đã học được rồi và nội dung không đổi (`row[1] == fingerprint`) không
+    bị chặn ở đây — luồng thường của nó chỉ cập nhật nhãn, không đọc tệp.
+    """
+    if not fingerprint or failed_fp.get(key) != fingerprint:
+        return False
+    return row is None or row[1] != fingerprint
+
+
 def cached_md5(path: Path, key: str, cache: dict) -> str:
     """md5 của tệp — lấy từ đệm khi kích thước và mtime chưa đổi."""
     st = path.stat()
@@ -355,7 +371,7 @@ def _keys_tu_web() -> set:
         return set()
 
 
-def run(dry_run=False):
+def run(dry_run=False, thu_lai_loi=False):
     root = library_root()
     started_at = datetime.now(timezone.utc)
     if not root.exists():
@@ -391,9 +407,38 @@ def run(dry_run=False):
 
     # Đệm md5 (kích thước + mtime → md5): lượt quét định kỳ chỉ băm tệp mới/đổi.
     cache = load_fingerprint_cache()
+    # Tệp đã thử đọc và HỎNG ở lượt trước, kèm md5 lúc đó. Nội dung còn y
+    # nguyên thì thử lại cũng hỏng y như vậy — mà phần lớn là PDF không có lớp
+    # chữ nên mỗi lần thử là một lần chạy OCR. Đo 16/09/2026: 65 tệp loại này
+    # chiếm hơn 5 phút trong lượt quét 5 phút 32 giây, còn toàn bộ phần đi cây
+    # và so md5 của 42.103 tệp chỉ mất 8 giây.
+    failed_fp = {} if thu_lai_loi else auto_learn.failed_fingerprints()
+    # Bản ghi của mọi tài liệu trong kho, nạp MỘT LẦN. Trước 16/09/2026 vòng 1
+    # gọi auto_learn.existing() cho từng tệp — 6,9 ms mỗi lời gọi × 42 nghìn
+    # tệp = 288 giây, tức gần trọn một lượt quét dù không có gì để học.
+    doc_map = auto_learn.existing_map(LOCAL_PREFIX)
+    # Nhãn suy ra từ ĐƯỜNG DẪN THƯ MỤC, nên mọi tệp trong cùng một thư mục có
+    # cùng nhãn — nhưng resolve_labels() lại hỏi CSDL (tra mã khách, tra vụ
+    # việc) cho TỪNG tệp. Kho 16/09/2026 có 42 nghìn tệp nằm trong 7 nghìn thư
+    # mục, nhớ theo thư mục cắt ~74 giây mỗi lượt. Chỉ nhớ trong MỘT lượt quét:
+    # lượt sau nạp lại từ đầu nên khách mới tạo giữa chừng vẫn được nhìn thấy.
+    label_cache: dict = {}
+
+    def nhan_cho(parts):
+        khoa = tuple(parts)
+        if khoa not in label_cache:
+            label_cache[khoa] = auto_learn.resolve_labels(
+                parts, create_missing_client=not dry_run)
+        labels, reason = label_cache[khoa]
+        # Bản sao: nơi gọi có thể thêm khoá vào dict nhãn (title_context…), mà
+        # dict trong đệm còn dùng cho những tệp sau trong cùng thư mục.
+        return (dict(labels) if labels is not None else None), reason
+    if thu_lai_loi:
+        print(">> --thu-lai-loi: thử đọc lại cả những tệp đang nằm trong danh "
+              "sách không học được.")
     seen_keys = set()
     pending = []          # file chưa có bản ghi — chờ đối chiếu di chuyển
-    n_new = n_upd = n_skip = n_move = n_unmapped = n_badext = 0
+    n_new = n_upd = n_skip = n_move = n_unmapped = n_badext = n_hong = 0
     new_items, updated_items, skipped_items = [], [], []
     error_items, warning_items, unapproved_items = [], [], []
 
@@ -453,20 +498,24 @@ def run(dry_run=False):
                 "code": error.get("code"), "error": error.get("message"),
                 "hint": error.get("hint"), "preserved_existing": bool(row),
             })
-            auto_learn._record_failure(key, path.name, loc, error)
+            auto_learn._record_failure(key, path.name, loc, error, checksum=fingerprint)
             return False
         except Exception as e:  # noqa: BLE001 — một file hỏng không dừng cả lượt
             print(f"     [LỖI] {path.name}: {e}")
             if isinstance(e, ExtractionError):
                 d = e.as_dict()
-                error_items.append({"name": path.name, "location": loc,
-                                    "code": d["code"], "error": d["message"],
-                                    "hint": d["hint"], "preserved_existing": bool(row)})
+                error = {"code": d["code"], "message": d["message"], "hint": d["hint"]}
             else:
-                error_items.append({"name": path.name, "location": loc,
-                                    "code": "unexpected_error", "error": str(e)[:500],
-                                    "hint": "Xem journal của hds-ai-quet-kho.",
-                                    "preserved_existing": bool(row)})
+                error = {"code": "unexpected_error", "message": str(e)[:500],
+                         "hint": "Xem journal của hds-ai-quet-kho."}
+            error_items.append({"name": path.name, "location": loc,
+                                "code": error["code"], "error": error["message"],
+                                "hint": error["hint"], "preserved_existing": bool(row)})
+            # Ghi vào danh sách không học được, KÈM md5 — trước 16/09/2026
+            # nhánh này không ghi gì, nên một tệp ném ngoại lệ (ví dụ OCR trả
+            # về ký tự NUL) bị đọc lại ở MỌI lượt quét mà không ai thấy nó
+            # trong danh sách nào. Tệp được sửa thì md5 đổi và tự thử lại.
+            auto_learn._record_failure(key, path.name, loc, error, checksum=fingerprint)
             return False
 
     def apply_labels(row, path, labels, loc):
@@ -505,7 +554,7 @@ def run(dry_run=False):
                                   "reason": reason, "code": "unsupported_format"})
             continue
 
-        labels, reason = auto_learn.resolve_labels(parts, create_missing_client=not dry_run)
+        labels, reason = nhan_cho(parts)
         if labels is None:
             print(f"   [BỎ QUA] {path.name}  ← {loc}: {reason}")
             n_unmapped += 1
@@ -521,7 +570,18 @@ def run(dry_run=False):
                                 "preserved_existing": True})
             continue
 
-        row = auto_learn.existing(key)
+        row = doc_map.get(key)
+
+        # Tệp hỏng và NỘI DUNG CHƯA ĐỔI: bỏ qua, không đọc lại. Nhãn vẫn được
+        # cập nhật nếu thư mục đổi, và tệp vẫn nằm trong danh sách "không học
+        # được" trên dashboard — chỉ khác là không đốt OCR mỗi 3 phút nữa.
+        # Sửa tệp (md5 đổi) là tự thử lại; ép thử lại cả loạt: --thu-lai-loi.
+        if nen_bo_qua_tep_hong(failed_fp, key, fingerprint, row):
+            if row is not None and apply_labels(row, path, labels, loc):
+                n_upd += 1
+            n_hong += 1
+            continue
+
         if row is None:
             # Chưa rõ là file MỚI hay file CŨ vừa đổi tên — quyết định sau khi
             # biết trọn danh sách file còn lại trong kho (CHỐT 3).
@@ -606,7 +666,13 @@ def run(dry_run=False):
 
     n_ig = n_unmapped + n_badext
     print(f"\n{n_new} mới | {n_upd} cập nhật | {n_move} di chuyển | {n_skip} không đổi | "
-          f"{n_ig} bỏ qua | {len(error_items)} lỗi | {len(warning_items)} cảnh báo")
+          f"{n_ig} bỏ qua | {n_hong} hỏng (bỏ qua) | {len(error_items)} lỗi | "
+          f"{len(warning_items)} cảnh báo")
+    if n_hong:
+        print(f"{n_hong} tệp không đọc được ở lượt trước và nội dung chưa đổi nên "
+              "không thử lại — xem Quản trị → Kho tài liệu → tài liệu không học "
+              "được. Sửa tệp là tự học lại; ép thử lại tất cả: "
+              "python -m app.local_learn --thu-lai-loi")
     if unapproved_items:
         print(f"{len(unapproved_items)} tài liệu ĐANG PHỤC VỤ vừa rơi lại hàng chờ duyệt "
               "— mở Quản trị → Duyệt nhãn tài liệu.")
@@ -619,7 +685,8 @@ def run(dry_run=False):
     if not dry_run:
         counts = {"scanned": len(items), "new": n_new, "updated": n_upd,
                   "moved": n_move, "unchanged": n_skip, "unmapped": n_unmapped,
-                  "bad_format": n_badext, "errors": len(error_items),
+                  "bad_format": n_badext, "failed_skipped": n_hong,
+                  "errors": len(error_items),
                   "warnings": len(warning_items), "missing": len(missing_items),
                   "unapproved": len(unapproved_items),
                   "auto_approved": auto_learn.AUTO_APPROVE}
@@ -708,4 +775,5 @@ def _cli_migrate(argv):
 if __name__ == "__main__":
     if "--chuyen-doi" in sys.argv:
         sys.exit(_cli_migrate(sys.argv))
-    run(dry_run="--dry-run" in sys.argv)
+    run(dry_run="--dry-run" in sys.argv,
+        thu_lai_loi="--thu-lai-loi" in sys.argv)

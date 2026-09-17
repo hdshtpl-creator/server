@@ -1402,7 +1402,17 @@ def ocr_pdf(path: Path) -> str:
         return ""
 
 
+# Ký tự điều khiển C0 (trừ tab, xuống dòng) và DEL. PostgreSQL TỪ CHỐI ký tự
+# NUL trong cột text, nên một trang scan cho ra 0x00 làm chết cả lượt học ở
+# bước ghi CSDL với thông báo khó đoán "cannot contain NUL (0x00) bytes" —
+# 16/09/2026: ba PDF của một khách khiến lượt quét nào cũng OCR lại rồi hỏng,
+# tốn 4 phút mỗi lượt suốt nhiều ngày. Các ký tự điều khiển còn lại không mang
+# nghĩa gì, chỉ làm bẩn đoạn trích dẫn hiện cho người đọc.
+_RE_KY_TU_DIEU_KHIEN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
 def clean(text: str) -> str:
+    text = _RE_KY_TU_DIEU_KHIEN.sub("", text)
     text = re.sub(r"[ \t]+", " ", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 

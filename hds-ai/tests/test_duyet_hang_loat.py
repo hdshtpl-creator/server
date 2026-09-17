@@ -12,8 +12,15 @@ Luật cần giữ:
   · xem trước không ghi một câu UPDATE nào.
 """
 import contextlib
+import os
+import tempfile
 import unittest
 import unittest.mock
+
+try:
+    import fcntl
+except ImportError:      # Windows: không có flock, các ca liên quan sẽ bỏ qua
+    fcntl = None
 
 from app import duyet_hang_loat as dhl
 
@@ -67,7 +74,7 @@ class DuyetHangLoat(unittest.TestCase):
             yield _Conn(docs, doan, log)
 
         with unittest.mock.patch.object(dhl.db, "session", session):
-            with unittest.mock.patch.object(dhl.os.path, "exists", lambda _p: False):
+            with unittest.mock.patch.object(dhl, "dang_quet_kho", lambda: False):
                 argv = ["--nguong", str(nguong)]
                 if thuc_hien:
                     argv.append("--thuc-hien")
@@ -136,9 +143,45 @@ class DuyetHangLoat(unittest.TestCase):
             yield
 
         with unittest.mock.patch.object(dhl.db, "session", session):
-            with unittest.mock.patch.object(dhl.os.path, "exists", lambda _p: True):
+            with unittest.mock.patch.object(dhl, "dang_quet_kho", lambda: True):
                 with unittest.mock.patch("sys.stderr"):
                     self.assertEqual(dhl.main(["--thuc-hien"]), 3)
+
+
+class KhoaQuetKho(unittest.TestCase):
+    """Bộ quét kho giữ chỗ bằng flock, KHÔNG bằng sự tồn tại của file.
+
+    File /tmp/hds-ai-quet-kho.lock nằm lại sau mỗi lượt quét. Nếu chốt này đọc
+    nhầm "file còn đó = đang quét" thì --thuc-hien từ chối chạy vĩnh viễn kể
+    từ lượt quét đầu tiên — đúng lỗi đã gặp ngày 15/09/2026.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(delete=False)
+        self.tmp.close()
+        self.addCleanup(os.unlink, self.tmp.name)
+        va_khoa = unittest.mock.patch.object(dhl, "KHOA_QUET_KHO", self.tmp.name)
+        va_khoa.start()
+        self.addCleanup(va_khoa.stop)
+
+    def test_khong_co_file_thi_khong_phai_dang_quet(self):
+        with unittest.mock.patch.object(dhl, "KHOA_QUET_KHO", self.tmp.name + "_khong_ton_tai"):
+            self.assertFalse(dhl.dang_quet_kho())
+
+    @unittest.skipUnless(fcntl, "cần fcntl (Linux) — máy chủ chạy test này")
+    def test_file_con_do_nhung_khong_ai_giu_thi_duoc_chay(self):
+        self.assertFalse(dhl.dang_quet_kho())
+
+    @unittest.skipUnless(fcntl, "cần fcntl (Linux) — máy chủ chạy test này")
+    def test_co_nguoi_giu_khoa_thi_bao_dang_quet(self):
+        with open(self.tmp.name, "a") as giu:
+            fcntl.flock(giu.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                self.assertTrue(dhl.dang_quet_kho())
+            finally:
+                fcntl.flock(giu.fileno(), fcntl.LOCK_UN)
+        # Nhả khoá ra là chạy lại được ngay.
+        self.assertFalse(dhl.dang_quet_kho())
 
 
 if __name__ == "__main__":

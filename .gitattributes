@@ -1,9 +1,16 @@
-# Xuong dong: LF cho toan kho.
-# Ma duoc dan tay tu Windows, ma clipboard Windows mang theo CRLF.
-# Python/TS chiu duoc, bash thi khong: update.sh chet ngay dong "set -euo pipefail".
-# text=auto de git tu ha CRLF ve LF LUC COMMIT; eol=lf de lay ra cung la LF.
+# Xuống dòng: LF cho toàn kho.
+#
+# Vì sao cần: mã được dán tay từ Windows vào GitHub, mà clipboard Windows mang
+# theo CRLF. Python/TypeScript chịu được, nhưng bash thì không — deploy/update.sh
+# chết ngay ở dòng `set -euo pipefail\r` với thông báo khó hiểu
+# ": invalid option name". Ngày 15/09/2026 chuyện này làm hỏng cả một lượt
+# deploy lẫn cron quét kho 15 phút.
+#
+# text=auto để git tự hạ CRLF về LF KHI COMMIT, nên dán kiểu gì thì thứ nằm
+# trong kho vẫn là LF; eol=lf để lúc lấy ra cũng là LF.
 * text=auto eol=lf
 
+# Ảnh và tài liệu nhị phân: git không được đụng vào byte nào.
 *.png binary
 *.jpg binary
 *.jpeg binary

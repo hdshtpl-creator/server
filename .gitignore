@@ -1,0 +1,35 @@
+# ===== BÍ MẬT — TUYỆT ĐỐI KHÔNG ĐƯA LÊN GITHUB =====
+# Các .gitignore trong từng thư mục con đã loại những thứ này, nhưng lặp lại ở
+# đây là lớp chắn thứ hai: xoá nhầm một file con không được phép làm lộ khoá.
+.env
+*.env
+!*.env.example
+!deploy/deploy.env.example
+credentials/
+**/credentials/*.json
+*.pem
+*.key
+
+# ===== Sinh ra khi chạy, không cần lưu lịch sử =====
+node_modules/
+dist/
+build/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+data/
+logs/
+backups/
+*.sql.gz
+*.dump
+
+# ===== Gói cập nhật tạm và ảnh chụp màn hình =====
+*.tgz
+*.tar.gz
+
+# ===== Hệ điều hành / IDE =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

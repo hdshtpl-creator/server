@@ -386,6 +386,28 @@ def existing(drive_id):
             return cur.fetchone()
 
 
+def existing_map(prefix: str) -> dict:
+    """{danh tính: hàng như existing() trả về} cho MỌI tài liệu có danh tính bắt
+    đầu bằng `prefix`, lấy trong MỘT truy vấn.
+
+    Vì sao: bộ quét kho gọi existing() cho từng tệp. Đo trên máy chủ 16/09/2026
+    là 6,9 ms mỗi lời gọi (một vòng đi-về tới PostgreSQL), nhân 42 nghìn tệp
+    thành 288 giây — chiếm gần trọn một lượt quét, kể cả lượt không có gì để
+    học. Nạp trước một lần tốn chưa tới một giây.
+
+    Cột và thứ tự cột GIỮ ĐÚNG như existing(); không lọc `active` cũng giống
+    existing(), để hai đường cho ra cùng một kết quả.
+    """
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT drive_file_id, id, checksum, doc_type, access_level,
+                                  client_id, department_id, matter_id,
+                                  approved, label_verified, title, person_folder
+                             FROM documents WHERE drive_file_id LIKE %s""",
+                        (prefix + "%",))
+            return {r[0]: r[1:] for r in cur.fetchall()}
+
+
 def relabel(doc_id, labels, title=None):
     """Cập nhật NHÃN cho tài liệu mà không nạp lại nội dung (file không đổi, chỉ
     đổi khách/loại). Trigger sync_chunk_labels tự lan nhãn xuống các chunk.
@@ -599,34 +621,59 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
     return True
 
 
-def _record_failure(drive_file_id, name, location, error):
+def _record_failure(drive_file_id, name, location, error, checksum=None):
     """Ghi/cập nhật một file KHÔNG HỌC ĐƯỢC để dashboard thấy được lâu dài.
 
     Lần quét sau, nếu file vẫn hỏng thì chỉ tăng `attempts` chứ không tạo dòng
     mới — admin cần biết "hỏng từ bao giờ, đã thử mấy lần", không cần một trang
     dài toàn dòng trùng nhau.
+
+    `checksum` là md5 của tệp lúc hỏng. Bộ quét dùng nó để KHÔNG thử lại tệp y
+    nguyên ở mọi lượt sau (16/09/2026): 65 tệp hỏng, phần lớn là PDF không có
+    lớp chữ, chiếm hơn 5 phút mỗi lượt quét vì lần nào cũng chạy OCR rồi lại
+    hỏng. Tệp được sửa (md5 đổi) vẫn được thử lại bình thường.
     """
     try:
         with db.session(role="internal", admin=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO ingest_failures
-                         (drive_file_id,file_name,location,error_code,error_message,hint)
-                       VALUES (%s,%s,%s,%s,%s,%s)
+                         (drive_file_id,file_name,location,error_code,error_message,
+                          hint,checksum)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s)
                        ON CONFLICT (drive_file_id) DO UPDATE SET
                          file_name=EXCLUDED.file_name,
                          location=EXCLUDED.location,
                          error_code=EXCLUDED.error_code,
                          error_message=EXCLUDED.error_message,
                          hint=EXCLUDED.hint,
+                         checksum=EXCLUDED.checksum,
                          attempts=ingest_failures.attempts+1,
                          last_seen_at=now(),
                          resolved_at=NULL""",
                     (drive_file_id, name, location, error.get("code") or "unknown",
-                     error.get("message"), error.get("hint")))
+                     error.get("message"), error.get("hint"), checksum))
     except Exception as exc:
         # Không để việc ghi báo cáo làm hỏng cả lần quét.
         print(f"     [CẢNH BÁO] không ghi được nhật ký lỗi học: {exc}")
+
+
+def failed_fingerprints() -> dict:
+    """{danh tính tệp: md5 lúc hỏng} của các tệp đang nằm trong danh sách
+    không học được. Chỉ lấy dòng CÓ md5 — dòng cũ (trước 16/09/2026) chưa có
+    md5 nên vẫn được thử lại một lần để ghi md5 vào, sau đó mới yên."""
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT drive_file_id, checksum FROM ingest_failures
+                                WHERE resolved_at IS NULL AND checksum IS NOT NULL
+                                  AND drive_file_id IS NOT NULL""")
+                return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception as exc:
+        # Thiếu cột (chưa migrate) hoặc CSDL trục trặc: coi như không nhớ gì,
+        # bộ quét chạy y như trước — chậm nhưng đúng.
+        print(f"     [CẢNH BÁO] không đọc được nhật ký lỗi học: {exc}")
+        return {}
 
 
 def _clear_failure(drive_file_id):

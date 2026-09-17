@@ -939,3 +939,14 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS ip TEXT;
 CREATE INDEX IF NOT EXISTS idx_leads_status_time ON leads(status, created_at DESC);
 GRANT SELECT, INSERT, UPDATE ON leads TO hds_app;
 GRANT USAGE, SELECT ON SEQUENCE leads_id_seq TO hds_app;
+
+-- ============================================================
+-- BỘ QUÉT KHO: KHÔNG THỬ LẠI TỆP HỎNG MỖI LƯỢT (16/09/2026)
+-- ------------------------------------------------------------
+-- Đo 16/09: một lượt quét mất 5 phút 32 giây, trong khi đi hết 42.103 tệp và
+-- so md5 chỉ tốn 8 giây. Hơn 5 phút còn lại là 65 tệp KHÔNG ĐỌC ĐƯỢC bị thử
+-- lại mỗi lượt — 54 tệp trong đó là PDF không có lớp chữ nên lần nào cũng
+-- chạy OCR từ đầu rồi lại hỏng (một tệp đã thử 924 lần từ 19/08).
+-- Nhớ md5 của tệp lúc hỏng: lượt sau tệp còn nguyên md5 thì bỏ qua, chỉ thử
+-- lại khi NỘI DUNG đổi (người sửa/quét lại) hoặc khi chạy tay --thu-lai-loi.
+ALTER TABLE ingest_failures ADD COLUMN IF NOT EXISTS checksum TEXT;

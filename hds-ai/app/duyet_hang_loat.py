@@ -39,6 +39,31 @@ NGUONG_MAC_DINH = 0.20
 KHOA_QUET_KHO = "/tmp/hds-ai-quet-kho.lock"
 
 
+def dang_quet_kho() -> bool:
+    """Bộ quét kho có ĐANG chạy không.
+
+    deploy/hoc-tu-thu-muc.sh giữ chỗ bằng `flock -n 9` trên file này. flock
+    nằm ở FILE ĐANG MỞ, không phải ở sự tồn tại của file — nên file vẫn nằm
+    lại trong /tmp sau khi lượt quét kết thúc. Hỏi "file có tồn tại không" là
+    từ chối chạy vĩnh viễn kể từ lượt quét đầu tiên; phải thử giành khoá.
+    """
+    if not os.path.exists(KHOA_QUET_KHO):
+        return False
+    try:
+        import fcntl
+    except ImportError:
+        # Không phải Linux → không có khoá nào để tranh. Script chỉ chạy thật
+        # trên máy chủ; ở máy lập trình đừng chặn oan.
+        return False
+    with open(KHOA_QUET_KHO, "a") as f:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True          # người khác đang giữ → đang quét
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    return False
+
+
 def _lay_van_ban(cur, doc_id: int) -> str:
     cur.execute("""SELECT content FROM chunks WHERE document_id=%s
                    ORDER BY chunk_index LIMIT %s""", (doc_id, TOI_DA_DOAN))
@@ -135,7 +160,7 @@ def main(argv=None):
     if not 0 < args.nguong < 1:
         print("Ngưỡng phải nằm giữa 0 và 1.", file=sys.stderr)
         return 2
-    if args.thuc_hien and os.path.exists(KHOA_QUET_KHO) and not args.bo_qua_khoa:
+    if args.thuc_hien and not args.bo_qua_khoa and dang_quet_kho():
         print(f"Bộ quét kho đang chạy ({KHOA_QUET_KHO}). Chờ nó xong rồi hãy "
               f"ghi, hoặc thêm --bo-qua-khoa nếu bạn chắc.", file=sys.stderr)
         return 3

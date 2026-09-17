@@ -7,9 +7,9 @@
 #   bash deploy/hoc-tu-thu-muc.sh                 # quét và học ngay
 #   bash deploy/hoc-tu-thu-muc.sh --dry-run       # chỉ liệt kê, không ghi gì
 #   bash deploy/hoc-tu-thu-muc.sh --chuyen-doi    # MỘT LẦN khi vừa bỏ Drive
-#   sudo bash deploy/hoc-tu-thu-muc.sh --install-timer   # quét mỗi 15 phút (systemd)
+#   sudo bash deploy/hoc-tu-thu-muc.sh --install-timer   # quét mỗi 3 phút (systemd)
 #   sudo bash deploy/hoc-tu-thu-muc.sh --remove-timer
-#   bash deploy/hoc-tu-thu-muc.sh --install-cron  # quét mỗi 15 phút, KHÔNG cần root
+#   bash deploy/hoc-tu-thu-muc.sh --install-cron  # quét mỗi 3 phút, KHÔNG cần root
 #   bash deploy/hoc-tu-thu-muc.sh --remove-cron   #   (crontab của user chạy backend)
 #   bash deploy/hoc-tu-thu-muc.sh --cron          # một lượt như cron gọi (có khoá)
 set -euo pipefail
@@ -18,9 +18,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(cd "$SCRIPT_DIR/../hds-ai" && pwd)"
 SERVICE_USER="${SUDO_USER:-$(stat -c '%U' "$BACKEND_DIR")}"
 
+# Chu kỳ 3 phút (16/09/2026, trước là 15): một lượt quét kho 42 nghìn tệp chỉ
+# tốn ~8 giây sau khi thôi đọc lại tệp hỏng mỗi lượt, nên chạy dày hơn vẫn nhẹ
+# mà nhân viên thả tệp vào ổ mạng gần như thấy ngay.
 # Dòng crontab nhận ra bằng chuỗi "hoc-tu-thu-muc.sh' --cron" — gỡ/cài đều so
 # theo chuỗi này, nên đổi tên script là phải đổi cả hai chỗ.
-CRON_LINE="*/15 * * * * /usr/bin/env bash '$SCRIPT_DIR/hoc-tu-thu-muc.sh' --cron  # hds-ai: quet kho tai lieu"
+CRON_LINE="*/3 * * * * /usr/bin/env bash '$SCRIPT_DIR/hoc-tu-thu-muc.sh' --cron  # hds-ai: quet kho tai lieu"
 CRON_MARK="hoc-tu-thu-muc.sh' --cron"
 
 cron_cmd() {  # crontab của user $1 — chỉ root mới được dùng -u (Debian/Ubuntu)
@@ -51,7 +54,7 @@ Description=HDS AI - quet kho tai lieu dinh ky
 
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=15min
+OnUnitActiveSec=3min
 Persistent=true
 
 [Install]
@@ -71,7 +74,7 @@ EOF
       go_cron_line "$SERVICE_USER" | cron_cmd "$SERVICE_USER" -
       echo "  Đã gỡ lịch cron cũ của $SERVICE_USER (giờ dùng timer systemd)."
     fi
-    echo "✓ Đã bật lịch quét kho mỗi 15 phút."
+    echo "✓ Đã bật lịch quét kho mỗi 3 phút."
     echo "  Xem lần chạy tới : systemctl list-timers hds-ai-quet-kho.timer"
     echo "  Xem log          : journalctl -u hds-ai-quet-kho.service -n 40 --no-pager"
     echo "  Chạy ngay 1 lần  : sudo systemctl start hds-ai-quet-kho.service"
@@ -93,7 +96,7 @@ EOF
     fi
     me="$(id -un)"
     { go_cron_line "$me"; echo "$CRON_LINE"; } | cron_cmd "$me" -
-    echo "✓ Đã bật lịch quét kho mỗi 15 phút (crontab của $me, không cần root)."
+    echo "✓ Đã bật lịch quét kho mỗi 3 phút (crontab của $me, không cần root)."
     echo "  Xem lịch         : crontab -l"
     echo "  Lượt gần nhất    : tail -n 40 $BACKEND_DIR/data/quet_kho.log"
     echo "  Lịch sử các lượt : tail $BACKEND_DIR/data/quet_kho_lich_su.log"
