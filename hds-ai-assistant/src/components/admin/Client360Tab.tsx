@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { Client, Client360Data } from '../../types';
 import { MATTER_STATUS_BADGES, DOC_TYPE_LABELS } from '../../constants';
+import { ThuMucKhachPanel } from './ThuMucKhachPanel';
 import {
   Building2,
   History,
@@ -22,6 +23,7 @@ import {
   Eye,
   Download,
   Lock,
+  HardDrive,
 } from 'lucide-react';
 
 const inputClass =
@@ -53,7 +55,15 @@ const boDau = (s: string) =>
     .toLowerCase();
 
 export const Client360Tab: React.FC = () => {
-  const { showToast } = useApp();
+  const { showToast, currentUser } = useApp();
+  // Thư mục trong kho là cây thật trên máy chủ (mọi khách) — cùng cửa quyền
+  // với thẻ Kho tài liệu: admin hoặc người được cấp quyền duyệt.
+  const canReview = Boolean(
+    currentUser && (currentUser.role === 'admin' || currentUser.can_review)
+  );
+  // 'ho_so': khách đã học (CSDL) · 'thu_muc': mọi thư mục khách trên đĩa, kể
+  // cả trống — để thấy vì sao một khách chưa có trong hồ sơ 360°.
+  const [cheDo, setCheDo] = useState<'ho_so' | 'thu_muc'>('ho_so');
   const [clients, setClients] = useState<Client[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string>('');
   const [data360, setData360] = useState<Client360Data | null>(null);
@@ -245,15 +255,56 @@ export const Client360Tab: React.FC = () => {
     <div className="space-y-6">
       {/* Tiêu đề và ô chọn khách hàng */}
       <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
-        <div>
-          <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-            Hồ sơ khách hàng 360°
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Tổng hợp lịch sử tư vấn, vấn đề tồn đọng, cảnh báo thời hiệu và gợi ý phương án pháp lý
-          </p>
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
+              Hồ sơ khách hàng 360°
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              {cheDo === 'ho_so'
+                ? 'Tổng hợp lịch sử tư vấn, vấn đề tồn đọng, cảnh báo thời hiệu và gợi ý phương án pháp lý'
+                : 'Mọi thư mục khách trong kho trên máy chủ, kể cả thư mục trống, và nhãn học của từng tệp'}
+            </p>
+          </div>
+          <div
+            role="tablist"
+            aria-label="Cách xem hồ sơ khách"
+            className="inline-flex rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-0.5 text-xs font-bold"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={cheDo === 'ho_so'}
+              onClick={() => setCheDo('ho_so')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
+                cheDo === 'ho_so'
+                  ? 'bg-white dark:bg-slate-900 text-hds-navy dark:text-blue-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
+              }`}
+            >
+              <Users2 className="w-3.5 h-3.5" />
+              Khách đã học ({clients.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={cheDo === 'thu_muc'}
+              onClick={() => setCheDo('thu_muc')}
+              disabled={!canReview}
+              title={canReview ? undefined : 'Cần quyền duyệt tài liệu để xem thư mục kho'}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                cheDo === 'thu_muc'
+                  ? 'bg-white dark:bg-slate-900 text-hds-navy dark:text-blue-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
+              }`}
+            >
+              <HardDrive className="w-3.5 h-3.5" />
+              Thư mục trong kho
+            </button>
+          </div>
         </div>
 
+        {cheDo === 'ho_so' && (
         <div className="w-full lg:w-auto space-y-2">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             {/* Ô tìm tên khách — lọc ngay danh sách chọn bên dưới, không gọi
@@ -326,9 +377,17 @@ export const Client360Tab: React.FC = () => {
               : `${clients.length} khách hàng`}
           </p>
         </div>
+        )}
       </div>
 
-      {isLoadingList && !data360 ? null : clients.length === 0 ? (
+      {cheDo === 'thu_muc' ? (
+        <ThuMucKhachPanel
+          onMoHoSo={(id) => {
+            setSelectedClientId(String(id));
+            setCheDo('ho_so');
+          }}
+        />
+      ) : isLoadingList && !data360 ? null : clients.length === 0 ? (
         <div className="bg-white dark:bg-slate-900 rounded-2xl p-12 text-center border border-slate-200 dark:border-slate-800 space-y-2">
           <Users2 className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto" />
           <p className="font-semibold text-slate-700 dark:text-slate-300">

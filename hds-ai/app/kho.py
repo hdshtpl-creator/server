@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -207,6 +208,7 @@ def _dem_file(folder: Path) -> int:
 
 def quen_dem():
     _NHO_DEM.clear()
+    _NHO_KHACH.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +468,246 @@ def tao_thu_muc(rel_cha: str, ten: str, user_id=None) -> dict:
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user_id, "kho_tao_thu_muc", None, None, {"path": rel_cua(moi, root)})
     return {"ok": True, "path": rel_cua(moi, root), "ten": ten}
+
+
+# ---------------------------------------------------------------------------
+# Thư mục hồ sơ khách — nhìn từ phía ĐĨA (yêu cầu 18/09/2026)
+# ---------------------------------------------------------------------------
+# Tab Hồ sơ khách 360° chỉ liệt kê khách ĐÃ có tài liệu học xong: bản ghi
+# clients sinh ra lúc bộ quét học được tệp đầu tiên trong thư mục khách. Đo
+# 17/09/2026: 1.230 trên 1.571 thư mục khách trống hoặc chỉ chứa zip, không
+# hiện ở đâu cả, và người xem tưởng hệ thống bỏ sót. Ở đây MỖI thư mục khách
+# trên đĩa là một dòng, kể cả trống, kèm số tệp theo nhãn học; mở dòng ra là
+# từng tệp với nhãn của nó. Cùng luật bỏ rác và cùng luật nhãn với bộ quét.
+TRANG_THAI_DEM = ("da_hoc", "canh_bao", "cho_duyet", "chua_hoc", "loi", "khong_ho_tro")
+TINH_TRANG_THU_MUC = ("trong", "bo_qua", "khong_doc_duoc", "chua_hoc", "cho_duyet",
+                      "mot_phan", "da_hoc")
+# Bộ lọc giao diện: từng tình trạng, 'co_tep' (có tệp), 'can_xu_ly' (chưa học đủ
+# vì bất kỳ lý do gì trừ trống).
+LOC_HOP_LE = {"", "co_tep", "can_xu_ly", *TINH_TRANG_THU_MUC}
+_NHO_KHACH: dict = {}
+
+
+def _ban_do_nhan():
+    """(cats, subs, roots) từ cài đặt drive_map — tách để test vá được."""
+    return auto_learn._load_map()
+
+
+def _khach_theo_ma() -> dict:
+    """{MÃ viết hoa: (id, tên)} của mọi khách trong hệ thống."""
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT upper(code), id, name FROM clients WHERE code IS NOT NULL")
+            return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+
+
+def _khong_dau(s: str) -> str:
+    """Bỏ dấu, hạ chữ thường, gộp khoảng trắng — để gõ 'cong ty' ra 'CÔNG TY'."""
+    s = unicodedata.normalize("NFD", s or "")
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    return re.sub(r"\s+", " ", s.replace("đ", "d").replace("Đ", "d")).strip().lower()
+
+
+def thu_muc_goc_khach(root: Path | None = None, roots=None) -> list:
+    """Các thư mục 'Hồ sơ khách hàng' ở tầng gốc kho, theo bản đồ nhãn
+    (client_roots) — cùng cách nhận ra ngăn khách với auto_learn.resolve_labels."""
+    root = root or library_root()
+    if roots is None:
+        roots = _ban_do_nhan()[2]
+    if not root.is_dir():
+        return []
+    return [p for p in sorted(root.iterdir(), key=lambda x: x.name.lower())
+            if p.is_dir() and not _bo_qua(p) and auto_learn._norm(p.name) in roots]
+
+
+def _tep_trong(folder: Path) -> list:
+    """Mọi tệp trong một thư mục (đệ quy), bỏ đúng rác như bộ quét; tệp nằm
+    ngay trong thư mục đứng trước tệp ở thư mục con, thứ tự ổn định."""
+    out = []
+    for duong, thu_muc_con, tap_tin in os.walk(folder):
+        thu_muc_con[:] = sorted((d for d in thu_muc_con
+                                 if d not in SKIP_DIRS and not d.startswith(SKIP_PREFIXES)),
+                                key=str.lower)
+        for f in sorted(tap_tin, key=str.lower):
+            if f.startswith(SKIP_PREFIXES) or f.lower() in SKIP_NAMES:
+                continue
+            out.append(Path(duong) / f)
+    return out
+
+
+def _dem_thu_muc_con(folder: Path) -> int:
+    n = 0
+    for _duong, thu_muc_con, _tap_tin in os.walk(folder):
+        thu_muc_con[:] = [d for d in thu_muc_con
+                          if d not in SKIP_DIRS and not d.startswith(SKIP_PREFIXES)]
+        n += len(thu_muc_con)
+    return n
+
+
+def ly_do_thu_muc_khach(ten: str, ban_do=None) -> tuple:
+    """(mã, tên khách, lý do bộ quét BỎ QUA cả thư mục hoặc None) — cùng luật
+    với auto_learn.resolve_labels nhưng không chạm CSDL, không tạo khách."""
+    cats, subs, roots = ban_do or _ban_do_nhan()
+    code, cname = auto_learn._client_code_and_name(ten)
+    if not code:
+        return None, None, ("Chưa tách được mã khách từ tên thư mục — đặt tên dạng "
+                            "'1729. Tên công ty' hoặc '[MÃ] Tên khách' rồi bộ quét sẽ học")
+    if auto_learn._ma_ngan_dat_nham(code, cname, cats, subs, roots):
+        return code, cname, ("Trông như ngăn con đặt nhầm ở tầng khách (mã 1–2 chữ số, tên "
+                             "trùng một loại giấy tờ) — chuyển vào đúng thư mục khách")
+    return code, cname, None
+
+
+def _dem_trang_thai(tep: list, keys: list, rows: dict, loi: dict) -> dict:
+    dem = {k: 0 for k in TRANG_THAI_DEM}
+    for p, k in zip(tep, keys):
+        dem[trang_thai_file(rows.get(k), p.suffix, loi.get(k))] += 1
+    return dem
+
+
+def tinh_trang_thu_muc(so_file: int, dem: dict, ly_do) -> str:
+    """Một chữ cho cả thư mục: trống · bộ quét bỏ qua · không đọc được (chỉ
+    zip/rar hoặc toàn tệp lỗi) · chưa học · chờ duyệt · học một phần · đã học đủ."""
+    if so_file == 0:
+        return "trong"
+    if ly_do:
+        return "bo_qua"
+    doc_duoc = so_file - dem["khong_ho_tro"]
+    da_hoc = dem["da_hoc"] + dem["canh_bao"]
+    if doc_duoc == 0 or dem["loi"] == doc_duoc:
+        return "khong_doc_duoc"
+    if da_hoc == doc_duoc:
+        return "da_hoc"
+    if da_hoc > 0:
+        return "mot_phan"
+    if dem["cho_duyet"] > 0:
+        return "cho_duyet"
+    return "chua_hoc"
+
+
+def _khop_loc(dong: dict, loc: str) -> bool:
+    if not loc:
+        return True
+    if loc == "co_tep":
+        return dong["so_file"] > 0
+    if loc == "can_xu_ly":
+        return dong["tinh_trang"] not in ("trong", "da_hoc")
+    return dong["tinh_trang"] == loc
+
+
+def _khoa_sap_xep(dong: dict):
+    """Mã số xếp theo số thật (9 trước 1729), rồi mã chữ, rồi thư mục không mã."""
+    ma = dong.get("ma") or ""
+    ten = _khong_dau(dong["ten"])
+    if ma.isdigit():
+        return (0, int(ma), ten)
+    if ma:
+        return (1, 0, _khong_dau(ma) + " " + ten)
+    return (2, 0, ten)
+
+
+def _theo_lo(keys: list, fn, co: int = 4000) -> dict:
+    """Gọi truy vấn theo lô — kho khách 7.000 tệp vẫn một vài truy vấn."""
+    out = {}
+    for i in range(0, len(keys), co):
+        out.update(fn(keys[i:i + co]))
+    return out
+
+
+def _dong_thu_muc_khach(d: Path, tep: list, ks: list, rows: dict, loi: dict,
+                        ban_do, khach: dict, root: Path) -> dict:
+    ma, ten_khach, ly_do = ly_do_thu_muc_khach(d.name, ban_do)
+    dem = _dem_trang_thai(tep, ks, rows, loi)
+    kh = khach.get((ma or "").upper())
+    return {
+        "ten": d.name, "path": rel_cua(d, root), "ma": ma, "ten_khach": ten_khach,
+        "client_id": kh[0] if kh else None, "client_name": kh[1] if kh else None,
+        "ly_do": ly_do, "so_file": len(tep), "dem": dem,
+        "tinh_trang": tinh_trang_thu_muc(len(tep), dem, ly_do),
+    }
+
+
+def _tom_tat_thu_muc_khach(root: Path, ban_do) -> list:
+    """Một dòng cho MỖI thư mục khách trên đĩa (kể cả trống). Đi cây 7.000 tệp
+    + hỏi CSDL mất khoảng một giây, nên nhớ 2 phút; học/gỡ/tải lên xoá nhớ."""
+    now = time.time()
+    hit = _NHO_KHACH.get(str(root))
+    if hit and now - hit[0] < _NHO_DEM_GIAY:
+        return hit[1]
+    muc = []
+    for goc in thu_muc_goc_khach(root, ban_do[2]):
+        for d in sorted(goc.iterdir(), key=lambda x: x.name.lower()):
+            if not d.is_dir() or _bo_qua(d):
+                continue
+            tep = _tep_trong(d)
+            muc.append((d, tep, [local_key(root, p) for p in tep]))
+    moi_khoa = [k for _d, _t, ks in muc for k in ks]
+    rows = _theo_lo(moi_khoa, _tai_lieu_theo_khoa)
+    loi = _theo_lo(moi_khoa, _loi_theo_khoa)
+    khach = _khach_theo_ma()
+    out = [_dong_thu_muc_khach(d, tep, ks, rows, loi, ban_do, khach, root)
+           for d, tep, ks in muc]
+    out.sort(key=_khoa_sap_xep)
+    _NHO_KHACH[str(root)] = (now, out)
+    return out
+
+
+def danh_sach_thu_muc_khach(q: str = "", loc: str = "", offset: int = 0,
+                            limit: int = 100) -> dict:
+    """Danh sách thư mục khách trên đĩa: lọc theo tình trạng, tìm theo tên/mã
+    (không dấu), phân trang; kèm tổng cho cả kho khách để thẻ đầu trang có số."""
+    if loc not in LOC_HOP_LE:
+        raise LoiKho("Bộ lọc không hợp lệ")
+    root = library_root()
+    ban_do = _ban_do_nhan()
+    goc = thu_muc_goc_khach(root, ban_do[2])
+    if not goc:
+        raise LoiKho("Kho chưa có thư mục 'Hồ sơ khách hàng' (xem bản đồ nhãn, mục client_roots)")
+    tat_ca = _tom_tat_thu_muc_khach(root, ban_do)
+    tong = {"tong_thu_muc": len(tat_ca), "tong_tep": 0,
+            "theo_tinh_trang": {k: 0 for k in TINH_TRANG_THU_MUC},
+            "dem": {k: 0 for k in TRANG_THAI_DEM}}
+    for d in tat_ca:
+        tong["tong_tep"] += d["so_file"]
+        tong["theo_tinh_trang"][d["tinh_trang"]] += 1
+        for k in TRANG_THAI_DEM:
+            tong["dem"][k] += d["dem"][k]
+    tu = _khong_dau(q).split()
+    ket = []
+    for d in tat_ca:
+        if not _khop_loc(d, loc):
+            continue
+        if tu:
+            hay = _khong_dau(f"{d['ten']} {d['client_name'] or ''}")
+            if not all(t in hay for t in tu):
+                continue
+        ket.append(d)
+    return {"goc": [rel_cua(g, root) for g in goc], "tong": tong,
+            "thu_muc": ket[offset:offset + limit], "tong_khop": len(ket),
+            "offset": offset, "limit": limit}
+
+
+def tep_trong_thu_muc_khach(rel: str) -> dict:
+    """Từng tệp trong MỘT thư mục khách (đệ quy) kèm nhãn học và thư mục con
+    chứa nó. Chỉ nhận thư mục nằm ngay dưới ngăn 'Hồ sơ khách hàng'."""
+    root = library_root()
+    folder = duong_dan_kho(rel, root)
+    ban_do = _ban_do_nhan()
+    if not folder.is_dir() or folder.parent not in thu_muc_goc_khach(root, ban_do[2]):
+        raise LoiKho("Không phải thư mục khách trong ngăn 'Hồ sơ khách hàng'")
+    tep = _tep_trong(folder)[:3000]
+    ks = [local_key(root, p) for p in tep]
+    rows = _theo_lo(ks, _tai_lieu_theo_khoa)
+    loi = _theo_lo(ks, _loi_theo_khoa)
+    dong = _dong_thu_muc_khach(folder, tep, ks, rows, loi, ban_do, _khach_theo_ma(), root)
+    tap_tin = []
+    for p, k in zip(tep, ks):
+        t = _dong_file(p, k, rows.get(k), loi.get(k))
+        t["thu_muc_con"] = "" if p.parent == folder else p.parent.relative_to(folder).as_posix()
+        tap_tin.append(t)
+    dong["tap_tin"] = tap_tin
+    dong["so_thu_muc_con"] = _dem_thu_muc_con(folder)
+    return dong
 
 
 # ---------------------------------------------------------------------------

@@ -899,6 +899,81 @@ export async function getKhoTang({ path = '', q = '', offset = 0, limit = 200 } 
   return request(`/kho/cay?${params.toString()}`, { method: 'GET' });
 }
 
+// GET /kho/ho-so-khach — MỌI thư mục khách trên đĩa (kể cả trống) + số tệp theo nhãn học
+function mockThuMucKhach(q, loc, offset, limit) {
+  const dem = (o = {}) => ({ da_hoc: 0, canh_bao: 0, cho_duyet: 0, chua_hoc: 0, loi: 0, khong_ho_tro: 0, ...o });
+  const goc = '9. HỒ SƠ KHÁCH HÀNG';
+  const tat_ca = [
+    { ten: '9. CHI NHÁNH CÔNG TY TNHH KIỂM TOÁN DFK VIỆT NAM', ma: '9', ten_khach: 'CHI NHÁNH CÔNG TY TNHH KIỂM TOÁN DFK VIỆT NAM',
+      client_id: 3, client_name: 'CHI NHÁNH CÔNG TY TNHH KIỂM TOÁN DFK VIỆT NAM', ly_do: null, so_file: 380,
+      dem: dem({ da_hoc: 366, cho_duyet: 9, chua_hoc: 2, loi: 1, khong_ho_tro: 2 }), tinh_trang: 'mot_phan' },
+    { ten: '1000. Anh Huy Siam', ma: '1000', ten_khach: 'Anh Huy Siam', client_id: 41, client_name: 'Anh Huy Siam', ly_do: null,
+      so_file: 2, dem: dem({ da_hoc: 2 }), tinh_trang: 'da_hoc' },
+    { ten: '1001. Lâm Ngọc Minh', ma: '1001', ten_khach: 'Lâm Ngọc Minh', client_id: null, client_name: null, ly_do: null,
+      so_file: 0, dem: dem(), tinh_trang: 'trong' },
+    { ten: '1004. Hồ Ngọc Hiệp', ma: '1004', ten_khach: 'Hồ Ngọc Hiệp', client_id: 44, client_name: 'Hồ Ngọc Hiệp', ly_do: null,
+      so_file: 5, dem: dem({ da_hoc: 3, cho_duyet: 2 }), tinh_trang: 'mot_phan' },
+    { ten: '1006. CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ AGRITECK', ma: '1006', ten_khach: 'CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ AGRITECK',
+      client_id: null, client_name: null, ly_do: null, so_file: 0, dem: dem(), tinh_trang: 'trong' },
+    { ten: '1076. Đinh Thị Thu Thủy', ma: '1076', ten_khach: 'Đinh Thị Thu Thủy', client_id: null, client_name: null, ly_do: null,
+      so_file: 2, dem: dem({ khong_ho_tro: 2 }), tinh_trang: 'khong_doc_duoc' },
+    { ten: '1755. MAI NGỌC SƠN', ma: '1755', ten_khach: 'MAI NGỌC SƠN', client_id: 301, client_name: 'MAI NGỌC SƠN', ly_do: null,
+      so_file: 4, dem: dem({ da_hoc: 1, loi: 1, chua_hoc: 2 }), tinh_trang: 'mot_phan' },
+    { ten: 'Ms Vân (TEEL)', ma: null, ten_khach: null, client_id: null, client_name: null,
+      ly_do: "Chưa tách được mã khách từ tên thư mục — đặt tên dạng '1729. Tên công ty' hoặc '[MÃ] Tên khách' rồi bộ quét sẽ học",
+      so_file: 3, dem: dem({ chua_hoc: 3 }), tinh_trang: 'bo_qua' },
+  ].map((d) => ({ ...d, path: `${goc}/${d.ten}` }));
+  const tong = { tong_thu_muc: tat_ca.length, tong_tep: 0,
+    theo_tinh_trang: { trong: 0, bo_qua: 0, khong_doc_duoc: 0, chua_hoc: 0, cho_duyet: 0, mot_phan: 0, da_hoc: 0 }, dem: dem() };
+  for (const d of tat_ca) {
+    tong.tong_tep += d.so_file;
+    tong.theo_tinh_trang[d.tinh_trang] += 1;
+    for (const k of Object.keys(tong.dem)) tong.dem[k] += d.dem[k];
+  }
+  const qq = (q || '').toLowerCase();
+  const ket = tat_ca.filter((d) => {
+    if (loc === 'co_tep' && d.so_file === 0) return false;
+    if (loc === 'can_xu_ly' && (d.tinh_trang === 'trong' || d.tinh_trang === 'da_hoc')) return false;
+    if (loc && loc !== 'co_tep' && loc !== 'can_xu_ly' && d.tinh_trang !== loc) return false;
+    return !qq || d.ten.toLowerCase().includes(qq);
+  });
+  return { goc: [goc], tong, thu_muc: ket.slice(offset, offset + limit), tong_khop: ket.length, offset, limit };
+}
+
+function mockTepThuMucKhach(path) {
+  const ten = path.split('/').pop();
+  const tep = (t, sub, trang_thai, extra = {}) => ({
+    ten: t, path: `${path}/${sub ? sub + '/' : ''}${t}`, kich_thuoc: 120000, sua_luc: '2026-09-12 08:00',
+    trang_thai, document_id: null, title: null, doc_type: null, access_level: null, so_hieu: null,
+    client_name: null, so_doan: null, loi: null, thu_muc_con: sub, ...extra });
+  const tap_tin = ten.startsWith('1001.') || ten.startsWith('1006.') ? [] : [
+    tep('CCCD.jpg', '1. Thông tin khách hàng', 'da_hoc', { document_id: 501, title: 'CCCD', so_doan: 1 }),
+    tep('Giấy ủy quyền.docx', '2. Dự án/896. Thành lập chi nhánh/2. Hồ sơ soạn thảo', 'cho_duyet', { document_id: 502, title: 'Giấy ủy quyền' }),
+    tep('Điều lệ.pdf', '2. Dự án/896. Thành lập chi nhánh/3. Hồ sơ hoàn thiện', 'chua_hoc'),
+    tep('Scan GPKD.pdf', '2. Dự án/896. Thành lập chi nhánh/5. Kết quả', 'loi', { loi: { code: 'no_text', message: 'PDF scan không có lớp chữ', hint: 'OCR không đọc được — quét lại rõ hơn' } }),
+    tep('ho-so.zip', '2. Dự án/896. Thành lập chi nhánh/5. Kết quả', 'khong_ho_tro'),
+  ];
+  const d = mockThuMucKhach('', '', 0, 100).thu_muc.find((x) => x.path === path) || {
+    ten, path, ma: null, ten_khach: null, client_id: null, client_name: null, ly_do: null, so_file: tap_tin.length,
+    dem: { da_hoc: 0, canh_bao: 0, cho_duyet: 0, chua_hoc: 0, loi: 0, khong_ho_tro: 0 }, tinh_trang: 'chua_hoc' };
+  return { ...d, tap_tin, so_thu_muc_con: tap_tin.length ? 7 : 2 };
+}
+
+export async function getThuMucKhach({ q = '', loc = '', offset = 0, limit = 100 } = {}) {
+  if (useMockBackend) return mockThuMucKhach(q, loc, offset, limit);
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (q) params.append('q', q);
+  if (loc) params.append('loc', loc);
+  return request(`/kho/ho-so-khach?${params.toString()}`, { method: 'GET' });
+}
+
+// GET /kho/ho-so-khach/tep?path= — từng tệp trong MỘT thư mục khách kèm nhãn học
+export async function getTepThuMucKhach(path) {
+  if (useMockBackend) return mockTepThuMucKhach(path);
+  const params = new URLSearchParams({ path });
+  return request(`/kho/ho-so-khach/tep?${params.toString()}`, { method: 'GET' });
+}
+
 // GET /kho/tim?q= — tìm tài liệu đã có bản ghi, trả kèm thư mục chứa
 export async function timTrongKho(q) {
   if (useMockBackend) return [];

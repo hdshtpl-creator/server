@@ -20,6 +20,8 @@ import type {
   UploadResult,
   KhoTang,
   KhoKetQuaTim,
+  KhoDanhSachKhach,
+  KhoTepTrongThuMucKhach,
   KhoHocKetQua,
   KhoTaiLenKetQua,
   DriveSyncStatus,
@@ -512,6 +514,18 @@ export const getKhoTang = ApiJs.getKhoTang as (params?: {
 }) => Promise<KhoTang>;
 
 export const timTrongKho = ApiJs.timTrongKho as (q: string) => Promise<KhoKetQuaTim[]>;
+
+/* Thư mục hồ sơ khách nhìn từ phía đĩa (18/09/2026) */
+export const getThuMucKhach = ApiJs.getThuMucKhach as (params?: {
+  q?: string;
+  loc?: string;
+  offset?: number;
+  limit?: number;
+}) => Promise<KhoDanhSachKhach>;
+
+export const getTepThuMucKhach = ApiJs.getTepThuMucKhach as (
+  path: string
+) => Promise<KhoTepTrongThuMucKhach>;
 
 export const goTaiLieuKho = ApiJs.goTaiLieuKho as (
   documentId: number

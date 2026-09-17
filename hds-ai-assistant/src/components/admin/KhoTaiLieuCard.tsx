@@ -31,7 +31,7 @@ import { DocumentDetailModal } from './DocumentDetailModal';
  * thư mục nào mới gọi /kho/cay cho thư mục đó; danh sách file phân trang.
  */
 
-const TRANG_THAI: Record<KhoTrangThai, { label: string; cls: string }> = {
+export const TRANG_THAI: Record<KhoTrangThai, { label: string; cls: string }> = {
   da_hoc: {
     label: 'Đã học',
     cls: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-900',
@@ -66,7 +66,7 @@ function dinhDangKichThuoc(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-const TrangThaiBadge: React.FC<{ trangThai: KhoTrangThai; title?: string }> = ({ trangThai, title }) => {
+export const TrangThaiBadge: React.FC<{ trangThai: KhoTrangThai; title?: string }> = ({ trangThai, title }) => {
   const t = TRANG_THAI[trangThai] || TRANG_THAI.chua_hoc;
   return (
     <span

@@ -217,6 +217,7 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 |---|---|
 | **Tổng quan** | Số liệu toàn hệ thống + **Hạn chót vụ việc** (quá hạn / sắp đến hạn). Ô đỏ **"Thiếu chủ sở hữu"** phải luôn bằng 0 — khác 0 là có hồ sơ khách chưa gán chủ, nguy cơ lộ chéo. |
 | **Hồ sơ khách 360°** | Lịch sử hợp tác, vướng mắc, cảnh báo thời hiệu, gợi ý chiến lược, danh sách vụ việc và tài liệu của khách. Cập nhật được ngay tại đây. |
+| **Hồ sơ khách 360° → Thư mục trong kho** | MỌI thư mục khách trong kho trên máy chủ, kể cả thư mục trống hay chỉ có zip; mở một dòng là thấy từng tệp với nhãn *Đã học / Chờ duyệt / Chưa học / Lỗi / Không hỗ trợ* và nút **Học ngay**. Khách chỉ xuất hiện ở "Khách đã học" sau khi bộ quét học được ít nhất một tệp của họ — chưa thấy khách thì tra ở đây trước. |
 | **Duyệt câu trả lời bị báo cáo** | Xem câu bị 👎, sửa lại cho đúng → **Đạt — nạp học** (vào kho) / **Lưu bản sửa** / **Bỏ qua**. Chọn **Ai được dùng câu này**: *Nội bộ* (mặc định) hay *Công khai* — chọn công khai là người ngoài công ty đọc được. |
 | **Đánh giá của người dùng** | Toàn bộ báo cáo 👎 đang chờ, kèm ghi chú người dùng để lại. Sửa câu trả lời rồi nạp thẳng vào bộ nhớ AI. |
 | **Người dùng & Phòng ban** *(chỉ admin)* | Tạo tài khoản, gán phòng ban, cấp **quyền duyệt**, cấp **quyền xem công nợ**, cấp/thu **khoá API** cho khách. |

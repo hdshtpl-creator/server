@@ -831,6 +831,68 @@ export interface KhoTang {
   limit: number;
 }
 
+/* Thư mục hồ sơ khách nhìn từ phía đĩa (18/09/2026): mỗi thư mục khách một
+   dòng kể cả trống, số tệp theo nhãn học, và từng tệp khi mở dòng. */
+export type KhoTinhTrangKhach =
+  | 'trong'
+  | 'bo_qua'
+  | 'khong_doc_duoc'
+  | 'chua_hoc'
+  | 'cho_duyet'
+  | 'mot_phan'
+  | 'da_hoc';
+
+export interface KhoDemTrangThai {
+  da_hoc: number;
+  canh_bao: number;
+  cho_duyet: number;
+  chua_hoc: number;
+  loi: number;
+  khong_ho_tro: number;
+}
+
+export interface KhoThuMucKhach {
+  ten: string;
+  /** Đường dẫn tương đối trong kho, dấu / xuôi. */
+  path: string;
+  /** Mã khách tách từ tên thư mục ('1729. Tên' → '1729'); null = không tách được. */
+  ma: string | null;
+  ten_khach: string | null;
+  /** Có bản ghi khách trong hệ thống chưa (chỉ sinh khi đã học ≥ 1 tệp). */
+  client_id: number | null;
+  client_name: string | null;
+  /** Lý do bộ quét bỏ qua cả thư mục; null = thư mục hợp lệ. */
+  ly_do: string | null;
+  so_file: number;
+  dem: KhoDemTrangThai;
+  tinh_trang: KhoTinhTrangKhach;
+}
+
+export interface KhoDanhSachKhach {
+  /** Các ngăn 'Hồ sơ khách hàng' ở gốc kho. */
+  goc: string[];
+  tong: {
+    tong_thu_muc: number;
+    tong_tep: number;
+    theo_tinh_trang: Record<KhoTinhTrangKhach, number>;
+    dem: KhoDemTrangThai;
+  };
+  thu_muc: KhoThuMucKhach[];
+  tong_khop: number;
+  offset: number;
+  limit: number;
+}
+
+export interface KhoTepKhach extends KhoTapTin {
+  /** Thư mục con (trong thư mục khách) chứa tệp; '' = nằm ngay trong thư mục khách. */
+  thu_muc_con: string;
+}
+
+export interface KhoTepTrongThuMucKhach extends KhoThuMucKhach {
+  tap_tin: KhoTepKhach[];
+  so_thu_muc_con: number;
+}
+
 export interface KhoKetQuaTim {
   document_id: number;
   title: string;

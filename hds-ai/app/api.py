@@ -1715,6 +1715,24 @@ class KhoGoBody(BaseModel):
     document_id: int
 
 
+@app.get("/kho/ho-so-khach")
+def kho_ho_so_khach(user=Depends(current_user), q: str = "", loc: str = "",
+                    offset: int = 0, limit: int = 100):
+    """MỌI thư mục khách trên đĩa (kể cả trống) + số tệp theo nhãn học — cái
+    nhìn từ phía kho; tab 360° chỉ thấy khách đã có tài liệu học xong."""
+    require_reviewer(user)
+    return _kho_hoac_400(kho.danh_sach_thu_muc_khach, q=(q or "")[:200],
+                         loc=(loc or "")[:30], offset=max(0, offset),
+                         limit=max(1, min(limit, 500)))
+
+
+@app.get("/kho/ho-so-khach/tep")
+def kho_ho_so_khach_tep(user=Depends(current_user), path: str = ""):
+    """Từng tệp trong MỘT thư mục khách (đệ quy) kèm nhãn học."""
+    require_reviewer(user)
+    return _kho_hoac_400(kho.tep_trong_thu_muc_khach, path)
+
+
 @app.post("/kho/go")
 def kho_go(body: KhoGoBody, user=Depends(current_user)):
     """Gỡ tài liệu khỏi kho: chỉ admin — bot ngừng dùng ngay, file chuyển sang
