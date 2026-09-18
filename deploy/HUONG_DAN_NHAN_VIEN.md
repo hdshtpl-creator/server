@@ -199,6 +199,31 @@ Quy trình: **Tạo bản nháp** (chọn mẫu, chọn tài liệu nguồn, ghi
 ---
 
 
+### 5.1 Điền CẢ BỘ HỒ SƠ từ một tờ khai *(mới 18/09/2026)*
+
+Dùng khi công ty đã có sẵn **bộ file Word mẫu** đi cùng nhau (ví dụ bộ đăng ký doanh nghiệp: giấy đề nghị + điều lệ + danh sách cổ đông + giấy uỷ quyền…). Bộ do người có quyền duyệt tải lên ở **Quản trị → Bộ mẫu hồ sơ**.
+
+Bấm **Tạo bản nháp** → ô **Mẫu soạn thảo** nay có hai nhóm: *Mẫu phương pháp* (AI soạn bản nháp có nguồn, như mục 5) và **Bộ mẫu hồ sơ** (các bộ .docx đã tải lên). Chọn một bộ là màn hình chuyển sang luồng điền cả bộ. Cũng mở được từ **Quản trị → Bộ mẫu hồ sơ → Điền bộ**.
+
+Ba bước:
+
+1. **Tải tờ khai (.docx)** — máy gom mọi chỗ trống `{{…}}` của cả bộ thành MỘT bảng, mỗi dòng kèm câu trích từ file mẫu để biết ô đó là gì. Chỗ trống trùng nhau giữa các file chỉ hỏi một lần.
+2. **Điền cột "Giá trị điền"** rồi **tải lên**. Không sửa cột mã `{{…}}` — đó là chỗ máy đọc lại. Tải lên chính file "tổng hợp thông tin" của bộ (gõ đè lên các chỗ trống) cũng được: máy so với bản mẫu gốc và bóc ra phần bạn đã gõ.
+3. **Điền N file của bộ** — mỗi file mẫu ra một file kết quả, **giữ nguyên định dạng Word gốc**.
+
+Sau khi xong, mỗi file có ba nút: **Xem nhanh** (đọc nội dung ngay tại chỗ, dòng vàng là chỗ trống chưa có dữ liệu), **PDF** (xem đúng định dạng Word), **Tải**. Từ 2 file trở lên có thêm **Tải cả bộ (.zip)**.
+
+Điểm cần biết:
+
+- Đường chính là **tất định**: máy chép đúng những gì bạn gõ, không hỏi AI. Ô nào không có trong tờ khai thì báo **"còn thiếu"** chứ không tự bịa.
+- Ô còn thiếu hiện thành ô nhập ngay dưới kết quả — điền rồi bấm **Điền lại với thông tin vừa bổ sung**.
+- Tải kèm hồ sơ rời (CCCD, giấy phép, CV) và để tick **"Cho AI đoán các ô còn trống"** thì AI lấy nốt các ô thiếu từ đó; những giá trị này mang dấu **⚠** trong bảng đối chiếu — phải soát lại. Bỏ tick nếu muốn hoàn toàn tất định.
+- Tờ khai của bộ khác tải nhầm vào đây sẽ bị bỏ qua (máy báo "bỏ qua N ô không thuộc bộ này"), không lẳng lặng điền sai.
+- File kết quả **tự xoá sau 24 giờ**, không vào kho tri thức.
+
+---
+
+
 **Mới 15/09/2026 ở tab này:**
 
 - **So sánh phiên bản** (khi bản nháp có ≥ 2 phiên bản): hai cột bản cũ / bản mới, phần xoá gạch đỏ,
@@ -231,6 +256,7 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 | **Duyệt nhãn tài liệu** | **Hàng chờ quan trọng nhất.** Gán loại + mức truy cập + khách sở hữu rồi **Duyệt và nạp vào AI**. Có nút **Xem & sửa nội dung trích xuất** để sửa tay chỗ OCR đọc sai *trước khi* duyệt. |
 | **Kho tài liệu đã học** | Toàn bộ tài liệu đang dùng + thẻ **Quét kho tài liệu trên máy chủ** (quét lần cuối, mới học / cập nhật / **chưa học được**). |
 | **Mẫu phương pháp** | Dạy AI quy trình xử lý chuẩn theo loại vụ việc. |
+| **Bộ mẫu hồ sơ** | Nhóm các file Word (.docx) mẫu đi cùng nhau. Tạo bộ → tải file mẫu vào bộ (đặt chỗ trống dạng `{{TÊN_Ô}}` trong Word để điền chính xác) → nút **Điền bộ** để điền cả bộ từ một tờ khai (mục 5.1). Bộ nằm NGOÀI kho tri thức: không học, không duyệt nhãn. |
 
 > **Duyệt nhãn là việc bảo mật, không phải thủ tục.** Gán nhầm khách sở hữu = lộ dữ liệu chéo giữa hai khách hàng. Với hồ sơ khách, kiểm tra kỹ trước khi bấm duyệt.
 >

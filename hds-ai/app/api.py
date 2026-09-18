@@ -2487,9 +2487,10 @@ _CONVERT_SUFFIXES = {".docx", ".doc", ".xlsx", ".csv"}
 DATA_WORK = Path(os.getenv("DATA_WORK", "./data/work"))
 
 
-def _preview_pdf(resolved: Path, doc_id: int) -> Path:
+def _preview_pdf(resolved: Path, cache_key) -> Path:
     """Bản PDF xem trước của một file Office, sinh một lần rồi dùng lại.
 
+    cache_key: id tài liệu trong kho, hoặc "fill-<token>" cho file vừa điền.
     Cache theo mtime: file gốc đổi (Drive đồng bộ bản mới) thì sinh lại.
     LibreOffice đã có sẵn trên máy chủ (update.sh cài libreoffice-writer cho
     khâu đọc .doc) — máy dev thiếu thì trả 409 để giao diện lùi về nút Tải về.
@@ -2500,7 +2501,7 @@ def _preview_pdf(resolved: Path, doc_id: int) -> Path:
 
     out_dir = DATA_WORK / "preview"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{doc_id}.pdf"
+    out = out_dir / (re.sub(r"[^A-Za-z0-9_-]", "_", str(cache_key)) + ".pdf")
     try:
         if out.exists() and out.stat().st_mtime >= resolved.stat().st_mtime:
             return out
@@ -2527,6 +2528,21 @@ def _preview_pdf(resolved: Path, doc_id: int) -> Path:
                                      "trước — hãy dùng nút Tải về.")
         _shutil.move(str(produced), str(out))
     return out
+
+
+def _don_preview_fill(now: float | None = None):
+    """File đã điền là hàng tạm 24 giờ — bản PDF xem trước của nó cũng vậy,
+    không thì thư mục preview phình theo mỗi lượt điền bộ."""
+    root = DATA_WORK / "preview"
+    if not root.exists():
+        return
+    cutoff = (now or time.time()) - 24 * 3600
+    for child in root.glob("fill-*.pdf"):
+        try:
+            if child.stat().st_mtime < cutoff:
+                child.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 @app.get("/files/{doc_id}/preview")
@@ -2754,6 +2770,190 @@ def bo_mau_download_file(bo_id: int, file_id: int, user=Depends(current_user)):
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user["id"], "bo_mau_download_file", "bo_mau_file", file_id, {})
     return FileResponse(path, filename=row["ten_file"])
+
+
+# ---------- 8a4. ĐIỀN CẢ BỘ TỪ TỜ KHAI (18/09/2026) ----------
+# Nhân viên tải TỜ KHAI về, điền, tải lên → máy điền vào từng file của bộ rồi
+# trả bản XEM NHANH ngay trên giao diện (app/bo_mau_dien.py). Dùng bộ mẫu là
+# quyền của mọi vai nội bộ trong phạm vi — chỉ TẠO/SỬA bộ mới cần can_review.
+MAX_FILE_DIEN = 10
+
+
+@app.get("/bo-mau/{bo_id}/cho-trong")
+def bo_mau_cho_trong(bo_id: int, user=Depends(current_user)):
+    """Mọi chỗ trống {{…}} của bộ, gộp theo khoá — giao diện dựng form gõ tay
+    và đối chiếu sau khi điền."""
+    require(user, INTERNAL_ROLES)
+    from app import bo_mau_dien
+    bo = _bo_mau_or_404(bo_id, user)
+    dong, loi = bo_mau_dien.quet_bo(bo)
+    return {"bo": {"id": bo["id"], "ten": bo["ten"]}, "items": dong,
+            "loi_mau": loi, "so_file": len(bo.get("files") or [])}
+
+
+@app.get("/bo-mau/{bo_id}/to-khai")
+def bo_mau_to_khai(bo_id: int, user=Depends(current_user)):
+    """Tải TỜ KHAI THÔNG TIN (.docx) sinh từ mọi chỗ trống của bộ."""
+    require(user, INTERNAL_ROLES)
+    from app import bo_mau_dien
+    from app.drafting import safe_export_name
+    bo = _bo_mau_or_404(bo_id, user)
+    dong, _loi = bo_mau_dien.quet_bo(bo)
+    if not dong:
+        raise HTTPException(409, "Các file mẫu trong bộ chưa có chỗ trống dạng "
+                                 "{{TÊN_Ô}} nên chưa dựng được tờ khai. Mở file "
+                                 "Word, đặt chỗ trống rồi tải lại vào bộ.")
+    payload = bo_mau_dien.to_khai_bytes(bo, dong)
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "bo_mau_to_khai", "bo_mau", bo_id,
+                 {"so_o": len(dong)})
+    name = safe_export_name(f"To khai - {bo['ten']}", "docx")
+    return Response(
+        content=payload,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition":
+                 f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
+@app.post("/bo-mau/{bo_id}/dien")
+async def bo_mau_dien_ca_bo(bo_id: int,
+                            files: list[UploadFile] = File(default=[]),
+                            file_ids: str = Form(""),
+                            gia_tri: str = Form(""),
+                            dung_ai: bool = Form(True),
+                            model: str = Form(""),
+                            user=Depends(current_user)):
+    """Điền dữ liệu vào TỪNG file của bộ.
+
+    files: tờ khai đã điền / bản sao file mẫu đã gõ đè / hồ sơ rời (CCCD, giấy
+    phép — chỉ dùng cho bước AI đoán ô còn trống). file_ids: JSON mảng id file
+    trong bộ cần điền (rỗng = cả bộ). gia_tri: JSON {khoá ô: giá trị} người
+    dùng gõ tay, thắng mọi nguồn khác."""
+    import tempfile
+
+    require(user, INTERNAL_ROLES)
+    from app import bo_mau_dien
+    from app.ingest import (ATTACHMENT_EXTENSIONS, ExtractionError,
+                            extract_text_with_metadata)
+    from fastapi.concurrency import run_in_threadpool
+
+    bo = _bo_mau_or_404(bo_id, user)
+    files = files or []
+    if len(files) > MAX_FILE_DIEN:
+        raise HTTPException(400, f"Mỗi lượt điền tối đa {MAX_FILE_DIEN} file tải lên")
+
+    def _json_or_400(raw, kieu, ten):
+        if not (raw or "").strip():
+            return kieu()
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            raise HTTPException(422, f"{ten} không phải JSON hợp lệ")
+        if not isinstance(value, kieu):
+            raise HTTPException(422, f"{ten} phải là {kieu.__name__}")
+        return value
+
+    chon_file = [int(x) for x in _json_or_400(file_ids, list, "file_ids")
+                 if isinstance(x, (int, float, str)) and str(x).strip().isdigit()]
+    co_trong_bo = {int(f["id"]) for f in (bo.get("files") or [])}
+    if chon_file and not (set(chon_file) & co_trong_bo):
+        # Không có id nào thuộc bộ: trả rỗng thì người dùng tưởng bộ hỏng.
+        raise HTTPException(400, "Các file được chọn không thuộc bộ mẫu này "
+                                 "(bộ vừa bị sửa?) — tải lại trang rồi chọn lại.")
+    tay = {str(k): v for k, v in
+           _json_or_400(gia_tri, dict, "gia_tri").items()}
+    if len(tay) > bo_mau_dien.MAX_DONG_TO_KHAI:
+        raise HTTPException(422, "Quá nhiều ô gõ tay trong một lượt")
+
+    limit = MAX_UPLOAD_MB * 1024 * 1024
+    uploads, doc_loi = [], []
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        for f in files:
+            safe = _safe_filename(f.filename or "ho_so")
+            suffix = Path(safe).suffix.lower()
+            if suffix not in ATTACHMENT_EXTENSIONS:
+                doc_loi.append({"ten_file": safe,
+                                "loi": f"chưa đọc được định dạng {suffix or '(không rõ)'}"})
+                await f.close()
+                continue
+            dest = Path(tmp_dir) / f"{uuid.uuid4().hex[:8]}{suffix}"
+            size = 0
+            try:
+                with dest.open("wb") as out:
+                    while chunk := await f.read(1024 * 1024):
+                        size += len(chunk)
+                        if size > limit:
+                            raise HTTPException(413, f"«{safe}» vượt quá {MAX_UPLOAD_MB} MB")
+                        out.write(chunk)
+            finally:
+                await f.close()
+            van_ban = ""
+            try:
+                extraction = await run_in_threadpool(extract_text_with_metadata, dest,
+                                                     ATTACHMENT_EXTENSIONS)
+                van_ban = extraction.text or ""
+            except ExtractionError as e:
+                # .docx vẫn mở được bằng python-docx để bóc tờ khai — chỉ mất
+                # phần văn bản cho bước AI.
+                doc_loi.append({"ten_file": safe, "loi": f"{e.message} {e.hint}".strip()})
+            uploads.append({"ten_file": safe, "duong_dan": dest, "van_ban": van_ban})
+
+        try:
+            ket_qua = await run_in_threadpool(
+                bo_mau_dien.chay, bo, uploads=uploads, file_ids=chon_file,
+                gia_tri_tay=tay, dung_ai=bool(dung_ai),
+                model=(model or "").strip() or None)
+        except bo_mau_dien.LoiDien as e:
+            raise HTTPException(400, str(e))
+
+    ket_qua["loi_tai_len"] = doc_loi
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "bo_mau_dien", "bo_mau", bo_id,
+                 {"so_file_tai_len": len(uploads),
+                  "so_file_dien": len([r for r in ket_qua["files"] if r["token"]]),
+                  "so_o_dien": len(ket_qua["da_dien"]),
+                  "so_o_thieu": len(ket_qua["con_thieu"]),
+                  "dung_ai": bool(dung_ai)})
+    return ket_qua
+
+
+@app.get("/template-fills/{token}/xem")
+def template_fill_xem(token: str, user=Depends(current_user)):
+    """XEM NHANH nội dung file đã điền ngay trên giao diện (không tải về, không
+    cần LibreOffice) — người soát đối chiếu số liệu trước khi lấy file."""
+    require(user, INTERNAL_ROLES)
+    from app import bo_mau_dien, template_fill as _tf
+    path = _tf.find_fill_file(token)
+    if path is None:
+        raise HTTPException(404, "File đã điền không còn trên máy chủ (quá 24 "
+                                 "giờ hoặc token sai).")
+    if path.suffix.lower() != ".docx":
+        raise HTTPException(409, "Gói .zip không có bản xem nhanh — hãy tải về.")
+    try:
+        noi_dung = bo_mau_dien.xem_nhanh(path)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(409, "Không đọc được nội dung file này để xem nhanh "
+                                 "— hãy tải về.")
+    return {"ten_file": path.name, **noi_dung}
+
+
+@app.get("/template-fills/{token}/preview")
+def template_fill_preview(token: str, user=Depends(current_user)):
+    """Bản PDF xem trước của file đã điền — giữ nguyên định dạng Word (cần
+    LibreOffice trên máy chủ; thiếu thì 409 để giao diện lùi về xem nhanh)."""
+    require(user, INTERNAL_ROLES)
+    from app import template_fill as _tf
+    path = _tf.find_fill_file(token)
+    if path is None:
+        raise HTTPException(404, "File đã điền không còn trên máy chủ (quá 24 "
+                                 "giờ hoặc token sai).")
+    if path.suffix.lower() != ".docx":
+        raise HTTPException(409, "Gói .zip không có bản xem trước — hãy tải về.")
+    _don_preview_fill()
+    pdf = _preview_pdf(path, f"fill-{token}")
+    return FileResponse(pdf, media_type="application/pdf",
+                        filename=f"{path.stem}.pdf",
+                        content_disposition_type="inline")
 
 
 # ---------- 8b. CÀI ĐẶT AI (phong cách tư vấn, bản đồ Drive) ----------

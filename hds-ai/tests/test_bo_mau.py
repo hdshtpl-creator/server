@@ -176,6 +176,36 @@ class PromptHoiThoaiTests(unittest.TestCase):
         prompt, _ = df.build_plan_prompt("tạo các file", [], None, max_files=5)
         self.assertIn("Tối đa 5 file", prompt)
 
+    def test_plan_prompt_bam_can_cu_tu_kho(self):
+        """Có căn cứ từ kho: prompt phải ĐƯA căn cứ vào và buộc bám theo.
+        Không có: phải buộc model NÓI RA là tự kê (18/09/2026)."""
+        prompt, _ = df.build_plan_prompt(
+            "tạo bộ hồ sơ đăng ký doanh nghiệp cho khách A", [], None,
+            can_cu="- Theo «Nghị định 01/2021»: hồ sơ gồm giấy đề nghị, điều lệ…")
+        self.assertIn("CĂN CỨ TỪ KHO TÀI LIỆU", prompt)
+        self.assertIn("Nghị định 01/2021", prompt)
+        self.assertIn("bám theo phần CĂN CỨ", prompt)
+
+        trong, _ = df.build_plan_prompt("tạo bộ hồ sơ cho khách A", [], None)
+        self.assertNotIn("CĂN CỨ TỪ KHO TÀI LIỆU", trong)
+        self.assertIn("Kho tài liệu chưa có danh mục", trong)
+
+    def test_cau_hoi_can_cu_hoi_thanh_phan_ho_so(self):
+        q = df.cau_hoi_can_cu("Tạo bộ hồ sơ thành lập công ty cho khách A")
+        self.assertIn("thành lập công ty", q)
+        self.assertIn("thành phần hồ sơ", q)
+
+    def test_bo_co_san_vao_prompt_de_khoi_soan_lai(self):
+        mo_ta = df.mo_ta_bo_co_san([
+            {"ten": "Thành lập công ty", "so_file": 7,
+             "files": [{"ten_file": f"{i}.docx"} for i in range(8)]}])
+        self.assertIn("«Thành lập công ty» (7 file", mo_ta)
+        self.assertIn("…", mo_ta)          # cắt bớt sau 6 tên file
+        prompt, _ = df.build_plan_prompt("tạo bộ hồ sơ", [], None,
+                                         bo_co_san=mo_ta)
+        self.assertIn("BỘ MẪU HỒ SƠ SẴN CÓ", prompt)
+        self.assertIn("nêu tên bộ đó trong ghi_chu", prompt)
+
     def test_draft_prompt_co_du_lieu_hoi_thoai(self):
         prompt, _ = df.build_draft_prompt("BBNT", "", "nghiệm thu", [], "",
                                           du_lieu_hoi_thoai="- Người dùng: số HĐ 05")

@@ -15,8 +15,10 @@ import {
   FileText,
   Pencil,
   Check,
+  Sparkles,
   X,
 } from 'lucide-react';
+import { DienBoMauPanel } from '../drafts/DienBoMauPanel';
 
 /**
  * Quản trị → Bộ mẫu hồ sơ: tạo bộ, tải các file .docx mẫu vào bộ, xem chỗ
@@ -43,6 +45,9 @@ export const BoMauTab: React.FC = () => {
   const [editTen, setEditTen] = useState('');
   const [editMoTa, setEditMoTa] = useState('');
   const [editDept, setEditDept] = useState<string>('');
+  // Bộ đang được ĐIỀN (tải tờ khai → điền → tải lên) — cùng panel với tab Soạn
+  // tài liệu, để người vừa tải bộ lên dùng thử ngay tại chỗ.
+  const [dienBo, setDienBo] = useState<BoMau | null>(null);
   const fileInputs = useRef<Record<number, HTMLInputElement | null>>({});
 
   const fetchAll = async () => {
@@ -335,6 +340,16 @@ export const BoMauTab: React.FC = () => {
                       )}
                     </button>
                     <div className="flex items-center gap-1 shrink-0">
+                      {!isEditing && bo.so_file > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDienBo(bo)}
+                          className="px-2.5 py-1.5 rounded-lg bg-hds-navy text-hds-gold text-[11px] font-bold flex items-center gap-1.5"
+                          title="Tải tờ khai, điền rồi tải lên — máy điền vào từng file của bộ"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" /> Điền bộ
+                        </button>
+                      )}
                       {coQuyen && (isEditing ? (
                         <>
                           <button
@@ -484,6 +499,34 @@ export const BoMauTab: React.FC = () => {
           )}
         </div>
       </div>
+
+      {dienBo && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setDienBo(null)}
+          role="presentation"
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-3xl max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl"
+          >
+            <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-base">Điền bộ hồ sơ «{dienBo.ten}»</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Điền dữ liệu vào các file Word của bộ, giữ nguyên định dạng gốc.
+                </p>
+              </div>
+              <button type="button" onClick={() => setDienBo(null)} aria-label="Đóng">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+            <div className="p-5">
+              <DienBoMauPanel bo={dienBo} onClose={() => setDienBo(null)} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

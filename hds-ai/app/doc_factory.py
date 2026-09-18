@@ -165,13 +165,25 @@ def user_history_text(history) -> str:
 # Kế hoạch: hỏi model cần tạo những file nào
 # ---------------------------------------------------------------------------
 def build_plan_prompt(question: str, attachments, kho_template_title: str | None,
-                      du_lieu_hoi_thoai: str = "", max_files: int = 0):
-    """attachments: [(filename, text, has_docx)] — has_docx = còn bản gốc làm khuôn."""
+                      du_lieu_hoi_thoai: str = "", max_files: int = 0,
+                      can_cu: str = "", bo_co_san: str = ""):
+    """attachments: [(filename, text, has_docx)] — has_docx = còn bản gốc làm khuôn.
+
+    can_cu: trích từ KHO TÀI LIỆU ĐÃ HỌC nói bộ hồ sơ loại này gồm những giấy
+    tờ gì (xem can_cu_ho_so). Thiếu nó, model kê danh mục theo trí nhớ và sót
+    đúng những tờ mà quy định bắt buộc.
+    bo_co_san: các BỘ MẪU sẵn có — có bộ khớp thì bảo người dùng dùng bộ, đừng
+    soạn mới từ đầu."""
     lines = []
     for fname, text, has_docx in attachments:
         tag = " (CÓ BẢN .docx GỐC — dùng được làm khuôn)" if has_docx else ""
         body = (text or "").strip()[:MAX_ATTACH_PROMPT_CHARS]
         lines.append(f"### FILE ĐÍNH KÈM «{fname}»{tag}\n{body}")
+    if can_cu:
+        lines.append("### CĂN CỨ TỪ KHO TÀI LIỆU ĐÃ HỌC (bộ hồ sơ loại này gồm "
+                     "những giấy tờ gì)\n" + can_cu)
+    if bo_co_san:
+        lines.append("### BỘ MẪU HỒ SƠ SẴN CÓ TRONG HỆ THỐNG\n" + bo_co_san)
     if du_lieu_hoi_thoai:
         lines.append("### DỮ LIỆU TỪ HỘI THOẠI (những gì hai bên đã trao đổi)\n"
                      + du_lieu_hoi_thoai)
@@ -208,6 +220,15 @@ def build_plan_prompt(question: str, attachments, kho_template_title: str | None
         "phải lấy từ file đính kèm, hội thoại hoặc câu lệnh; thiếu thì ghi vào "
         "ghi_chu, không bịa.\n"
         "- Ngày tháng chưa biết thì để trống và ghi chú, không tự đặt.\n"
+        + ("- DANH MỤC FILE phải bám theo phần CĂN CỨ TỪ KHO TÀI LIỆU ở trên: "
+           "giấy tờ nào căn cứ nêu tên thì giữ ĐÚNG tên gọi đó và đủ số lượng; "
+           "giấy tờ bạn thêm ngoài căn cứ phải ghi rõ trong ghi_chu là do bạn "
+           "tự thêm. Căn cứ không nói gì về loại hồ sơ này thì ghi vào ghi_chu "
+           "rằng kho chưa có danh mục, đừng im lặng tự kê.\n" if can_cu else
+           "- Kho tài liệu chưa có danh mục cho loại hồ sơ này — hãy ghi điều "
+           "đó vào ghi_chu để người dùng biết danh sách file là do bạn tự kê.\n")
+        + ("- Có BỘ MẪU sẵn khớp yêu cầu thì nêu tên bộ đó trong ghi_chu để "
+           "người dùng dùng bộ (chính xác hơn soạn mới).\n" if bo_co_san else "")
     )
     return prompt, system
 
@@ -249,6 +270,67 @@ def plan_tu_bo_mau(bo: dict, file_ids=None, max_files: int = 0):
     if max_files and max_files > 0:
         files = files[:max_files]
     return files
+
+
+# ---------------------------------------------------------------------------
+# Căn cứ từ kho: bộ hồ sơ loại này gồm những giấy tờ gì
+# ---------------------------------------------------------------------------
+# Không có bộ mẫu thì trước 18/09/2026 model tự kê danh mục theo trí nhớ —
+# "hồ sơ đăng ký doanh nghiệp" ra 3 tờ trong khi nghị định đòi 7. Giờ hỏi KHO
+# trước (đúng những tài liệu công ty đã học) rồi mới để model kê.
+CAN_CU_TOP_K = 8
+CAN_CU_BUDGET = 6_000
+CAN_CU_MOI_DOAN = 1_200
+MAX_BO_CO_SAN = 20
+
+
+def cau_hoi_can_cu(question: str) -> str:
+    """Câu tra kho cho DANH MỤC hồ sơ — thêm mấy chữ "gồm những giấy tờ gì" để
+    vector kéo đúng đoạn liệt kê thành phần hồ sơ, không phải đoạn nói về nội
+    dung từng giấy."""
+    q = " ".join((question or "").split())[:300]
+    return (f"{q} — hồ sơ gồm những giấy tờ gì, thành phần hồ sơ, danh mục tài "
+            "liệu cần chuẩn bị")
+
+
+def can_cu_ho_so(question, *, dept_ids=None, is_banqt=False, can_finance=False,
+                 top_k: int = CAN_CU_TOP_K):
+    """(khối căn cứ cho prompt, các đoạn đã dùng) từ kho tài liệu đã học.
+
+    Ranh giới quyền vẫn là RLS của chính người hỏi (dept_ids/is_banqt/
+    can_finance) — y hệt một lượt chat thường, không mở thêm cửa nào."""
+    from app import rag  # nạp trễ — rag nạp module này trễ, tránh vòng import
+    try:
+        chunks = rag.retrieve(cau_hoi_can_cu(question), "internal",
+                              dept_ids=dept_ids, is_banqt=is_banqt,
+                              can_finance=can_finance, top_k=top_k,
+                              neighbours=False)
+    except Exception:  # noqa: BLE001 — kho lỗi thì vẫn tạo được file, chỉ mất căn cứ
+        return "", []
+    parts, dung, tong = [], [], 0
+    for c in chunks:
+        body = " ".join((c.get("content") or "").split())[:CAN_CU_MOI_DOAN]
+        if not body:
+            continue
+        if tong + len(body) > CAN_CU_BUDGET:
+            break
+        parts.append(f"- Theo «{c.get('title') or '(không tiêu đề)'}»: {body}")
+        dung.append(c)
+        tong += len(body)
+    return "\n".join(parts), dung
+
+
+def mo_ta_bo_co_san(sets) -> str:
+    """Các bộ mẫu người dùng đang được xem, kèm vài tên file — để model biết
+    công ty ĐÃ có sẵn bộ nào thay vì soạn mới."""
+    lines = []
+    for s in (sets or [])[:MAX_BO_CO_SAN]:
+        ten_file = [f["ten_file"] for f in (s.get("files") or [])][:6]
+        duoi = "…" if len(s.get("files") or []) > 6 else ""
+        lines.append(f"- «{s.get('ten')}» ({s.get('so_file', 0)} file"
+                     + (f": {', '.join(ten_file)}{duoi}" if ten_file else "")
+                     + ")")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +465,7 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
 
     # ---- Bộ mẫu: chọn trên giao diện, hoặc gọi tên trong câu ---------------
     bo = None
+    visible = []
     if bo_mau_id:
         bo = bo_mau_mod.get_set(bo_mau_id, role=role_level, dept_ids=dept_ids,
                                 is_banqt=is_banqt)
@@ -485,6 +568,7 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
 
     # ---- Bước 1: kế hoạch ------------------------------------------------
     ghi_chu_plan = ""
+    can_cu_chunks = []
     if bo is not None:
         note(f"Đang lấy danh sách file trong bộ mẫu «{bo['ten']}»…")
         plan_files = plan_tu_bo_mau(bo, bo_mau_file_ids, tran)
@@ -492,10 +576,18 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
             return _fail("Không có file nào trong bộ mẫu được chọn để điền. Bỏ tích "
                          "chọn từng file hoặc chọn lại bộ nhé.")
     else:
+        # Không có bộ mẫu: hỏi KHO trước xem loại hồ sơ này gồm những giấy tờ
+        # gì, rồi mới để model kê danh sách — "bot phải biết cần file gì theo
+        # toàn bộ tài liệu đã học" (chủ dự án 18/09/2026).
+        note("Đang tra kho xem hồ sơ này gồm những giấy tờ gì…")
+        can_cu_text, can_cu_chunks = can_cu_ho_so(
+            question, dept_ids=dept_ids, is_banqt=is_banqt,
+            can_finance=can_finance)
         note("Đang lên danh sách file cần tạo…")
         plan_prompt, plan_system = build_plan_prompt(
             question, attachments, kho_doc[0] if kho_doc else None,
-            du_lieu_hoi_thoai, tran)
+            du_lieu_hoi_thoai, tran, can_cu=can_cu_text,
+            bo_co_san=mo_ta_bo_co_san(visible))
         raw_plan = llm_full(plan_prompt, plan_system, 0.0)
         try:
             plan_files, ghi_chu_plan = parse_plan(raw_plan, tran)
@@ -659,6 +751,23 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
         else:
             lines.append(f"- ~~{ten_file}~~ — {mo_ta}")
 
+    # Danh sách file lấy ở đâu ra: nói thẳng tên tài liệu trong kho đã dựa
+    # vào, để người soát biết danh mục là có căn cứ hay do model tự kê.
+    can_cu_titles = []
+    for c in can_cu_chunks:
+        ten = c.get("title") or "(không tiêu đề)"
+        if ten not in can_cu_titles:
+            can_cu_titles.append(ten)
+    if can_cu_titles:
+        lines.append("\n**Danh sách file dựa trên kho tài liệu đã học:** "
+                     + ", ".join(f"«{t}»" for t in can_cu_titles[:6])
+                     + (" …" if len(can_cu_titles) > 6 else "")
+                     + " — xem panel nguồn bên phải để mở từng tài liệu.")
+    elif bo is None:
+        lines.append("\n**Lưu ý:** kho tài liệu chưa có danh mục cho loại hồ sơ "
+                     "này, danh sách file trên là do AI tự kê — hãy đối chiếu "
+                     "với quy định trước khi dùng.")
+
     review_lines = []
     if template_warning:
         review_lines.append(f"- {template_warning}")
@@ -691,6 +800,12 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
     } for ten_file, token, out_path, _m, _w, _d in results if token]
     if zip_evidence:
         evidence.insert(0, zip_evidence)
+    if can_cu_chunks:
+        try:
+            from app import rag  # nạp trễ — tránh vòng import
+            evidence.extend(rag.format_sources(can_cu_chunks))
+        except Exception:  # noqa: BLE001 — thiếu panel nguồn không được mất file
+            pass
 
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user_id, "doc_factory", "conversation", conversation_id,

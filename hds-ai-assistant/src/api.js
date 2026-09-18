@@ -1567,6 +1567,138 @@ export async function downloadBoMauFile(boId, fileId, filename) {
   triggerDownload(blob, filename || (m ? decodeURIComponent(m[1]) : 'mau.docx'));
 }
 
+// ==================== ĐIỀN CẢ BỘ TỪ TỜ KHAI (18/09/2026) ====================
+// Nhân viên tải TỜ KHAI về, điền, tải lên → máy điền vào từng file của bộ rồi
+// trả bản xem nhanh ngay trên giao diện.
+
+// GET /bo-mau/{id}/cho-trong — mọi ô {{…}} của bộ (gộp trùng theo khoá).
+export async function getBoMauChoTrong(boId) {
+  if (useMockBackend) {
+    const bo = mockState.boMau.find((b) => b.id === toIntOrNull(boId));
+    return {
+      bo: { id: toIntOrNull(boId), ten: bo ? bo.ten : 'Bộ mẫu' },
+      items: [
+        { khoa: 'ten_ben_a', literal: '{{ten_ben_a}}', goi_y: 'Bên A',
+          files: ['01 Hop dong.docx'], so_lan: 2 },
+      ],
+      loi_mau: [],
+      so_file: bo ? bo.so_file : 0,
+    };
+  }
+  return request(`/bo-mau/${toIntOrNull(boId)}/cho-trong`);
+}
+
+// GET /bo-mau/{id}/to-khai — tải file TỜ KHAI THÔNG TIN (.docx) của bộ.
+export async function downloadBoMauToKhai(boId, filename) {
+  if (useMockBackend) {
+    triggerDownload(new Blob(['Bản demo — tờ khai sẽ tải về từ máy chủ thật.'],
+                             { type: 'text/plain' }), filename || 'to-khai.txt');
+    return;
+  }
+  const res = await fetch(`${apiBaseUrl}/bo-mau/${toIntOrNull(boId)}/to-khai`, {
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(text, res.status));
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  triggerDownload(blob, filename || (m ? decodeURIComponent(m[1]) : 'to-khai.docx'));
+}
+
+// POST /bo-mau/{id}/dien — multipart: tờ khai đã điền / hồ sơ rời + ô gõ tay.
+export async function dienBoMau({ boId, files = [], fileIds = [], giaTri = {},
+                                  dungAi = true, onProgress } = {}) {
+  if (useMockBackend) {
+    await new Promise((r) => setTimeout(r, 400));
+    if (onProgress) onProgress(100);
+    const bo = mockState.boMau.find((b) => b.id === toIntOrNull(boId));
+    const dsFile = (bo ? bo.files : []).map((f, i) => ({
+      file_id: f.id, ten_file: f.ten_file, ten_ket_qua: f.ten_file,
+      token: `mock${i}`, so_thay: 3, loi: null,
+      da_dien: [{ literal: '{{ten_ben_a}}', gia_tri: 'Công ty TNHH ABC', so_cho: 1,
+                  nguon: 'tờ khai «to-khai.docx»' }],
+      con_trong: [],
+    }));
+    return {
+      bo: { id: toIntOrNull(boId), ten: bo ? bo.ten : 'Bộ mẫu' },
+      files: dsFile, zip_token: dsFile.length > 1 ? 'mockzip' : null,
+      so_o: 1,
+      da_dien: [{ khoa: 'ten_ben_a', literal: '{{ten_ben_a}}',
+                  gia_tri: 'Công ty TNHH ABC', nguon: 'tờ khai «to-khai.docx»' }],
+      con_thieu: [], doc_file: [], loi_mau: [], loi_tai_len: [],
+      gia_tri_thua: 0, ghi_chu_ai: '',
+    };
+  }
+  const form = new FormData();
+  Array.from(files || []).forEach((f) => form.append('files', f));
+  form.append('file_ids', JSON.stringify((fileIds || []).map((x) => Number(x))));
+  form.append('gia_tri', JSON.stringify(giaTri || {}));
+  form.append('dung_ai', dungAi ? 'true' : 'false');
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${apiBaseUrl}/bo-mau/${toIntOrNull(boId)}/dien`);
+    if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+    xhr.upload.onprogress = (e) => {
+      if (onProgress && e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* rơi xuống nhánh lỗi */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(parseErrorBody(xhr.responseText, xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error('Không kết nối được máy chủ khi tải tệp lên.'));
+    xhr.send(form);
+  });
+}
+
+// GET /template-fills/{token}/xem — XEM NHANH nội dung file đã điền (không tải về).
+export async function xemTemplateFill(token) {
+  if (useMockBackend) {
+    return { ten_file: 'ban-demo.docx', cat_bot: false,
+             doan: ['CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM',
+                    'Bên A: Công ty TNHH ABC'] };
+  }
+  return request(`/template-fills/${encodeURIComponent(token)}/xem`);
+}
+
+// GET /template-fills/{token}/preview — bản PDF giữ nguyên định dạng Word.
+// Mở tab NGAY trong cú bấm (giống previewDocument) để popup-blocker không chặn.
+export async function previewTemplateFill(token) {
+  if (useMockBackend) {
+    const blob = new Blob(['Bản demo — bản xem trước sẽ mở từ máy chủ thật.'],
+                          { type: 'text/plain' });
+    window.open(URL.createObjectURL(blob), '_blank');
+    return;
+  }
+  const win = window.open('', '_blank');
+  try {
+    const res = await fetch(
+      `${apiBaseUrl}/template-fills/${encodeURIComponent(token)}/preview`,
+      { headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {} }
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(parseErrorBody(text, res.status));
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    if (win) {
+      win.opener = null;
+      win.location = url;
+    } else {
+      window.location.assign(url);
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    if (win) win.close();
+    throw err;
+  }
+}
+
 // ==================== CHẾ ĐỘ GIẢ LẬP (MOCK) ====================
 // Dữ liệu mẫu bám sát seed thật của backend:
 //   - 4 bộ phận trong app/seed_departments.py

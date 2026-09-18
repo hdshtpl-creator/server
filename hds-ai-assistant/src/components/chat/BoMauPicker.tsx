@@ -263,6 +263,8 @@ export const BoMauPicker: React.FC<Props> = ({
           )}
           <p className="px-2 pt-2 text-[10px] text-slate-400 dark:text-slate-500">
             Trong câu chat gọi thẳng tên bộ cũng được: "tạo bộ hồ sơ theo bộ mẫu «tên bộ» cho khách …".
+            Muốn điền bằng <b>tờ khai thông tin</b> (một bảng gõ tay cho cả bộ) thì mở tab{' '}
+            <b>Soạn tài liệu → Tạo bản nháp</b> và chọn bộ ở ô "Mẫu soạn thảo".
           </p>
         </div>
       )}

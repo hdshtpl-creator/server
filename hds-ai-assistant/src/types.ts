@@ -356,6 +356,52 @@ export interface BoMauListResponse {
   co_quyen_sua: boolean;
 }
 
+/** Một ô thông tin của bộ (chỗ trống {{…}} đã gộp trùng theo khoá). */
+export interface BoMauChoTrong {
+  khoa: string;
+  literal: string;
+  /** Câu trích từ file mẫu để biết ô này là gì ("Tên công ty"). */
+  goi_y: string;
+  files: string[];
+  so_lan?: number;
+}
+
+export interface BoMauChoTrongResponse {
+  bo: { id: number; ten: string };
+  items: BoMauChoTrong[];
+  loi_mau: Array<{ ten_file: string; loi: string }>;
+  so_file: number;
+}
+
+/** Một file kết quả sau khi điền cả bộ. token = chỗ tải/xem nhanh (24 giờ). */
+export interface BoMauFileDaDien {
+  file_id: number;
+  ten_file: string;
+  ten_ket_qua: string | null;
+  token: string | null;
+  so_thay: number;
+  da_dien: Array<{ literal: string; gia_tri: string; so_cho: number; nguon: string }>;
+  con_trong: string[];
+  loi: string | null;
+}
+
+export interface BoMauDienResult {
+  bo: { id: number; ten: string };
+  files: BoMauFileDaDien[];
+  /** Gói .zip cả bộ (chỉ có khi từ 2 file trở lên). */
+  zip_token: string | null;
+  so_o: number;
+  da_dien: Array<{ khoa: string; literal: string; gia_tri: string; nguon: string }>;
+  con_thieu: BoMauChoTrong[];
+  /** Từng file tải lên đã được đọc theo cách nào. */
+  doc_file: Array<{ ten_file: string; cach: string; so_o: number; loi: string | null;
+                    mau?: string }>;
+  loi_mau: Array<{ ten_file: string; loi: string }>;
+  loi_tai_len?: Array<{ ten_file: string; loi: string }>;
+  gia_tri_thua: number;
+  ghi_chu_ai: string;
+}
+
 export interface BoMauUploadResult {
   ok: boolean;
   ket_qua: Array<{

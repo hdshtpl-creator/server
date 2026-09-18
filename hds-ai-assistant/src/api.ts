@@ -194,6 +194,35 @@ export const downloadBoMauFile = ApiJs.downloadBoMauFile as (
   filename?: string
 ) => Promise<void>;
 
+// ---- Điền cả bộ từ tờ khai (18/09/2026) ----
+export const getBoMauChoTrong = ApiJs.getBoMauChoTrong as (
+  boId: number
+) => Promise<import('./types').BoMauChoTrongResponse>;
+
+export const downloadBoMauToKhai = ApiJs.downloadBoMauToKhai as (
+  boId: number,
+  filename?: string
+) => Promise<void>;
+
+export const dienBoMau = ApiJs.dienBoMau as (params: {
+  boId: number;
+  files?: FileList | File[];
+  /** Rỗng = điền cả bộ. */
+  fileIds?: number[];
+  /** Ô gõ tay trên giao diện — thắng mọi nguồn khác. */
+  giaTri?: Record<string, string>;
+  dungAi?: boolean;
+  onProgress?: (pct: number) => void;
+}) => Promise<import('./types').BoMauDienResult>;
+
+export const xemTemplateFill = ApiJs.xemTemplateFill as (
+  token: string
+) => Promise<{ ten_file: string; doan: string[]; cat_bot: boolean }>;
+
+export const previewTemplateFill = ApiJs.previewTemplateFill as (
+  token: string
+) => Promise<void>;
+
 export const chatPortal = ApiJs.chatPortal as (params: {
   question: string;
   conversation_id?: number | null;

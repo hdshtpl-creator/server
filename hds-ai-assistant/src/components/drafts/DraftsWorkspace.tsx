@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import * as api from '../../api';
 import { useApp } from '../../context/AppContext';
 import type {
+  BoMau,
   BrowseDocument,
   Client,
   DraftCheck,
@@ -13,6 +14,7 @@ import type {
 } from '../../types';
 import { DOC_TYPES, DOC_TYPE_LABELS } from '../../constants';
 import { DiffView } from '../common/DiffView';
+import { DienBoMauPanel } from './DienBoMauPanel';
 import {
   AlertTriangle,
   BookOpen,
@@ -128,6 +130,12 @@ export const DraftsWorkspace: React.FC = () => {
   const [documents, setDocuments] = useState<BrowseDocument[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [templates, setTemplates] = useState<DraftTemplate[]>([]);
+  // BỘ MẪU HỒ SƠ (.docx tải lên ở Quản trị) đứng CÙNG danh sách "Mẫu soạn
+  // thảo": nhân viên tải bộ lên rồi tìm nó ở đây (phản hồi 18/09/2026 "đã tải
+  // bộ mẫu sao không có trong list?"). Chọn bộ là chuyển sang luồng ĐIỀN CẢ BỘ
+  // — khác hẳn bản nháp một văn bản nên panel riêng, không trộn vào form.
+  const [boMauList, setBoMauList] = useState<BoMau[]>([]);
+  const [boMauChon, setBoMauChon] = useState<BoMau | null>(null);
   const [sourceQuery, setSourceQuery] = useState('');
   const [showRevise, setShowRevise] = useState(false);
   const [revisionInstructions, setRevisionInstructions] = useState('');
@@ -279,16 +287,19 @@ export const DraftsWorkspace: React.FC = () => {
 
   const openCreate = async () => {
     setShowCreate(true);
-    if (documents.length || clients.length) return;
+    setBoMauChon(null);
+    if (documents.length || clients.length || boMauList.length) return;
     try {
-      const [docs, clientRows, templateRows] = await Promise.all([
+      const [docs, clientRows, templateRows, boMauRes] = await Promise.all([
         api.getBrowseDocuments(),
         api.getClients().catch(() => [] as Client[]),
         api.listDraftTemplates().catch(() => [] as DraftTemplate[]),
+        api.listBoMau().catch(() => ({ items: [] as BoMau[] } as any)),
       ]);
       setDocuments((Array.isArray(docs) ? docs : []).filter((doc) => doc.can_open));
       setClients(Array.isArray(clientRows) ? clientRows : []);
       setTemplates(Array.isArray(templateRows) ? templateRows : []);
+      setBoMauList(Array.isArray(boMauRes?.items) ? boMauRes.items : []);
     } catch (err: any) {
       setError(err?.message || 'Không tải được kho nguồn.');
     }
@@ -296,6 +307,9 @@ export const DraftsWorkspace: React.FC = () => {
 
   const createDraft = async (event: React.FormEvent) => {
     event.preventDefault();
+    // Đang ở luồng điền bộ mẫu: Enter trong ô của panel không được biến thành
+    // lệnh tạo bản nháp rỗng.
+    if (boMauChon) return;
     if (!form.title.trim() || busy) return;
     setBusy('create');
     setError(null);
@@ -873,20 +887,36 @@ export const DraftsWorkspace: React.FC = () => {
           <form onSubmit={createDraft} onClick={(event) => event.stopPropagation()} className="w-full max-w-3xl max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl">
             <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
               <div>
-                <h3 className="font-bold text-base">Tạo bản nháp</h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">Nguồn đã chọn là phạm vi duy nhất AI được dùng.</p>
+                <h3 className="font-bold text-base">
+                  {boMauChon ? `Điền bộ hồ sơ «${boMauChon.ten}»` : 'Tạo bản nháp'}
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {boMauChon
+                    ? 'Điền dữ liệu vào các file Word có sẵn của bộ, giữ nguyên định dạng gốc.'
+                    : 'Nguồn đã chọn là phạm vi duy nhất AI được dùng.'}
+                </p>
               </div>
               <button type="button" onClick={() => setShowCreate(false)} aria-label="Đóng"><X className="w-5 h-5 text-slate-400" /></button>
             </div>
 
             <div className="p-5 space-y-4">
-              {templates.length > 0 && (
+              {(templates.length > 0 || boMauList.length > 0) && (
                 <label className="space-y-1 block">
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Mẫu soạn thảo</span>
                   <select
-                    value={form.template_id ?? ''}
+                    value={boMauChon ? `bo:${boMauChon.id}` : form.template_id ?? ''}
                     onChange={(event) => {
-                      const templateId = event.target.value ? Number(event.target.value) : null;
+                      const raw = event.target.value;
+                      if (raw.startsWith('bo:')) {
+                        // Bộ mẫu hồ sơ: đổi sang luồng ĐIỀN CẢ BỘ .docx, không
+                        // phải sinh bản nháp — panel riêng bên dưới.
+                        const bo = boMauList.find((item) => item.id === Number(raw.slice(3)));
+                        setBoMauChon(bo || null);
+                        setForm((prev) => ({ ...prev, template_id: null, input_data: {} }));
+                        return;
+                      }
+                      setBoMauChon(null);
+                      const templateId = raw ? Number(raw) : null;
                       const template = templates.find((item) => item.id === templateId);
                       setForm((prev) => ({
                         ...prev,
@@ -898,16 +928,43 @@ export const DraftsWorkspace: React.FC = () => {
                     className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 dark:bg-slate-800 text-xs"
                   >
                     <option value="">Không dùng mẫu</option>
-                    {templates.map((template) => (
-                      <option key={template.id} value={template.id}>{template.name}</option>
-                    ))}
+                    {templates.length > 0 && (
+                      <optgroup label="Mẫu phương pháp — AI soạn bản nháp có nguồn">
+                        {templates.map((template) => (
+                          <option key={template.id} value={template.id}>{template.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {boMauList.length > 0 && (
+                      <optgroup label="Bộ mẫu hồ sơ — điền dữ liệu vào cả bộ file Word">
+                        {boMauList.map((bo) => (
+                          <option key={`bo-${bo.id}`} value={`bo:${bo.id}`}>
+                            {bo.ten} ({bo.so_file} file .docx)
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
-                  {selectedTemplate?.description && (
-                    <p className="text-[10px] text-slate-500 dark:text-slate-400">{selectedTemplate.description}</p>
+                  {boMauChon ? (
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                      {boMauChon.mo_ta
+                        ? `${boMauChon.mo_ta} — `
+                        : ''}
+                      Bộ mẫu là các file Word có sẵn: chọn bộ là chuyển sang luồng điền cả bộ, không
+                      sinh bản nháp mới.
+                    </p>
+                  ) : (
+                    selectedTemplate?.description && (
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400">{selectedTemplate.description}</p>
+                    )
                   )}
                 </label>
               )}
 
+              {boMauChon && <DienBoMauPanel bo={boMauChon} />}
+
+              {!boMauChon && (
+              <>
               <div className="grid sm:grid-cols-2 gap-4">
                 <label className="space-y-1">
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Tên tài liệu *</span>
@@ -1065,14 +1122,20 @@ export const DraftsWorkspace: React.FC = () => {
                   }) : <p className="py-5 text-center text-[11px] text-slate-500">Không có nguồn phù hợp.</p>}
                 </div>
               </div>
+              </>
+              )}
             </div>
 
             <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-2">
-              <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Huỷ</button>
-              <button type="submit" disabled={!form.title.trim() || busy === 'create'} className="px-4 py-2 rounded-xl bg-hds-navy text-hds-gold text-xs font-bold flex items-center gap-2 disabled:opacity-50">
-                {busy === 'create' ? <Loader2 className="w-4 h-4 animate-spin" /> : <FilePlus2 className="w-4 h-4" />}
-                Tạo bản nháp
+              <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                {boMauChon ? 'Đóng' : 'Huỷ'}
               </button>
+              {!boMauChon && (
+                <button type="submit" disabled={!form.title.trim() || busy === 'create'} className="px-4 py-2 rounded-xl bg-hds-navy text-hds-gold text-xs font-bold flex items-center gap-2 disabled:opacity-50">
+                  {busy === 'create' ? <Loader2 className="w-4 h-4 animate-spin" /> : <FilePlus2 className="w-4 h-4" />}
+                  Tạo bản nháp
+                </button>
+              )}
             </div>
           </form>
         </div>
