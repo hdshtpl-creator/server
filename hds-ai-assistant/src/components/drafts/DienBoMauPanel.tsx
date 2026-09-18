@@ -105,6 +105,45 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
 
   const soOGoTay = Object.values(giaTri).filter((v) => (v || '').trim()).length;
 
+  /** Giá trị máy bóc được ở lượt vừa rồi — hiện sẵn trong ô để soát và sửa.
+   *  Giữ riêng với `giaTri` (phần người dùng tự gõ) để lần chạy sau máy vẫn
+   *  bóc lại từ file và báo đúng nguồn của từng ô. */
+  const tuMay = useMemo(() => {
+    const m: Record<string, string> = {};
+    (ketQua?.da_dien || []).forEach((o) => {
+      m[o.khoa] = o.gia_tri;
+    });
+    return m;
+  }, [ketQua]);
+  const nguonCua = useMemo(() => {
+    const m: Record<string, string> = {};
+    (ketQua?.da_dien || []).forEach((o) => {
+      m[o.khoa] = o.nguon;
+    });
+    return m;
+  }, [ketQua]);
+  const giaTriHienTai = (khoa: string) => giaTri[khoa] ?? tuMay[khoa] ?? '';
+
+  /** Ô gom theo MỤC của phiếu để nhân viên đọc theo khối, không phải một
+   *  danh sách 124 dòng phẳng. */
+  const theoMuc = (ds: BoMauChoTrong[]) => {
+    const nhom = new Map<string, BoMauChoTrong[]>();
+    ds.forEach((o) => {
+      const key = (o.muc || '').trim() || 'Khác';
+      if (!nhom.has(key)) nhom.set(key, []);
+      nhom.get(key)!.push(o);
+    });
+    return Array.from(nhom.entries());
+  };
+
+  const oTheoKhoa = useMemo(() => {
+    const m: Record<string, BoMauChoTrong> = {};
+    choTrong.forEach((o) => {
+      m[o.khoa] = o;
+    });
+    return m;
+  }, [choTrong]);
+
   const themFile = (ds: FileList | null) => {
     if (!ds || !ds.length) return;
     setFiles((truoc) => {
@@ -114,6 +153,21 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
       });
       return gop.slice(0, 10);
     });
+  };
+
+  /** Ba file mẫu có nhiều chỗ trống nhất — thường là phiếu thông tin của bộ. */
+  const fileNhieuO = useMemo(
+    () => [...bo.files].filter((f) => f.so_placeholder >= 3)
+      .sort((a, b) => b.so_placeholder - a.so_placeholder).slice(0, 3),
+    [bo.files]
+  );
+
+  const taiFileMau = async (fileId: number, ten: string) => {
+    try {
+      await api.downloadBoMauFile(bo.id, fileId, ten);
+    } catch (err: any) {
+      showToast(err?.message || 'Không tải được file mẫu.', 'error');
+    }
   };
 
   const taiToKhai = async () => {
@@ -185,6 +239,29 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
   const soDaDien = ketQua?.da_dien?.length || 0;
   const soThieu = ketQua?.con_thieu?.length || 0;
 
+  const oNhap = (o: BoMauChoTrong, vien: 'thuong' | 'thieu' = 'thuong') => (
+    <label key={o.khoa} className="space-y-1">
+      <span className="block text-[10px] font-semibold text-slate-600 dark:text-slate-300 truncate">
+        {o.goi_y || o.literal}
+        <span className="ml-1 font-mono text-slate-400">{o.literal}</span>
+      </span>
+      <input
+        value={giaTriHienTai(o.khoa)}
+        onChange={(e) => setGiaTri((truoc) => ({ ...truoc, [o.khoa]: e.target.value }))}
+        className={`w-full px-2 py-1.5 rounded-lg border text-[11px] outline-none focus:ring-2 focus:ring-hds-blue dark:bg-slate-900 ${
+          vien === 'thieu'
+            ? 'border-amber-200 dark:border-amber-800'
+            : 'border-slate-200 dark:border-slate-700'
+        }`}
+      />
+      {nguonCua[o.khoa] && !(o.khoa in giaTri) && (
+        <span className="block text-[9px] text-slate-400 truncate">
+          nguồn: {nguonCua[o.khoa]}
+        </span>
+      )}
+    </label>
+  );
+
   return (
     <div className="space-y-4">
       <div className="p-3 rounded-xl border border-hds-navy/30 dark:border-blue-900 bg-hds-soft dark:bg-slate-800/60">
@@ -226,6 +303,27 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
           <p className="mt-2 text-[10px] text-hds-red">
             Không mở được: {loiMau.map((l) => `«${l.ten_file}» (${l.loi})`).join('; ')}
           </p>
+        )}
+        {fileNhieuO.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <p className="text-[10px] text-slate-500 dark:text-slate-400">
+              Hoặc dùng luôn <b>phiếu sẵn có của bộ</b>: tải file mẫu về, gõ đè lên các
+              chỗ trống rồi tải lên ở bước 2 — máy so với bản gốc để lấy giá trị.
+            </p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {fileNhieuO.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => taiFileMau(f.id, f.ten_file)}
+                  className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 text-[10px] font-semibold flex items-center gap-1 hover:bg-slate-50 dark:hover:bg-slate-800"
+                >
+                  <FileDown className="w-3 h-3" /> {f.ten_file}
+                  <span className="text-slate-400">({f.so_placeholder} ô)</span>
+                </button>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
@@ -352,22 +450,17 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
                 className="flex-1 bg-transparent text-[11px] outline-none"
               />
             </div>
-            <div className="mt-2 max-h-64 overflow-y-auto grid sm:grid-cols-2 gap-2">
-              {oLoc.map((o) => (
-                <label key={o.khoa} className="space-y-1">
-                  <span className="block text-[10px] font-semibold text-slate-600 dark:text-slate-300 truncate">
-                    {o.goi_y || o.literal}
-                    <span className="ml-1 font-mono text-slate-400">{o.literal}</span>
-                  </span>
-                  <input
-                    value={giaTri[o.khoa] ?? ''}
-                    onChange={(e) => setGiaTri((truoc) => ({ ...truoc, [o.khoa]: e.target.value }))}
-                    className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-900 text-[11px] outline-none focus:ring-2 focus:ring-hds-blue"
-                  />
-                </label>
+            <div className="mt-2 max-h-72 overflow-y-auto space-y-3">
+              {theoMuc(oLoc).map(([muc, ds]) => (
+                <div key={muc}>
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">
+                    {muc}
+                  </p>
+                  <div className="grid sm:grid-cols-2 gap-2">{ds.map((o) => oNhap(o))}</div>
+                </div>
               ))}
               {!oLoc.length && (
-                <p className="text-[11px] text-slate-500 col-span-2">Không có ô nào khớp.</p>
+                <p className="text-[11px] text-slate-500">Không có ô nào khớp.</p>
               )}
             </div>
           </div>
@@ -498,25 +591,57 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
             ))}
           </ul>
 
+          {soDaDien > 0 && (
+            <details className="p-3 rounded-xl border border-slate-200 dark:border-slate-700">
+              <summary className="text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
+                Bảng đối chiếu {soDaDien} ô đã điền — soát và sửa tại đây
+              </summary>
+              <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                Sửa ô nào thì bấm <b>Điền lại</b> ở dưới; giá trị bạn gõ luôn thắng giá trị
+                máy bóc được.
+              </p>
+              <div className="mt-2 max-h-64 overflow-y-auto space-y-3">
+                {theoMuc(
+                  ketQua.da_dien
+                    .map((o) => oTheoKhoa[o.khoa])
+                    .filter(Boolean) as BoMauChoTrong[]
+                ).map(([muc, ds]) => (
+                  <div key={muc}>
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">
+                      {muc}
+                    </p>
+                    <div className="grid sm:grid-cols-2 gap-2">{ds.map((o) => oNhap(o))}</div>
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={chay}
+                disabled={busy}
+                className="mt-2 px-3 py-2 rounded-xl border border-hds-navy text-hds-navy dark:text-blue-300 dark:border-blue-700 text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-40"
+              >
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                Điền lại với giá trị vừa sửa
+              </button>
+            </details>
+          )}
+
           {soThieu > 0 && (
             <div className="p-3 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30">
               <p className="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
                 <AlertTriangle className="w-4 h-4" /> {soThieu} ô chưa có dữ liệu — điền tại đây rồi
                 bấm lại
               </p>
-              <div className="mt-2 max-h-56 overflow-y-auto grid sm:grid-cols-2 gap-2">
-                {ketQua.con_thieu.map((o) => (
-                  <label key={o.khoa} className="space-y-1">
-                    <span className="block text-[10px] font-semibold text-amber-900 dark:text-amber-200 truncate">
-                      {o.goi_y || o.literal}
-                      <span className="ml-1 font-mono opacity-70">{o.literal}</span>
-                    </span>
-                    <input
-                      value={giaTri[o.khoa] ?? ''}
-                      onChange={(e) => setGiaTri((truoc) => ({ ...truoc, [o.khoa]: e.target.value }))}
-                      className="w-full px-2 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800 dark:bg-slate-900 text-[11px] outline-none focus:ring-2 focus:ring-hds-blue"
-                    />
-                  </label>
+              <div className="mt-2 max-h-64 overflow-y-auto space-y-3">
+                {theoMuc(ketQua.con_thieu).map(([muc, ds]) => (
+                  <div key={muc}>
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-amber-800/70 dark:text-amber-300/70 mb-1">
+                      {muc}
+                    </p>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      {ds.map((o) => oNhap(o, 'thieu'))}
+                    </div>
+                  </div>
                 ))}
               </div>
               <button

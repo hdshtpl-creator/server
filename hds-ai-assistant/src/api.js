@@ -1005,6 +1005,37 @@ export async function quetKho() {
   return request('/kho/quet', { method: 'POST' });
 }
 
+// GET /kho/tien-do — nhịp học tài liệu cho thẻ theo dõi trên Tổng quan.
+// Nhẹ và thăm dò dày (8 giây/lần khi đang quét) nên mọi con số lấy từ CSDL,
+// không đi đếm file trên đĩa.
+export async function getTienDoHoc() {
+  if (useMockBackend) {
+    const dangChay = Math.floor(Date.now() / 20000) % 2 === 0;
+    return {
+      quet: {
+        dang_chay: dangChay,
+        started_at: dangChay ? new Date(Date.now() - 4 * 60000).toISOString() : null,
+        pid: dangChay ? 12345 : null,
+        nguon: dangChay ? 'web' : null,
+        log_tail: dangChay
+          ? ['   [MỚI] Hop dong thue nha.pdf  ← 3. HỢP ĐỒNG  → contract',
+             '   [CẬP NHẬT] Quy trinh khoi kien.docx  ← 6. QUY TRÌNH  → quy_trinh']
+          : [],
+        ket_thuc: null,
+      },
+      nhip: { phut_10: dangChay ? 7 : 0, gio_1: 24, hom_nay: 96, cap_nhat_gio_1: 3 },
+      tong: { tai_lieu: 1480, cho_duyet: 12, loi: 2 },
+      tu_luc_quet: dangChay ? 7 : null,
+      lan_cuoi: {
+        finished_at: new Date(Date.now() - 9 * 60000).toISOString(),
+        started_at: new Date(Date.now() - 12 * 60000).toISOString(),
+        quet: 332, moi: 18, cap_nhat: 4, khong_doi: 310, loi: 0,
+      },
+    };
+  }
+  return request('/kho/tien-do');
+}
+
 // POST /kho/thu-muc — tạo thư mục con trong kho
 export async function taoThuMucKho({ path = '', ten }) {
   if (useMockBackend) return { ok: true, path: path ? `${path}/${ten}` : ten, ten };

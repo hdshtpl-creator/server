@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { MatterAlertsCard } from './MatterAlertsCard';
 import { KhoTaiLieuCard } from './KhoTaiLieuCard';
+import { TienDoHocCard } from './TienDoHocCard';
 
 type IconType = React.ComponentType<{ className?: string }>;
 
@@ -158,6 +159,9 @@ export const OverviewTab: React.FC = () => {
 
       {/* Hạn chót vụ việc — việc cần làm hôm nay, đặt trước mọi số liệu */}
       <MatterAlertsCard />
+
+      {/* Máy đang học tới đâu — người đổ tài liệu vào kho nhìn thẳng vào đây */}
+      <TienDoHocCard onMoKho={() => setAdminTab('documents')} />
 
       {/* Cảnh báo tài liệu thiếu chủ sở hữu */}
       {missingOwner > 0 && (

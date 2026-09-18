@@ -84,10 +84,42 @@ class ToKhaiTests(_KhoTam):
         self.assertEqual(bmd.doc_to_khai(khai), {})
 
         bang = khai.tables[0]
-        bang.rows[1].cells[3].text = "Công ty TNHH ABC"
-        bang.rows[2].cells[3].text = "0101234567"
+        self.assertEqual([c.text for c in bang.rows[0].cells], list(bmd.TIEU_DE_COT))
+        # Nhãn đứng trước, ô gõ ở giữa, mã máy đọc in nhỏ ở cột cuối.
+        self.assertEqual(bang.rows[1].cells[1].text.split("\n")[0], "Bên A")
+        self.assertEqual(bang.rows[1].cells[3].text, "{{TCT.TEN}}")
+        bang.rows[1].cells[2].text = "Công ty TNHH ABC"
+        bang.rows[2].cells[2].text = "0101234567"
         self.assertEqual(bmd.doc_to_khai(khai),
                          {"tct_ten": "Công ty TNHH ABC", "tct_mst": "0101234567"})
+
+    def test_doc_duoc_to_khai_bo_cuc_CU(self):
+        """Tờ khai in ra trước 18/09 có mã ở cột 2, giá trị ở cột cuối — đổi bố
+        cục không được làm chết những bản nhân viên đã điền dở."""
+        doc = docx.Document()
+        t = doc.add_table(rows=1, cols=4)
+        for c, v in zip(t.rows[0].cells,
+                        ("STT", "Mã chỗ trống", "Nội dung", "Giá trị điền")):
+            c.text = v
+        r = t.add_row().cells
+        r[0].text, r[1].text = "1", "{{TCT.TEN}}"
+        r[2].text, r[3].text = "Bên A", "Công ty TNHH ABC"
+        self.assertEqual(bmd.doc_to_khai(doc), {"tct_ten": "Công ty TNHH ABC"})
+
+    def test_nhan_o_va_muc_cho_dong_nhieu_cho_trong(self):
+        bo = self._bo([("01 Ho so.docx", [
+            "A. THONG TIN CHUNG",
+            "Ngay sinh: {{NS}} | Gioi tinh: {{GT}}",
+            "Dia chi: {{DC.SN}}, {{DC.P}}, {{DC.T}}",
+        ])])
+        dong, _ = bmd.quet_bo(bo)
+        nhan = {d["khoa"]: d["goi_y"] for d in dong}
+        self.assertEqual(nhan["ns"], "Ngay sinh")
+        self.assertEqual(nhan["gt"], "Gioi tinh")
+        self.assertEqual(nhan["dc_sn"], "Dia chi")
+        # Giữa hai ô chỉ có dấu phẩy: mượn nhãn đầu dòng kèm số phần.
+        self.assertEqual(nhan["dc_p"], "Dia chi — phần 2/3")
+        self.assertTrue(all(d["muc"] == "A. THONG TIN CHUNG" for d in dong))
 
     def test_o_con_nguyen_cho_trong_khong_tinh_la_gia_tri(self):
         self.assertEqual(bmd.lam_sach_gia_tri("{{TCT.TEN}}"), "")
@@ -116,6 +148,22 @@ class TrichTuBanDaDienTests(_KhoTam):
         self.assertEqual(gia_tri["tct_dt"], "0912345678")
         self.assertNotIn("tct_von", gia_tri)
 
+    def test_dia_chi_nhieu_khuc_vao_dung_o(self):
+        """Hồ sơ thật 18/09/2026: "Dia chi: {{SN}}, {{P}}, {{T}}, {{QG}}" gặp
+        địa chỉ 6 khúc. Ô ĐẦU bắt tham nên phần dư nằm ở số nhà, còn phường /
+        tỉnh / quốc gia về đúng ô — bắt dè hết thì lệch hẳn một nấc."""
+        mau = _tao_mau(self.root / "mau dc.docx",
+                       ["Dia chi: {{DC.SN}}, {{DC.P}}, {{DC.T}}, {{DC.QG}}"])
+        nop = _tao_mau(self.root / "nop dc.docx",
+                       ["Dia chi: Số 393A, đường Đồng Khởi, khu phố 11, "
+                        "Phường Tam Hiệp, Tỉnh Đồng Nai, Việt Nam"])
+        gt = bmd.trich_tu_ban_da_dien(docx.Document(str(mau)),
+                                      docx.Document(str(nop)))
+        self.assertEqual(gt["dc_sn"], "Số 393A, đường Đồng Khởi, khu phố 11")
+        self.assertEqual(gt["dc_p"], "Phường Tam Hiệp")
+        self.assertEqual(gt["dc_t"], "Tỉnh Đồng Nai")
+        self.assertEqual(gt["dc_qg"], "Việt Nam")
+
     def test_khong_neo_duoc_thi_bo_qua(self):
         # Đoạn toàn chỗ trống: không có chữ cố định nào để neo.
         self.assertIsNone(bmd._regex_doan("{{A}} {{B}}"))
@@ -128,10 +176,58 @@ class TrichTuBanDaDienTests(_KhoTam):
         ])
         nop = _tao_mau(self.root / "0 Tong hop thong tin.docx",
                        ["Tên công ty: Công ty TNHH ABC"])
-        khop = bmd.chon_mau_khop(bo, docx.Document(str(nop)),
-                                 "0 Tong hop thong tin.docx")
-        self.assertIsNotNone(khop)
-        self.assertEqual(khop[0]["ten_file"], "0 Tong hop thong tin.docx")
+        ten, gt = bmd.khop_va_boc(bo, docx.Document(str(nop)),
+                                  "0 Tong hop thong tin.docx")
+        self.assertEqual(ten, "0 Tong hop thong tin.docx")
+        self.assertEqual(gt["tct_ten"], "Công ty TNHH ABC")
+
+    def test_khong_nham_sang_file_mau_DAI_hon(self):
+        """Lỗi thật 18/09/2026: phiếu tổng hợp đã điền bị chấm là giống «Danh
+        sách cổ đông sáng lập» (file dài, không liên quan) nên bóc ra 0 ô.
+        Thước đo phải là SỐ Ô BÓC ĐƯỢC, không phải độ giống ký tự."""
+        bo = self._bo([
+            ("0 Phieu thong tin.docx", ["Tên công ty: {{TCT.TEN}}",
+                                        "Mã số thuế: {{TCT.MST}}",
+                                        "Người đại diện: {{NDD.TEN}}"]),
+            ("3 Danh sach co dong.docx",
+             ["DANH SÁCH CỔ ĐÔNG SÁNG LẬP"]
+             + [f"Cổ đông số {i}: góp vốn bằng tiền mặt theo tỷ lệ thoả thuận"
+                for i in range(40)]),
+        ])
+        nop = _tao_mau(self.root / "phieu da dien.docx", [
+            "Tên công ty: Công ty TNHH ABC",
+            "Mã số thuế: 0101234567",
+            "Người đại diện: Nguyễn Văn A",
+            # Bản đã điền DÀI hơn mẫu vì mang dữ liệu khách:
+            *[f"Ghi chú {i}: nội dung bổ sung của khách" for i in range(30)],
+        ])
+        ten, gt = bmd.khop_va_boc(bo, docx.Document(str(nop)), "phieu da dien.docx")
+        self.assertEqual(ten, "0 Phieu thong tin.docx")
+        self.assertEqual(len(gt), 3)
+
+    def test_o_dung_rieng_ca_dong_lay_duoc_khoi_nhieu_dong(self):
+        """Ô kiểu {{NN}} (danh sách ngành nghề) đứng riêng cả dòng: giá trị là
+        KHỐI nằm giữa hai đoạn đã neo được."""
+        mau = _tao_mau(self.root / "mau khoi.docx", [
+            "Tên công ty: {{TCT.TEN}}",
+            "D. NGANH NGHE",
+            "{{NN}}",
+            "E. VON",
+            "Vốn điều lệ: {{VON}}",
+        ])
+        nop = _tao_mau(self.root / "nop khoi.docx", [
+            "Tên công ty: Công ty TNHH ABC",
+            "D. NGANH NGHE",
+            "6201 Lập trình máy tính",
+            "6202 Tư vấn máy vi tính",
+            "E. VON",
+            "Vốn điều lệ: 2.000.000.000",
+        ])
+        gt = bmd.trich_tu_ban_da_dien(docx.Document(str(mau)),
+                                      docx.Document(str(nop)))
+        self.assertEqual(gt["tct_ten"], "Công ty TNHH ABC")
+        self.assertEqual(gt["von"], "2.000.000.000")
+        self.assertEqual(gt["nn"], "6201 Lập trình máy tính; 6202 Tư vấn máy vi tính")
 
     def test_file_la_khong_nhan_nham_lam_ban_da_dien(self):
         bo = self._bo([("01 Hop dong thue nha.docx",
@@ -140,7 +236,9 @@ class TrichTuBanDaDienTests(_KhoTam):
         la = _tao_mau(self.root / "cccd.docx",
                       ["CĂN CƯỚC CÔNG DÂN", "Họ và tên: Nguyễn Văn A",
                        "Số: 001099001122"])
-        self.assertIsNone(bmd.chon_mau_khop(bo, docx.Document(str(la)), "cccd.docx"))
+        ten, gt = bmd.khop_va_boc(bo, docx.Document(str(la)), "cccd.docx")
+        self.assertIsNone(ten)
+        self.assertEqual(gt, {})
 
 
 class ChayTests(_KhoTam):
@@ -157,8 +255,8 @@ class ChayTests(_KhoTam):
         khai_path = self.root / "to-khai.docx"
         khai_path.write_bytes(bmd.to_khai_bytes(bo, dong))
         khai = docx.Document(str(khai_path))
-        khai.tables[0].rows[1].cells[3].text = "Công ty TNHH ABC"
-        khai.tables[0].rows[2].cells[3].text = "0101234567"
+        khai.tables[0].rows[1].cells[2].text = "Công ty TNHH ABC"
+        khai.tables[0].rows[2].cells[2].text = "0101234567"
         khai.save(str(khai_path))          # ô NDD.TEN cố ý để trống
 
         ket = bmd.chay(bo, uploads=[{"ten_file": "to-khai.docx",
@@ -184,7 +282,7 @@ class ChayTests(_KhoTam):
         khai_path = self.root / "to-khai.docx"
         khai_path.write_bytes(bmd.to_khai_bytes(bo, dong))
         khai = docx.Document(str(khai_path))
-        khai.tables[0].rows[1].cells[3].text = "Công ty cũ"
+        khai.tables[0].rows[1].cells[2].text = "Công ty cũ"
         khai.save(str(khai_path))
 
         ket = bmd.chay(bo, uploads=[{"ten_file": "to-khai.docx",

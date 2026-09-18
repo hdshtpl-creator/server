@@ -1762,6 +1762,71 @@ def kho_quet(user=Depends(current_user)):
     return _kho_hoac_400(kho.bat_dau_quet, user["id"])
 
 
+@app.get("/kho/tien-do")
+def kho_tien_do(user=Depends(current_user)):
+    """NHỊP HỌC cho thẻ theo dõi trên Tổng quan (18/09/2026).
+
+    Trả lời đúng câu hỏi của người đang đổ tài liệu vào kho: "máy có đang học
+    không, đã học thêm được bao nhiêu, còn kẹt gì". Cố ý KHÔNG đi đếm file
+    trên đĩa — kho 35.000 tệp đếm mất hàng chục giây, mà thẻ này thăm dò 8
+    giây một lần; mọi con số đều lấy từ CSDL bằng một lượt truy vấn.
+    """
+    require_reviewer(user)
+    quet = kho.trang_thai_quet()
+    nhip = {"phut_10": 0, "gio_1": 0, "hom_nay": 0, "cap_nhat_gio_1": 0}
+    tong = {"tai_lieu": 0, "cho_duyet": 0}
+    tu_luc_quet = None
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FILTER (WHERE created_at >= now() - interval '10 minutes'),
+                          count(*) FILTER (WHERE created_at >= now() - interval '1 hour'),
+                          count(*) FILTER (WHERE created_at >= date_trunc('day', now())),
+                          count(*) FILTER (WHERE updated_at >= now() - interval '1 hour'
+                                             AND updated_at > created_at + interval '2 seconds'),
+                          count(*) FILTER (WHERE NOT (approved AND label_verified)),
+                          count(*)
+                     FROM documents WHERE coalesce(active,true)""")
+            r = cur.fetchone()
+            nhip = {"phut_10": r[0], "gio_1": r[1], "hom_nay": r[2],
+                    "cap_nhat_gio_1": r[3]}
+            tong = {"cho_duyet": r[4], "tai_lieu": r[5]}
+            if quet.get("started_at"):
+                cur.execute("""SELECT count(*) FROM documents
+                                WHERE coalesce(active,true)
+                                  AND created_at >= %s::timestamptz""",
+                            (quet["started_at"],))
+                tu_luc_quet = cur.fetchone()[0]
+            try:
+                cur.execute("SELECT count(*) FROM ingest_failures "
+                            "WHERE resolved_at IS NULL")
+                tong["loi"] = cur.fetchone()[0]
+            except Exception:  # noqa: BLE001 — kho cũ chưa migrate bảng lỗi
+                conn.rollback()
+                tong["loi"] = 0
+
+    lan_cuoi = None
+    try:
+        raw = settings.get("drive_sync_status")
+        data = json.loads(raw) if raw else None
+        if data:
+            counts = data.get("counts") or {}
+            lan_cuoi = {
+                "finished_at": data.get("finished_at"),
+                "started_at": data.get("started_at"),
+                "quet": counts.get("scanned") or 0,
+                "moi": counts.get("new") or 0,
+                "cap_nhat": counts.get("updated") or 0,
+                "khong_doi": counts.get("unchanged") or 0,
+                "loi": counts.get("errors") or 0,
+            }
+    except Exception:  # noqa: BLE001 — thiếu tóm tắt không được làm sập thẻ
+        lan_cuoi = None
+
+    return {"quet": quet, "nhip": nhip, "tong": tong,
+            "tu_luc_quet": tu_luc_quet, "lan_cuoi": lan_cuoi}
+
+
 class KhoThuMucBody(BaseModel):
     path: str = ""
     ten: str

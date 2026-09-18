@@ -360,8 +360,10 @@ export interface BoMauListResponse {
 export interface BoMauChoTrong {
   khoa: string;
   literal: string;
-  /** Câu trích từ file mẫu để biết ô này là gì ("Tên công ty"). */
+  /** Nhãn trích từ file mẫu để biết ô này là gì ("Tên công ty"). */
   goi_y: string;
+  /** Mục của phiếu chứa ô này ("A. THÔNG TIN DOANH NGHIỆP") — để gom nhóm. */
+  muc?: string;
   files: string[];
   so_lan?: number;
 }
@@ -809,6 +811,25 @@ export interface KhoQuetKetThuc {
   /** 0 = xong bình thường; khác 0 = bộ quét dừng vì chốt an toàn hoặc lỗi. */
   ma_thoat: number;
   log_tail: string[];
+}
+
+/** Nhịp học tài liệu cho thẻ theo dõi trên Tổng quan (GET /kho/tien-do). */
+export interface TienDoHoc {
+  quet: KhoQuetTrangThai;
+  /** Số tài liệu HỌC MỚI trong từng khoảng thời gian. */
+  nhip: { phut_10: number; gio_1: number; hom_nay: number; cap_nhat_gio_1: number };
+  tong: { tai_lieu: number; cho_duyet: number; loi?: number };
+  /** Học thêm được bao nhiêu kể từ lúc lượt quét đang chạy bắt đầu. */
+  tu_luc_quet: number | null;
+  lan_cuoi: {
+    finished_at?: string | null;
+    started_at?: string | null;
+    quet: number;
+    moi: number;
+    cap_nhat: number;
+    khong_doi: number;
+    loi: number;
+  } | null;
 }
 
 export interface KhoQuetTrangThai {

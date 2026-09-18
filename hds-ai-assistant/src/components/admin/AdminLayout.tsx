@@ -22,11 +22,9 @@ import {
   BookOpen,
   ShieldAlert,
   Users2,
-  ThumbsUp,
   Search,
   SlidersHorizontal,
   Layers,
-  UserRound,
   ScrollText,
 } from 'lucide-react';
 
@@ -44,11 +42,13 @@ const TABS: TabDef[] = [
   { id: 'overview', label: 'Tổng quan', icon: LayoutDashboard, group: 'operate' },
   { id: 'clients_360', label: 'Hồ sơ khách 360°', icon: Users2, group: 'operate' },
   { id: 'learn', label: 'Duyệt câu trả lời bị báo cáo', icon: MessageSquareText, group: 'operate' },
-  // Khác tab trên: đây là NHẬT KÝ đánh giá đầy đủ, cả 👍 lẫn 👎, từng dòng một —
-  // xem được câu nào người dùng khen để nạp vào kho, không chỉ câu bị chê.
-  { id: 'feedback', label: 'Đánh giá của người dùng', icon: ThumbsUp, group: 'operate' },
-  // Người dân để lại liên hệ từ khung chat nhúng website (kế hoạch ngày 4–5).
-  { id: 'leads', label: 'Khách quan tâm (website)', icon: UserRound, group: 'operate', banQtOnly: true },
+  // ĐÃ GỠ KHỎI THANH 18/09/2026 (chủ dự án: "bỏ thẻ không cần thiết"):
+  //   { id: 'feedback', label: 'Đánh giá của người dùng', icon: ThumbsUp, group: 'operate' },
+  //   { id: 'leads', label: 'Khách quan tâm (website)', icon: UserRound, group: 'operate', banQtOnly: true },
+  // Hai màn hình vẫn còn nguyên mã và vẫn render được (xem khối tabpanel bên
+  // dưới): 'feedback' trùng việc với "Duyệt câu trả lời bị báo cáo", 'leads'
+  // chỉ có dữ liệu khi bật khung chat nhúng trên website. Cần lại thì bỏ dấu
+  // chú thích hai dòng trên là xong, dữ liệu trong CSDL không mất.
   { id: 'users', label: 'Người dùng & Phòng ban', icon: Users, group: 'operate', adminOnly: true },
   { id: 'settings', label: 'Cài đặt AI', icon: SlidersHorizontal, group: 'operate', adminOnly: true },
   // Nhật ký chỉ đọc — bảng audit_log có trigger cấm sửa/xoá (kế hoạch ngày 3).

@@ -207,8 +207,8 @@ Bấm **Tạo bản nháp** → ô **Mẫu soạn thảo** nay có hai nhóm: *M
 
 Ba bước:
 
-1. **Tải tờ khai (.docx)** — máy gom mọi chỗ trống `{{…}}` của cả bộ thành MỘT bảng, mỗi dòng kèm câu trích từ file mẫu để biết ô đó là gì. Chỗ trống trùng nhau giữa các file chỉ hỏi một lần.
-2. **Điền cột "Giá trị điền"** rồi **tải lên**. Không sửa cột mã `{{…}}` — đó là chỗ máy đọc lại. Tải lên chính file "tổng hợp thông tin" của bộ (gõ đè lên các chỗ trống) cũng được: máy so với bản mẫu gốc và bóc ra phần bạn đã gõ.
+1. **Tải tờ khai (.docx)** — máy gom mọi chỗ trống `{{…}}` của cả bộ thành MỘT bảng: cột *Nội dung cần điền* (nhãn lấy từ chính file mẫu), cột *Giá trị điền* để trống cho bạn gõ, cột *Mã ô* in nhỏ ở cuối cho máy đọc lại. Các ô chia theo từng mục của phiếu (A. Doanh nghiệp, B. Người nộp hồ sơ…); chỗ trống trùng nhau giữa các file chỉ hỏi một lần.
+2. **Điền cột "Giá trị điền"** rồi **tải lên**. Đừng sửa cột *Mã ô*. **Hoặc** dùng luôn phiếu sẵn có của bộ: bấm tên file mẫu ở bước 1 để tải về, gõ đè lên các chỗ trống rồi tải lên — máy so với bản mẫu gốc và bóc ra đúng phần bạn đã gõ.
 3. **Điền N file của bộ** — mỗi file mẫu ra một file kết quả, **giữ nguyên định dạng Word gốc**.
 
 Sau khi xong, mỗi file có ba nút: **Xem nhanh** (đọc nội dung ngay tại chỗ, dòng vàng là chỗ trống chưa có dữ liệu), **PDF** (xem đúng định dạng Word), **Tải**. Từ 2 file trở lên có thêm **Tải cả bộ (.zip)**.
@@ -216,7 +216,8 @@ Sau khi xong, mỗi file có ba nút: **Xem nhanh** (đọc nội dung ngay tạ
 Điểm cần biết:
 
 - Đường chính là **tất định**: máy chép đúng những gì bạn gõ, không hỏi AI. Ô nào không có trong tờ khai thì báo **"còn thiếu"** chứ không tự bịa.
-- Ô còn thiếu hiện thành ô nhập ngay dưới kết quả — điền rồi bấm **Điền lại với thông tin vừa bổ sung**.
+- Ô còn thiếu hiện thành ô nhập ngay dưới kết quả — điền rồi bấm **Điền lại với thông tin vừa bổ sung**. Mở **Bảng đối chiếu … ô đã điền** để soát từng giá trị máy lấy được (có ghi lấy từ file nào), sửa tại chỗ rồi **Điền lại** — giá trị bạn gõ luôn thắng.
+- Một phiếu thông tin thường chỉ phủ được một phần chỗ trống của cả bộ (ví dụ bộ đăng ký doanh nghiệp: phiếu gốc phủ ~33/124 ô, phần còn lại nằm trong Điều lệ và Giấy đề nghị). Máy nói rõ con số đó sau mỗi lượt để biết còn phải bổ sung bao nhiêu.
 - Tải kèm hồ sơ rời (CCCD, giấy phép, CV) và để tick **"Cho AI đoán các ô còn trống"** thì AI lấy nốt các ô thiếu từ đó; những giá trị này mang dấu **⚠** trong bảng đối chiếu — phải soát lại. Bỏ tick nếu muốn hoàn toàn tất định.
 - Tờ khai của bộ khác tải nhầm vào đây sẽ bị bỏ qua (máy báo "bỏ qua N ô không thuộc bộ này"), không lẳng lặng điền sai.
 - File kết quả **tự xoá sau 24 giờ**, không vào kho tri thức.
@@ -240,13 +241,24 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 
 | Màn hình | Việc gì |
 |---|---|
-| **Tổng quan** | Số liệu toàn hệ thống + **Hạn chót vụ việc** (quá hạn / sắp đến hạn). Ô đỏ **"Thiếu chủ sở hữu"** phải luôn bằng 0 — khác 0 là có hồ sơ khách chưa gán chủ, nguy cơ lộ chéo. |
+| **Tổng quan** | Số liệu toàn hệ thống + **Hạn chót vụ việc** (quá hạn / sắp đến hạn) + thẻ **Đang học tài liệu**. Ô đỏ **"Thiếu chủ sở hữu"** phải luôn bằng 0 — khác 0 là có hồ sơ khách chưa gán chủ, nguy cơ lộ chéo. |
 | **Hồ sơ khách 360°** | Lịch sử hợp tác, vướng mắc, cảnh báo thời hiệu, gợi ý chiến lược, danh sách vụ việc và tài liệu của khách. Cập nhật được ngay tại đây. |
 | **Hồ sơ khách 360° → Thư mục trong kho** | MỌI thư mục khách trong kho trên máy chủ, kể cả thư mục trống hay chỉ có zip; mở một dòng là thấy từng tệp với nhãn *Đã học / Chờ duyệt / Chưa học / Lỗi / Không hỗ trợ* và nút **Học ngay**. Khách chỉ xuất hiện ở "Khách đã học" sau khi bộ quét học được ít nhất một tệp của họ — chưa thấy khách thì tra ở đây trước. |
 | **Duyệt câu trả lời bị báo cáo** | Xem câu bị 👎, sửa lại cho đúng → **Đạt — nạp học** (vào kho) / **Lưu bản sửa** / **Bỏ qua**. Chọn **Ai được dùng câu này**: *Nội bộ* (mặc định) hay *Công khai* — chọn công khai là người ngoài công ty đọc được. |
-| **Đánh giá của người dùng** | Toàn bộ báo cáo 👎 đang chờ, kèm ghi chú người dùng để lại. Sửa câu trả lời rồi nạp thẳng vào bộ nhớ AI. |
 | **Người dùng & Phòng ban** *(chỉ admin)* | Tạo tài khoản, gán phòng ban, cấp **quyền duyệt**, cấp **quyền xem công nợ**, cấp/thu **khoá API** cho khách. |
 | **Cài đặt AI** *(chỉ admin)* | Đổi model, sửa phong cách tư vấn **4 kênh** (nội bộ / cổng khách / website / tab Kiểm tra pháp lý), chỉnh tham số tốc độ–chất lượng, sửa bản đồ thư mục kho. |
+
+> **Thẻ "Đang học tài liệu" (mới 18/09/2026)** nằm ngay đầu trang Tổng quan — dùng khi bạn đang đổ tài liệu vào kho:
+>
+> - Trạng thái **Đang quét / Nghỉ**, bộ quét chạy được bao lâu và **đã học thêm bao nhiêu tài liệu** kể từ lúc bắt đầu.
+> - Bốn con số: học **10 phút qua** · **1 giờ qua** · **hôm nay** · **chờ duyệt nhãn**.
+> - Đang quét thì hiện luôn **nhật ký máy chủ** (mấy dòng cuối: đang đọc file nào, xếp vào ngăn nào).
+> - Đang nghỉ thì tóm tắt **lượt quét gần nhất** (soi bao nhiêu tệp → mới / cập nhật / không đổi / lỗi).
+> - Nút **Quét ngay** để học liền thay vì chờ lịch; dòng đỏ **"n tệp chưa học được"** bấm vào là sang *Kho tài liệu đã học* xem lý do.
+>
+> Thẻ tự làm mới 8 giây/lần khi đang quét, 60 giây/lần khi nghỉ, và ngừng hỏi máy chủ khi bạn chuyển sang cửa sổ khác.
+
+> **Đã bỏ khỏi thanh Quản trị 18/09/2026:** *Đánh giá của người dùng* (trùng việc với *Duyệt câu trả lời bị báo cáo*) và *Khách quan tâm (website)* (chỉ có dữ liệu khi bật khung chat nhúng trên website). Dữ liệu vẫn còn nguyên trong hệ thống, bật lại được bất cứ lúc nào.
 
 **Tri thức**
 
@@ -267,8 +279,6 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 
 **Mới 15/09/2026 trong Quản trị:**
 
-- **Khách quan tâm (website)** (admin/Ban QT): người dân hỏi qua khung chat trên website HDS rồi để lại
-  tên, số điện thoại/email, nhu cầu → đánh dấu *Đã liên hệ* / *Bỏ qua* kèm ghi chú.
 - **Nhật ký hệ thống** (admin/Ban QT): ai làm gì, lúc nào — lọc theo thao tác, tìm theo chữ. Chỉ đọc, không xoá được.
 - **Duyệt nhãn → sửa nội dung trích xuất** nay bắt buộc chọn **lý do sửa** (Luật thay đổi / Rủi ro /
   Yêu cầu khách hàng / Sửa lỗi OCR / Khác). Bản cũ không mất: xem và so sánh ở *Kho tài liệu đã học → Chi tiết → Lịch sử sửa nội dung*.

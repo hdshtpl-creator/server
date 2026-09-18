@@ -24,7 +24,6 @@ không có đường "chuỗi cũ → chuỗi mới" tự do, nên một file kh
 khiến được máy sửa điều khoản. Giá trị do AI đoán mang cờ ⚠ trong báo cáo để
 người soát đối chiếu bản gốc.
 """
-import difflib
 import re
 import unicodedata
 from pathlib import Path
@@ -34,6 +33,9 @@ from app import bo_mau, template_fill
 # Trần cho một giá trị điền: dài hơn thế gần như chắc chắn là nhân viên dán
 # nhầm cả đoạn văn vào ô, thay vào file là vỡ trang.
 MAX_GIA_TRI_CHARS = 400
+# Ô đứng riêng cả dòng (danh sách ngành nghề, bảng kê) nhận cả KHỐI nhiều dòng
+# nên trần rộng hơn — cắt 400 ký tự ở đây là mất ngành nghề của khách.
+MAX_GIA_TRI_KHOI = 4_000
 # Số dòng tối đa IN RA trong tờ khai (bộ 100 file nhiều chỗ trống vẫn phải in
 # nổi). Chỉ cắt phần in — bản đồ ô bên trong vẫn giữ đủ, không thì giá trị của
 # những ô bị cắt sẽ bị coi là "không thuộc bộ" và bỏ mất.
@@ -49,7 +51,8 @@ MAX_KY_TU_XEM = 60_000
 # Cửa sổ dò đoạn tương ứng giữa bản mẫu và bản đã điền (thêm/bớt vài đoạn).
 CUA_SO_DO = 15
 
-TIEU_DE_COT = ("STT", "Mã chỗ trống", "Nội dung (trích từ file mẫu)", "Giá trị điền")
+# Cột của tờ khai — nhãn trước, ô gõ rộng ở giữa, mã máy đọc in nhỏ ở cuối.
+TIEU_DE_COT = ("STT", "NỘI DUNG CẦN ĐIỀN", "GIÁ TRỊ ĐIỀN", "Mã ô (máy đọc — đừng sửa)")
 
 
 class LoiDien(ValueError):
@@ -77,27 +80,48 @@ def lam_sach_gia_tri(value) -> str:
 # ---------------------------------------------------------------------------
 # Quét chỗ trống của cả bộ
 # ---------------------------------------------------------------------------
-def _cau_goi_y(doan: str, literal: str) -> str:
-    """Câu chứa chỗ trống, bỏ chính chỗ trống đi — "Tên công ty: {{TCT.TTV}}"
-    thành "Tên công ty" để nhân viên biết đang điền cái gì."""
-    text = re.sub(r"\s+", " ", doan or "").strip()
-    if not text:
-        return ""
-    idx = text.find(literal)
-    if idx >= 0:
-        truoc = text[:idx].strip(" .:-–—|\t")
-        if len(truoc) >= 3:
-            return truoc[-MAX_GOI_Y_CHARS:]
-    sach = template_fill.PLACEHOLDER_RE.sub(" ", text).strip()
-    return (sach or text)[:MAX_GOI_Y_CHARS]
+def _nhan_o(doan: str, dau: int, cuoi_truoc: int, nhan_dau: str = "",
+            thu_tu: int = 1, tong: int = 1) -> str:
+    """Nhãn của MỘT chỗ trống: chữ nằm giữa chỗ trống trước nó và nó.
+
+    "Ngay sinh: {{NNHS.NS}} | Gioi tinh: {{NNHS.GT}}" → ô thứ hai có nhãn
+    "Gioi tinh", không phải cả đoạn (cắt từ đầu dòng là nhân viên đọc ra
+    nguyên một dòng lộn xộn kèm mã của ô khác).
+
+    Giữa hai ô chỉ có dấu phân cách ("Dia chi: {{SN}}, {{P}}, {{T}}") thì mượn
+    nhãn của ô đầu dòng kèm số phần — ba dòng cùng tên "Dia chi: , , ," là
+    nhân viên không biết ô nào ra ô nào.
+    """
+    truoc = (doan or "")[cuoi_truoc:dau]
+    truoc = re.sub(r"\s+", " ", truoc).strip(" .:-–—|/\t,;()")
+    if len(truoc) >= 2:
+        return truoc[-MAX_GOI_Y_CHARS:]
+    if nhan_dau and tong > 1:
+        return f"{nhan_dau} — phần {thu_tu}/{tong}"[:MAX_GOI_Y_CHARS]
+    # Chỗ trống đứng một mình cả dòng: lấy phần chữ còn lại của dòng.
+    sach = re.sub(r"\s+", " ",
+                  template_fill.PLACEHOLDER_RE.sub(" ", doan or "")).strip()
+    return sach[:MAX_GOI_Y_CHARS]
+
+
+def _la_tieu_de_muc(text: str) -> bool:
+    """Dòng chia mục trong phiếu ("A. THONG TIN DOANH NGHIEP", "II. VỐN…") —
+    dùng làm dòng ngăn trong tờ khai cho nhân viên dễ đọc."""
+    t = (text or "").strip()
+    if not t or len(t) > 90 or "{{" in t:
+        return False
+    if re.match(r"^(?:[A-ZĐ]|[IVX]{1,4}|\d{1,2})[.)]\s+\S", t):
+        return True
+    chu = [c for c in t if c.isalpha()]
+    return bool(chu) and all(c.isupper() for c in chu) and len(chu) >= 4
 
 
 def quet_bo(bo: dict):
     """Mọi chỗ trống của bộ, gộp theo khoá chuẩn hoá.
 
     Trả (dong, loi):
-      dong = [{khoa, literal, goi_y, files: [tên file], so_lan}] theo thứ tự
-             xuất hiện (file 1 trước, trong file theo thứ tự đoạn);
+      dong = [{khoa, literal, goi_y, muc, files: [tên file], so_lan}] theo thứ
+             tự xuất hiện (file 1 trước, trong file theo thứ tự đoạn);
       loi  = [{ten_file, loi}] các file mẫu không mở được.
     """
     import docx
@@ -110,99 +134,194 @@ def quet_bo(bo: dict):
             loi.append({"ten_file": f.get("ten_file") or "?",
                         "loi": f"không mở được ({type(exc).__name__})"})
             continue
+        muc = ""
         for par in template_fill.iter_all_paragraphs(doc):
             text = template_fill.paragraph_text(par)
             if "{{" not in text:
+                if _la_tieu_de_muc(text):
+                    muc = re.sub(r"\s+", " ", text).strip()[:MAX_GOI_Y_CHARS]
                 continue
-            for m in template_fill.PLACEHOLDER_RE.finditer(text):
+            cuoi_truoc, nhan_dau = 0, ""
+            trong_dong = list(template_fill.PLACEHOLDER_RE.finditer(text))
+            for thu_tu, m in enumerate(trong_dong, 1):
                 literal = m.group(0)
                 khoa = template_fill.normalize_key(m.group(1))
+                nhan = _nhan_o(text, m.start(), cuoi_truoc, nhan_dau,
+                               thu_tu, len(trong_dong))
+                if thu_tu == 1:
+                    nhan_dau = nhan
+                cuoi_truoc = m.end()
                 item = theo_khoa.get(khoa)
                 if item is None:
-                    item = {"khoa": khoa, "literal": literal,
-                            "goi_y": _cau_goi_y(text, literal),
-                            "files": [], "so_lan": 0}
+                    item = {"khoa": khoa, "literal": literal, "goi_y": nhan,
+                            "muc": muc, "files": [], "so_lan": 0}
                     theo_khoa[khoa] = item
                     dong.append(item)
                 item["so_lan"] += 1
                 if f["ten_file"] not in item["files"]:
                     item["files"].append(f["ten_file"])
                 if not item["goi_y"]:
-                    item["goi_y"] = _cau_goi_y(text, literal)
+                    item["goi_y"] = nhan
+                if not item.get("muc"):
+                    item["muc"] = muc
     return dong, loi
 
 
 # ---------------------------------------------------------------------------
 # Tờ khai: sinh ra và đọc lại
 # ---------------------------------------------------------------------------
+def _o_trong_bang(cell, text: str, *, dam=False, co: int = 11, xam=False):
+    from docx.shared import Pt
+
+    cell.text = ""
+    par = cell.paragraphs[0]
+    run = par.add_run(text or "")
+    run.bold = dam
+    run.font.size = Pt(co)
+    if xam:
+        from docx.oxml.ns import qn
+        shd = cell._tc.get_or_add_tcPr().makeelement(qn("w:shd"), {})
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:fill"), "E7EBF2")
+        cell._tc.get_or_add_tcPr().append(shd)
+    return par
+
+
 def to_khai_bytes(bo: dict, dong) -> bytes:
-    """File .docx TỜ KHAI THÔNG TIN của một bộ — bảng 4 cột, nhân viên chỉ gõ
-    cột cuối. Cột "Mã chỗ trống" giữ nguyên {{…}} vì đó là chỗ máy đọc lại."""
+    """File .docx TỜ KHAI THÔNG TIN của một bộ.
+
+    Bố cục đặt theo mắt người điền (phản hồi chủ dự án 18/09/2026: "làm lại dễ
+    đọc cho nhân viên"): NHÃN trước — Ô ĐIỀN rộng ở giữa — mã máy đọc in nhỏ,
+    xám, ở cột cuối; các ô chia theo MỤC của phiếu (A. Doanh nghiệp, B. Người
+    nộp hồ sơ…) bằng dòng ngăn tô nền, và ghi rõ ô đó đi vào file nào.
+    """
     import io
 
     import docx
-    from docx.shared import Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm, Pt
 
     doc = docx.Document()
     normal = doc.styles["Normal"]
     normal.font.name = "Times New Roman"
     normal.font.size = Pt(12)
+    for section in doc.sections:       # phiếu nhiều cột chữ — nới lề cho rộng
+        section.left_margin = section.right_margin = Cm(1.5)
     doc.core_properties.title = f"Tờ khai thông tin — {bo.get('ten') or ''}"
 
-    doc.add_heading(f"TỜ KHAI THÔNG TIN — BỘ «{bo.get('ten') or ''}»", level=1)
+    tieu_de = doc.add_heading(f"TỜ KHAI THÔNG TIN — BỘ «{bo.get('ten') or ''}»",
+                              level=1)
+    tieu_de.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    in_ra = list(dong)[:MAX_DONG_TO_KHAI]
     doc.add_paragraph(
-        "Cách dùng: chỉ điền cột «Giá trị điền». KHÔNG sửa cột «Mã chỗ trống» "
-        "— đó là chỗ máy đọc lại để điền vào từng file của bộ. Ô nào chưa có "
-        "thông tin thì để trống, máy sẽ báo lại chỗ còn thiếu. Điền xong lưu "
-        "file rồi tải lên ở màn hình «Điền bộ hồ sơ»."
+        f"Bộ «{bo.get('ten') or ''}» gồm {len(bo.get('files') or [])} file Word; "
+        f"phiếu này gom {len(dong)} ô thông tin của cả bộ (ô nào nhiều file "
+        "cùng dùng thì chỉ hỏi một lần)."
+        + (f" Bảng dưới in {len(in_ra)} ô đầu; số còn lại điền trực tiếp trên "
+           "màn hình «Điền bộ hồ sơ»." if len(in_ra) < len(dong) else "")
+    )
+    huong_dan = doc.add_paragraph()
+    huong_dan.add_run("Cách điền: ").bold = True
+    huong_dan.add_run(
+        "chỉ gõ vào cột «GIÁ TRỊ ĐIỀN». Ô nào chưa có thông tin thì để trống "
+        "— máy sẽ liệt kê lại những ô còn thiếu, không tự bịa. Cột «Mã ô» in "
+        "nhỏ ở cuối là để máy đọc lại: ")
+    huong_dan.add_run("đừng sửa, đừng xoá cột đó.").bold = True
+    doc.add_paragraph(
+        "Điền xong: lưu file (Ctrl+S) rồi tải lên ở màn hình «Điền bộ hồ sơ» "
+        "— máy chép giá trị vào đúng chỗ của từng file trong bộ."
     )
     if bo.get("mo_ta"):
         doc.add_paragraph(f"Mô tả bộ: {bo['mo_ta']}")
-    in_ra = list(dong)[:MAX_DONG_TO_KHAI]
-    doc.add_paragraph(
-        f"Bộ gồm {len(bo.get('files') or [])} file mẫu; tờ khai này có "
-        f"{len(dong)} ô thông tin (các chỗ trống trùng nhau đã gộp làm một)."
-        + (f" Bảng dưới chỉ in {len(in_ra)} ô đầu — số còn lại điền trực tiếp "
-           "trên màn hình «Điền bộ hồ sơ»." if len(in_ra) < len(dong) else "")
-    )
 
     table = doc.add_table(rows=1, cols=4)
     table.style = "Table Grid"
-    for cell, title in zip(table.rows[0].cells, TIEU_DE_COT):
-        cell.text = ""
-        cell.paragraphs[0].add_run(title).bold = True
-    for i, item in enumerate(in_ra, 1):
+    for cell, title, dam in zip(table.rows[0].cells, TIEU_DE_COT,
+                                (True, True, True, True)):
+        _o_trong_bang(cell, title, dam=dam, co=11, xam=True)
+    rong = (Cm(1.0), Cm(6.5), Cm(7.5), Cm(3.5))
+    for cell, w in zip(table.rows[0].cells, rong):
+        cell.width = w
+
+    muc_hien = None
+    stt = 0
+    for item in in_ra:
+        muc = (item.get("muc") or "").strip()
+        if muc and muc != muc_hien:
+            muc_hien = muc
+            hang = table.add_row().cells
+            _o_trong_bang(hang[0], "", xam=True)
+            _o_trong_bang(hang[1], muc, dam=True, co=11, xam=True)
+            _o_trong_bang(hang[2], "", xam=True)
+            _o_trong_bang(hang[3], "", xam=True)
+            for cell, w in zip(hang, rong):
+                cell.width = w
+        stt += 1
         cells = table.add_row().cells
-        cells[0].text = str(i)
-        cells[1].text = item["literal"]
-        cells[2].text = item.get("goi_y") or ""
-        cells[3].text = ""
+        _o_trong_bang(cells[0], str(stt), co=10)
+        nhan = item.get("goi_y") or item["literal"]
+        par = _o_trong_bang(cells[1], nhan, co=11)
+        files = item.get("files") or []
+        if files:
+            ghi = ", ".join(files[:2]) + (" …" if len(files) > 2 else "")
+            run = par.add_run("\n" + ghi)
+            run.font.size = Pt(7)
+            run.italic = True
+        _o_trong_bang(cells[2], "", co=11)          # ô để nhân viên gõ
+        _o_trong_bang(cells[3], item["literal"], co=7)
+        for cell, w in zip(cells, rong):
+            cell.width = w
+
     doc.add_paragraph()
-    doc.add_paragraph("Ghi chú của người khai: ")
+    doc.add_paragraph("Người khai: ……………………………  Ngày: ……/……/………")
+    doc.add_paragraph("Ghi chú thêm: ")
 
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
 
 
+def _cot_gia_tri(table) -> int | None:
+    """Chỉ số cột «Giá trị điền» đọc từ dòng tiêu đề (bố cục tờ khai đổi thì
+    chỗ đọc phải đi theo tiêu đề, không đếm cứng theo vị trí)."""
+    for row in table.rows[:3]:
+        for i, cell in enumerate(row.cells):
+            if "gia tri" in _fold(cell.text):
+                return i
+    return None
+
+
 def doc_to_khai(doc) -> dict:
-    """{khoa: giá trị} đọc từ bảng của tờ khai. Dòng hợp lệ: có một ô chứa
-    {{…}} và ô CUỐI dòng là giá trị đã gõ."""
+    """{khoa: giá trị} đọc từ bảng của tờ khai.
+
+    Dòng hợp lệ: có một ô chứa {{…}} (cột mã) và một ô khác là giá trị đã gõ.
+    Cột giá trị lấy theo TIÊU ĐỀ bảng; không có tiêu đề thì lấy ô cuối cùng
+    khác ô mã — nhờ vậy tờ khai bản cũ (mã ở cột 2, giá trị ở cột cuối) và bản
+    mới (giá trị ở giữa, mã ở cuối) đều đọc được.
+    """
     gia_tri = {}
     for table in doc.tables:
+        cot_gt = _cot_gia_tri(table)
         for row in table.rows:
             cells = row.cells
             if len(cells) < 2:
                 continue
-            khoa = None
-            for cell in cells[:-1]:
+            khoa, i_ma = None, None
+            for i, cell in enumerate(cells):
                 m = template_fill.PLACEHOLDER_RE.search(cell.text or "")
                 if m:
-                    khoa = template_fill.normalize_key(m.group(1))
+                    khoa, i_ma = template_fill.normalize_key(m.group(1)), i
                     break
             if not khoa:
                 continue
-            value = lam_sach_gia_tri(cells[-1].text)
+            value = ""
+            if cot_gt is not None and cot_gt != i_ma and cot_gt < len(cells):
+                value = lam_sach_gia_tri(cells[cot_gt].text)
+            if not value and i_ma != len(cells) - 1:
+                # Không còn dòng tiêu đề (ai đó xoá mất): lùi về nếp CŨ —
+                # giá trị nằm ở ô CUỐI dòng. Chỉ ô cuối, không dò các ô khác,
+                # kẻo nhãn "Tên công ty" bị hiểu thành giá trị.
+                value = lam_sach_gia_tri(cells[-1].text)
             if value:
                 gia_tri[khoa] = value
     return gia_tri
@@ -219,13 +338,21 @@ def _co_dan(escaped: str) -> str:
 def _regex_doan(text: str):
     """Regex bắt giá trị từ một đoạn mẫu có {{…}}: phần chữ cố định phải khớp,
     mỗi chỗ trống thành một nhóm bắt. Trả (regex, [khoá theo thứ tự]) hoặc
-    None nếu đoạn không dùng được."""
+    None nếu đoạn không dùng được.
+
+    Ô ĐẦU dòng bắt THAM (greedy), các ô sau bắt dè. Lý do từ hồ sơ thật: dòng
+    "Dia chi: {{SN}}, {{P}}, {{T}}, {{QG}}" gặp địa chỉ có 6 khúc ngăn bằng
+    dấu phẩy — bắt dè hết thì ô đầu chỉ được "Số 393A" còn "Tỉnh Đồng Nai,
+    Việt Nam" dồn hết vào ô cuối; bắt tham ô đầu thì phần dư nằm ở số nhà
+    (đúng thực tế) và các ô đuôi (phường, tỉnh, quốc gia) về đúng chỗ.
+    """
     parts, khoas, co_dinh, last = [], [], [], 0
     for m in template_fill.PLACEHOLDER_RE.finditer(text):
         raw = text[last:m.start()]
         co_dinh.append(raw)
         parts.append(_co_dan(re.escape(raw)))
-        parts.append("(.{0,%d}?)" % MAX_GIA_TRI_CHARS)
+        tham = "" if not khoas else "?"
+        parts.append("(.{0,%d}%s)" % (MAX_GIA_TRI_CHARS, tham))
         khoas.append(template_fill.normalize_key(m.group(1)))
         last = m.end()
     if not khoas:
@@ -245,12 +372,18 @@ def _regex_doan(text: str):
 def trich_tu_ban_da_dien(mau_doc, nop_doc) -> dict:
     """So bản mẫu gốc với bản nhân viên đã gõ đè: mỗi đoạn mẫu có {{…}} tìm
     đoạn tương ứng bên bản nộp (ưu tiên đúng vị trí, rồi dò quanh) và bóc phần
-    chữ đã thay vào."""
+    chữ đã thay vào.
+
+    Hai lượt: (1) đoạn có CHỮ CỐ ĐỊNH làm neo ("Tên công ty: {{TCT.TTV}}");
+    (2) đoạn CHỈ có một chỗ trống đứng riêng ("{{NN}}" — danh sách ngành nghề,
+    bảng kê nhiều dòng): lấy phần nằm GIỮA hai đoạn đã neo được ở lượt 1, sau
+    khi bỏ các dòng cố định của mẫu (tiêu đề mục) xuất hiện trong khoảng đó.
+    """
     mau = [template_fill.paragraph_text(p)
            for p in template_fill.iter_all_paragraphs(mau_doc)]
     nop = [template_fill.paragraph_text(p)
            for p in template_fill.iter_all_paragraphs(nop_doc)]
-    gia_tri = {}
+    gia_tri, neo = {}, {}      # neo: chỉ số đoạn mẫu → chỉ số đoạn bản nộp
     for i, text in enumerate(mau):
         if "{{" not in text:
             continue
@@ -270,12 +403,62 @@ def trich_tu_ban_da_dien(mau_doc, nop_doc) -> dict:
             m = regex.match(cand)
             if not m:
                 continue
+            neo[i] = j
             for khoa, raw in zip(khoas, m.groups()):
                 value = lam_sach_gia_tri(raw)
                 if value and khoa not in gia_tri:
                     gia_tri[khoa] = value
             break
+    gia_tri.update(_boc_o_khoi(mau, nop, neo, gia_tri))
     return gia_tri
+
+
+def _o_dung_rieng(text: str):
+    """Đoạn CHỈ có đúng một chỗ trống, không kèm chữ nào khác → khoá của nó."""
+    t = (text or "").strip()
+    m = template_fill.PLACEHOLDER_RE.fullmatch(t)
+    return template_fill.normalize_key(m.group(1)) if m else None
+
+
+def _boc_o_khoi(mau, nop, neo, da_co) -> dict:
+    """Ô đứng riêng cả dòng: giá trị là KHỐI nằm giữa hai đoạn đã neo.
+
+    Chặt hai đầu bằng neo để không vơ nhầm phần văn bản khác; bỏ những dòng
+    trùng nguyên văn dòng cố định của mẫu trong khoảng đó (tiêu đề mục vẫn
+    còn nguyên bên bản nộp).
+    """
+    if not neo:
+        return {}
+    ra = {}
+    moc = sorted(neo)
+    for i, text in enumerate(mau):
+        khoa = _o_dung_rieng(text)
+        if not khoa or khoa in da_co or khoa in ra:
+            continue
+        truoc = [k for k in moc if k < i]
+        sau = [k for k in moc if k > i]
+        if not truoc or not sau:
+            continue
+        i_p, i_n = truoc[-1], sau[0]
+        # Giữa hai neo, bên MẪU chỉ được có đúng ô này — nhiều ô là không biết
+        # phần nào của bản nộp thuộc ô nào.
+        if any(_o_dung_rieng(mau[k]) or "{{" in mau[k]
+               for k in range(i_p + 1, i_n) if k != i):
+            continue
+        j_p, j_n = neo[i_p], neo[i_n]
+        if j_n - j_p < 2:
+            continue
+        co_dinh = {_fold(mau[k]) for k in range(i_p + 1, i_n)
+                   if k != i and mau[k].strip()}
+        dong_val = [re.sub(r"\s+", " ", nop[j]).strip()
+                    for j in range(j_p + 1, j_n)]
+        dong_val = [d for d in dong_val if d and _fold(d) not in co_dinh]
+        if not dong_val:
+            continue
+        value = "; ".join(dong_val)[:MAX_GIA_TRI_KHOI]
+        if value:
+            ra[khoa] = value
+    return ra
 
 
 def _van_ban_khong_cho_trong(doc) -> str:
@@ -283,11 +466,19 @@ def _van_ban_khong_cho_trong(doc) -> str:
     return re.sub(r"\s+", " ", template_fill.PLACEHOLDER_RE.sub(" ", text)).strip()
 
 
-def chon_mau_khop(bo: dict, nop_doc, ten_file: str):
-    """(file mẫu, docx của mẫu) mà bản nộp là bản sao đã điền của nó — hoặc None.
+def khop_va_boc(bo: dict, nop_doc, ten_file: str):
+    """Bản nộp là bản sao ĐÃ ĐIỀN của file mẫu nào trong bộ → bóc giá trị.
 
-    Trùng TÊN là chắc nhất; không trùng tên thì so phần chữ cố định: bản đã
-    điền giữ gần như nguyên văn mẫu, chỉ khác ở chỗ trống."""
+    Trả (tên file mẫu, {khoa: giá trị}) hoặc (None, {}).
+
+    KHÔNG đo "độ giống" bằng ký tự nữa (18/09/2026): bản đã điền dài hơn hẳn
+    bản mẫu vì mang toàn bộ dữ liệu khách, nên difflib cho điểm cao cho một
+    file DÀI không liên quan và điểm thấp cho đúng file mẫu của nó — phiếu
+    tổng hợp thông tin từng bị nhận nhầm thành "Danh sách cổ đông sáng lập" và
+    bóc ra 0 ô. Thước đo đúng chính là KẾT QUẢ: thử bóc với từng file mẫu, file
+    nào ra nhiều ô nhất thì đó là bản gốc của nó. Trùng tên thì thử trước để
+    bộ 100 file không phải mở hết.
+    """
     import docx
 
     goc_ten = _fold(Path(ten_file or "").stem)
@@ -300,26 +491,22 @@ def chon_mau_khop(bo: dict, nop_doc, ten_file: str):
         xep.append((0 if trung_ten else 1, f, trung_ten))
     xep.sort(key=lambda x: x[0])
 
-    nop_text = _fold(_van_ban_khong_cho_trong(nop_doc))[:6000]
-    if not nop_text:
-        return None
-    tot_nhat, diem_nhat = None, 0.0
+    tot_ten, tot_gt = None, {}
     for _uu_tien, f, trung_ten in xep:
         try:
             mau_doc = docx.Document(str(bo_mau.resolve_path(f["duong_dan"])))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — file mẫu hỏng thì bỏ qua, thử file khác
             continue
-        mau_text = _fold(_van_ban_khong_cho_trong(mau_doc))[:6000]
-        if not mau_text:
-            continue
-        diem = difflib.SequenceMatcher(None, mau_text, nop_text).quick_ratio()
-        if trung_ten and diem >= 0.45:
-            return f, mau_doc
-        if diem > diem_nhat:
-            tot_nhat, diem_nhat = (f, mau_doc), diem
-    # Ngưỡng cao: nhận nhầm một hợp đồng khác làm "bản đã điền" thì mọi giá trị
-    # bóc ra đều sai chỗ.
-    return tot_nhat if diem_nhat >= 0.70 else None
+        gt = trich_tu_ban_da_dien(mau_doc, nop_doc)
+        if trung_ten and gt:
+            return f["ten_file"], gt        # đúng tên lại bóc được: chắc chắn
+        if len(gt) > len(tot_gt):
+            tot_ten, tot_gt = f["ten_file"], gt
+    # Vài ô lẻ có thể khớp nhầm do hai mẫu dùng chung một câu ("Ngày … tháng
+    # …"); đòi tối thiểu 3 ô mới dám coi là bản sao của mẫu đó.
+    if len(tot_gt) >= 3:
+        return tot_ten, tot_gt
+    return None, {}
 
 
 # ---------------------------------------------------------------------------
@@ -362,16 +549,15 @@ def boc_gia_tri(bo: dict, uploads):
                             "loi": None})
             continue
 
-        khop = chon_mau_khop(bo, nop_doc, ten)
-        if khop is not None:
-            f_mau, mau_doc = khop
+        ten_mau, tu_mau = khop_va_boc(bo, nop_doc, ten)
+        if ten_mau:
             them = 0
-            for k, v in trich_tu_ban_da_dien(mau_doc, nop_doc).items():
+            for k, v in tu_mau.items():
                 if k not in gia_tri:
                     gia_tri[k], nguon[k] = v, f"bản đã điền «{ten}»"
                     them += 1
             bao_cao.append({"ten_file": ten, "cach": "ban_da_dien", "so_o": them,
-                            "loi": None, "mau": f_mau["ten_file"]})
+                            "loi": None, "mau": ten_mau})
             continue
 
         bao_cao.append({"ten_file": ten, "cach": "van_ban", "so_o": 0, "loi": None})

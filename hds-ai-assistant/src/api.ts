@@ -567,6 +567,9 @@ export const hocFileKho = ApiJs.hocFileKho as (params: {
 
 export const quetKho = ApiJs.quetKho as () => Promise<{ ok: boolean; pid: number; started_at: string }>;
 
+export const getTienDoHoc = ApiJs.getTienDoHoc as () =>
+  Promise<import('./types').TienDoHoc>;
+
 export const taoThuMucKho = ApiJs.taoThuMucKho as (params: {
   path?: string;
   ten: string;
