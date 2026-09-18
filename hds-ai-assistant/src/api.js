@@ -1796,6 +1796,77 @@ export async function previewTemplateFill(token) {
   }
 }
 
+// ---- BỘ HỒ SƠ ĐÃ ĐIỀN: LƯU LẠI ĐỂ MỞ TRONG 7 NGÀY (18/09/2026) ----
+// Chỉ lưu con trỏ tới file đã điền (token), không tải file lên lần nữa.
+
+// POST /ho-so-da-luu
+export async function luuHoSoDaDien(body = {}) {
+  if (useMockBackend) {
+    const files = (body.files || []).map((f) => ({ ...f, con: true }));
+    const ghi = {
+      ma: `${Date.now().toString(16)}${'0'.repeat(32)}`.slice(0, 32),
+      ten: body.ten || 'Bộ hồ sơ đã điền',
+      kieu: body.kieu || 'bo_mau',
+      bo_id: body.bo_id ?? null,
+      bo_ten: body.bo_ten || '',
+      luc: Date.now() / 1000,
+      so_o: body.so_o || 0,
+      so_da_dien: (body.da_dien || []).length,
+      so_thieu: (body.con_thieu || []).length,
+      so_file: files.length,
+      so_file_con: files.length,
+      con_lai_ngay: 7,
+      zip_token: body.zip_token || null,
+      zip_con: Boolean(body.zip_token),
+      files,
+      da_dien: body.da_dien || [],
+      con_thieu: body.con_thieu || [],
+    };
+    mockState.hoSoDaLuu = [ghi, ...(mockState.hoSoDaLuu || [])];
+    return ghi;
+  }
+  return request('/ho-so-da-luu', { method: 'POST', body: JSON.stringify(body) });
+}
+
+// GET /ho-so-da-luu
+export async function listHoSoDaLuu() {
+  if (useMockBackend) {
+    return { items: mockState.hoSoDaLuu || [], giu_ngay: 7, toi_da: 50 };
+  }
+  return request('/ho-so-da-luu');
+}
+
+// GET /ho-so-da-luu/{ma}
+export async function getHoSoDaLuu(ma) {
+  if (useMockBackend) {
+    const ghi = (mockState.hoSoDaLuu || []).find((x) => x.ma === ma);
+    if (!ghi) throw new Error('Hồ sơ đã lưu không còn.');
+    return ghi;
+  }
+  return request(`/ho-so-da-luu/${encodeURIComponent(ma)}`);
+}
+
+// PUT /ho-so-da-luu/{ma}
+export async function renameHoSoDaLuu(ma, ten) {
+  if (useMockBackend) {
+    const ghi = (mockState.hoSoDaLuu || []).find((x) => x.ma === ma);
+    if (ghi) ghi.ten = ten;
+    return ghi || {};
+  }
+  return request(`/ho-so-da-luu/${encodeURIComponent(ma)}`, {
+    method: 'PUT', body: JSON.stringify({ ten }),
+  });
+}
+
+// DELETE /ho-so-da-luu/{ma}
+export async function deleteHoSoDaLuu(ma) {
+  if (useMockBackend) {
+    mockState.hoSoDaLuu = (mockState.hoSoDaLuu || []).filter((x) => x.ma !== ma);
+    return { ok: true };
+  }
+  return request(`/ho-so-da-luu/${encodeURIComponent(ma)}`, { method: 'DELETE' });
+}
+
 // ==================== CHẾ ĐỘ GIẢ LẬP (MOCK) ====================
 // Dữ liệu mẫu bám sát seed thật của backend:
 //   - 4 bộ phận trong app/seed_departments.py
@@ -1805,6 +1876,8 @@ export async function previewTemplateFill(token) {
 let mockState = {
   // Bộ mẫu hồ sơ (chế độ giả lập bắt đầu trống — tạo qua tab Quản trị).
   boMau: [],
+  // Bộ hồ sơ đã điền mà người dùng bấm Lưu (18/09/2026).
+  hoSoDaLuu: [],
   stats: {
     tai_lieu: 148,
     da_duyet_nhan: 134,

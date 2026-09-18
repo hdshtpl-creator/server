@@ -9,6 +9,7 @@ import type {
   DraftCreateInput,
   DraftDocument,
   DraftTemplate,
+  HoSoDaLuu,
   SoSanhKetQua,
   Source,
 } from '../../types';
@@ -16,6 +17,7 @@ import { DOC_TYPES, DOC_TYPE_LABELS } from '../../constants';
 import { DiffView } from '../common/DiffView';
 import { DienBoMauPanel } from './DienBoMauPanel';
 import { DienTheoBanCuPanel } from './DienTheoBanCuPanel';
+import { HoSoDaLuuModal } from './HoSoDaLuuModal';
 import {
   AlertTriangle,
   BookOpen,
@@ -24,7 +26,9 @@ import {
   Download,
   FilePenLine,
   FilePlus2,
+  FolderClock,
   GitCompare,
+  Package,
   ListChecks,
   Loader2,
   Plus,
@@ -136,6 +140,9 @@ export const DraftsWorkspace: React.FC = () => {
   // bộ mẫu sao không có trong list?"). Chọn bộ là chuyển sang luồng ĐIỀN CẢ BỘ
   // — khác hẳn bản nháp một văn bản nên panel riêng, không trộn vào form.
   const [boMauList, setBoMauList] = useState<BoMau[]>([]);
+  /** Bộ hồ sơ đã điền và ĐÃ LƯU của chính người này (giữ 7 ngày). */
+  const [daLuuList, setDaLuuList] = useState<HoSoDaLuu[]>([]);
+  const [moDaLuu, setMoDaLuu] = useState<string | null>(null);
   const [boMauChon, setBoMauChon] = useState<BoMau | null>(null);
   // Luồng "theo bộ hồ sơ khách cũ" (18/09/2026): không gắn với bộ mẫu nào,
   // không cần mã chỗ trống — AI đọc bộ cũ rồi thay thông tin chủ thể.
@@ -272,8 +279,20 @@ export const DraftsWorkspace: React.FC = () => {
     }
   }, [selected?.id]);
 
+  const loadDaLuu = useCallback(async () => {
+    try {
+      const res = await api.listHoSoDaLuu();
+      setDaLuuList(Array.isArray(res?.items) ? res.items : []);
+    } catch {
+      // Không có hồ sơ đã lưu thì cột vẫn phải mở được — đừng chặn màn hình
+      // vì một danh sách phụ.
+      setDaLuuList([]);
+    }
+  }, []);
+
   useEffect(() => {
     loadDrafts();
+    loadDaLuu();
     // Chỉ nạp một lần khi mở workspace.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -307,6 +326,26 @@ export const DraftsWorkspace: React.FC = () => {
       setBoMauList(Array.isArray(boMauRes?.items) ? boMauRes.items : []);
     } catch (err: any) {
       setError(err?.message || 'Không tải được kho nguồn.');
+    }
+  };
+
+  const dienLaiBo = async (boId: number) => {
+    setMoDaLuu(null);
+    await openCreate();
+    const dangCo = boMauList.find((item) => item.id === boId);
+    if (dangCo) {
+      setBoMauChon(dangCo);
+      return;
+    }
+    try {
+      const res = await api.listBoMau();
+      const items = Array.isArray(res?.items) ? res.items : [];
+      setBoMauList(items);
+      const bo = items.find((item: BoMau) => item.id === boId);
+      if (bo) setBoMauChon(bo);
+      else setError('Bộ mẫu gốc không còn — hãy chọn bộ khác trong danh sách.');
+    } catch (err: any) {
+      setError(err?.message || 'Không tải được danh sách bộ mẫu.');
     }
   };
 
@@ -625,6 +664,48 @@ export const DraftsWorkspace: React.FC = () => {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {daLuuList.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <p className="px-1 pb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400 flex items-center gap-1.5">
+                  <FolderClock className="w-3.5 h-3.5" /> Bộ hồ sơ đã điền · giữ 7 ngày
+                </p>
+                <div className="space-y-1">
+                  {daLuuList.map((ho) => (
+                    <button
+                      key={ho.ma}
+                      type="button"
+                      onClick={() => setMoDaLuu(ho.ma)}
+                      className="w-full text-left p-3 rounded-xl border border-transparent hover:bg-slate-50 dark:hover:bg-slate-800"
+                    >
+                      <span className="block text-xs font-bold text-slate-800 dark:text-slate-100 line-clamp-2">
+                        {ho.ten}
+                      </span>
+                      <span className="mt-1.5 flex items-center justify-between gap-2">
+                        <span className="text-[9px] text-slate-500 flex items-center gap-1">
+                          <Package className="w-3 h-3" />
+                          {ho.so_file_con}/{ho.so_file} file
+                          {ho.so_thieu > 0 && (
+                            <span className="text-amber-700 dark:text-amber-300 font-bold">
+                              · thiếu {ho.so_thieu} ô
+                            </span>
+                          )}
+                        </span>
+                        <span
+                          className={`text-[9px] ${
+                            ho.con_lai_ngay < 1 ? 'text-hds-red font-bold' : 'text-slate-400'
+                          }`}
+                        >
+                          {ho.con_lai_ngay < 1
+                            ? `còn ${Math.max(1, Math.round(ho.con_lai_ngay * 24))} giờ`
+                            : `còn ${Math.floor(ho.con_lai_ngay)} ngày`}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -987,9 +1068,11 @@ export const DraftsWorkspace: React.FC = () => {
                 )}
               </label>
 
-              {boMauChon && <DienBoMauPanel bo={boMauChon} />}
+              {boMauChon && (
+                <DienBoMauPanel bo={boMauChon} onSaved={() => void loadDaLuu()} />
+              )}
 
-              {theoBanCu && <DienTheoBanCuPanel />}
+              {theoBanCu && <DienTheoBanCuPanel onSaved={() => void loadDaLuu()} />}
 
               {!boMauChon && !theoBanCu && (
               <>
@@ -1167,6 +1250,17 @@ export const DraftsWorkspace: React.FC = () => {
             </div>
           </form>
         </div>
+      )}
+
+      {moDaLuu && (
+        <HoSoDaLuuModal
+          ma={moDaLuu}
+          coBoMau={boMauList.length > 0}
+          onClose={() => setMoDaLuu(null)}
+          onXoa={() => void loadDaLuu()}
+          onDoiTen={() => void loadDaLuu()}
+          onDienLai={(boId) => void dienLaiBo(boId)}
+        />
       )}
 
       {showRevise && selected && (

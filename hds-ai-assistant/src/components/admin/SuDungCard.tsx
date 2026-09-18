@@ -91,6 +91,7 @@ export const SuDungCard: React.FC = () => {
                     <th className="py-2 px-2 font-semibold text-right">Hội thoại</th>
                     <th className="py-2 px-2 font-semibold text-right">Tin nhắn</th>
                     <th className="py-2 px-2 font-semibold text-right">Bản nháp</th>
+                    <th className="py-2 px-2 font-semibold text-right" title="Bộ hồ sơ đã điền mà người dùng bấm Lưu (tự xoá sau 7 ngày)">Hồ sơ đã lưu</th>
                     <th className="py-2 px-2 font-semibold text-right">Tài liệu đã nạp</th>
                     <th className="py-2 px-2 font-semibold text-right">File đang giữ</th>
                     <th className="py-2 px-2 font-semibold text-right">Dung lượng</th>
@@ -114,6 +115,7 @@ export const SuDungCard: React.FC = () => {
                       <td className="py-2 px-2 text-right">{u.hoi_thoai}</td>
                       <td className="py-2 px-2 text-right">{u.tin_nhan}</td>
                       <td className="py-2 px-2 text-right">{u.ban_nhap}</td>
+                      <td className="py-2 px-2 text-right">{u.ho_so_da_luu ?? 0}</td>
                       <td className="py-2 px-2 text-right">{u.tai_lieu_da_nap}</td>
                       <td className="py-2 px-2 text-right">{u.file_dang_giu}</td>
                       <td className="py-2 px-2 text-right font-semibold">

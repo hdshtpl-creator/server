@@ -12,6 +12,7 @@ import {
   FileText,
   Loader2,
   Package,
+  Save,
   Search,
   Sparkles,
   Square,
@@ -34,6 +35,8 @@ interface Props {
   bo: BoMau;
   /** Đóng panel (nút Huỷ của modal cha). */
   onClose?: () => void;
+  /** Vừa lưu xong — cột "Bộ hồ sơ đã điền" bên trái nạp lại. */
+  onSaved?: () => void;
 }
 
 const DINH_DANG = '.docx,.pdf,.doc,.txt,.md,.jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp';
@@ -45,7 +48,7 @@ const CACH_DOC: Record<string, string> = {
   loi: 'không đọc được',
 };
 
-export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
+export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose, onSaved }) => {
   const { showToast } = useApp();
   const [choTrong, setChoTrong] = useState<BoMauChoTrong[]>([]);
   const [loiMau, setLoiMau] = useState<Array<{ ten_file: string; loi: string }>>([]);
@@ -61,6 +64,9 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
   const [ketQua, setKetQua] = useState<BoMauDienResult | null>(null);
   const [xem, setXem] = useState<{ ten: string; doan: string[]; cat_bot: boolean } | null>(null);
   const [xemBusy, setXemBusy] = useState<string | null>(null);
+  const [tenLuu, setTenLuu] = useState('');
+  const [luuBusy, setLuuBusy] = useState(false);
+  const [daLuu, setDaLuu] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -201,6 +207,10 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
         onProgress: setTienTrinh,
       });
       setKetQua(res);
+      // Lượt điền mới ra file mới: bản đã lưu trước đó không còn ứng với màn
+      // hình này nữa, phải bấm Lưu lại.
+      setDaLuu(false);
+      setTenLuu((truoc) => truoc || `${bo.ten} — ${new Date().toLocaleDateString('vi-VN')}`);
       const xong = (res.files || []).filter((f) => f.token).length;
       showToast(`Đã điền ${xong}/${(res.files || []).length} file.`, xong ? 'success' : 'error');
     } catch (err: any) {
@@ -254,6 +264,56 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
 
   const soDaDien = ketQua?.da_dien?.length || 0;
   const soThieu = ketQua?.con_thieu?.length || 0;
+
+  /** Lưu kết quả để mở lại trong 7 ngày (không nhân bản file, chỉ ghi con
+   *  trỏ tới các token vừa tạo). */
+  const luuLai = async () => {
+    if (!ketQua || luuBusy) return;
+    const files = (ketQua.files || [])
+      .filter((f) => f.token)
+      .map((f) => ({
+        token: f.token as string,
+        ten_file: f.ten_file,
+        ten_ket_qua: f.ten_ket_qua || f.ten_file,
+        so_trong: f.con_trong.length,
+      }));
+    if (!files.length) {
+      showToast('Chưa có file nào điền xong để lưu.', 'error');
+      return;
+    }
+    // Thiếu dữ liệu vẫn được lưu — nhưng phải biết mình đang lưu bản dở.
+    if (
+      soThieu > 0 &&
+      !window.confirm(
+        `Bộ này còn ${soThieu} ô chưa có dữ liệu — file lưu lại vẫn hiện nguyên ` +
+          'các ô {{…}} ở những chỗ đó.\n\nVẫn lưu bản dở này?'
+      )
+    ) {
+      return;
+    }
+    setLuuBusy(true);
+    try {
+      await api.luuHoSoDaDien({
+        ten: tenLuu.trim() || bo.ten,
+        kieu: 'bo_mau',
+        bo_id: bo.id,
+        bo_ten: bo.ten,
+        files,
+        zip_token: ketQua.zip_token,
+        so_o: ketQua.so_o,
+        da_dien: ketQua.da_dien || [],
+        con_thieu: ketQua.con_thieu || [],
+      });
+      setDaLuu(true);
+      showToast('Đã lưu — mở lại ở cột «Bộ hồ sơ đã điền» bên trái (giữ 7 ngày).',
+                'success');
+      onSaved?.();
+    } catch (err: any) {
+      showToast(err?.message || 'Không lưu được bộ hồ sơ.', 'error');
+    } finally {
+      setLuuBusy(false);
+    }
+  };
 
   const oNhap = (o: BoMauChoTrong, vien: 'thuong' | 'thieu' = 'thuong') => (
     <label key={o.khoa} className="space-y-1" title={`Mã ô: ${o.literal}`}>
@@ -547,22 +607,6 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
             ))}
           </div>
 
-          {ketQua.zip_token && (
-            <button
-              type="button"
-              onClick={() =>
-                taiFile(
-                  ketQua.zip_token,
-                  `${bo.ten} - da dien.zip`,
-                  (ketQua.files || []).reduce((n, f) => n + f.con_trong.length, 0)
-                )
-              }
-              className="w-full px-3 py-2 rounded-xl border border-hds-navy text-hds-navy dark:text-blue-300 dark:border-blue-700 text-[11px] font-bold flex items-center justify-center gap-1.5 hover:bg-hds-soft dark:hover:bg-slate-800"
-            >
-              <Package className="w-3.5 h-3.5" /> Tải cả bộ (.zip)
-            </button>
-          )}
-
           <ul className="space-y-1.5">
             {(ketQua.files || []).map((f) => (
               <li
@@ -689,6 +733,58 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
               </button>
             </div>
           )}
+
+          {/* THANH LƯU — dính đáy: kết quả dài, cuộn mãi mới thấy nút thì
+              coi như không có nút. */}
+          <div className="sticky bottom-0 -mx-1 px-1 pt-2 pb-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={tenLuu}
+                onChange={(e) => {
+                  setTenLuu(e.target.value);
+                  setDaLuu(false);
+                }}
+                placeholder="Tên hồ sơ để tìm lại (ví dụ: ĐKKD — Công ty An Phát)"
+                className="flex-1 min-w-[180px] px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 dark:bg-slate-900 text-[11px] outline-none focus:ring-2 focus:ring-hds-blue"
+              />
+              <button
+                type="button"
+                onClick={luuLai}
+                disabled={luuBusy}
+                className="px-3 py-2 rounded-xl bg-hds-navy text-hds-gold text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-50"
+                title="Giữ bộ này lại để mở ở cột trái trong 7 ngày"
+              >
+                {luuBusy ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : daLuu ? (
+                  <Check className="w-3.5 h-3.5" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                {daLuu ? 'Đã lưu · lưu lại' : 'Lưu bộ hồ sơ'}
+              </button>
+              {ketQua.zip_token && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    taiFile(
+                      ketQua.zip_token,
+                      `${bo.ten} - da dien.zip`,
+                      (ketQua.files || []).reduce((n, f) => n + f.con_trong.length, 0)
+                    )
+                  }
+                  className="px-3 py-2 rounded-xl border border-hds-navy text-hds-navy dark:text-blue-300 dark:border-blue-700 text-[11px] font-bold flex items-center gap-1.5 hover:bg-hds-soft dark:hover:bg-slate-800"
+                >
+                  <Package className="w-3.5 h-3.5" /> Tải cả bộ (.zip)
+                </button>
+              )}
+            </div>
+            <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+              {daLuu
+                ? 'Đã lưu. Mở lại ở cột «Bộ hồ sơ đã điền» bên trái — không phải điền lại từ đầu.'
+                : 'Lưu để mở lại ở cột trái trong 7 ngày; đóng cửa sổ mà chưa lưu là mất dấu bộ này.'}
+            </p>
+          </div>
 
           <p className="text-[10px] text-slate-500 dark:text-slate-400">
             Văn bản sẽ gửi ra ngoài — hãy <b>rà toàn văn</b> từng file (tên bên, con số, ngày

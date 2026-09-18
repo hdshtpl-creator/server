@@ -103,7 +103,9 @@ hds-ai-full/                          ← repo, đặt ở /home/<user>/ hoặc 
 │       │   └── uploads/<loại>/<YYYY-MM>/  ← file tải lên qua web (bộ quét bỏ qua)
 │       └── work/         hàng tạm, xoá cả thư mục cũng không sao
 │           ├── preview/        PDF xem trước của file Office
-│           ├── template_fills/ file AI tạo từ chat (tự dọn sau 24h)
+│           ├── template_fills/ file AI tạo (điền bộ, tạo từ chat) — dọn sau 7 ngày
+│           ├── ho_so_da_luu/   bản ghi JSON "bộ hồ sơ đã lưu" của từng người,
+│           │                   chỉ trỏ tới token trong template_fills — dọn sau 7 ngày
 │           └── chat_uploads/   bản .docx gốc của file đính kèm chat
 ├── hds-ai-assistant/                 ← giao diện React
 │   ├── dist/             ★ nginx phục vụ thư mục này

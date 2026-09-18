@@ -1470,7 +1470,7 @@ def users_su_dung(user=Depends(current_user)):
     ai cả.
     """
     require(user, {"admin"})
-    from app import template_fill as _tf
+    from app import ho_so_da_luu as _hs, template_fill as _tf
 
     hoi_thoai, tin_nhan, ban_nhap, tai_lieu, hoat_dong = {}, {}, {}, {}, {}
     with db.session(role="internal", admin=True) as conn:
@@ -1520,10 +1520,13 @@ def users_su_dung(user=Depends(current_user)):
             so_file[chu] = so_file.get(chu, 0) + 1
             dung_luong[chu] = dung_luong.get(chu, 0) + cong
 
+    da_luu = _hs.dem_theo_nguoi()
+
     items = [{
         "id": r[0], "full_name": r[1], "email": r[2], "role": r[3], "active": r[4],
         "hoi_thoai": hoi_thoai.get(r[0], 0), "tin_nhan": tin_nhan.get(r[0], 0),
         "ban_nhap": ban_nhap.get(r[0], 0), "tai_lieu_da_nap": tai_lieu.get(r[0], 0),
+        "ho_so_da_luu": da_luu.get(r[0], 0),
         "file_dang_giu": so_file.get(r[0], 0), "dung_luong": dung_luong.get(r[0], 0),
         "hoat_dong_cuoi": str(hoat_dong.get(r[0]))[:19] if hoat_dong.get(r[0]) else None,
     } for r in nguoi]
@@ -3211,6 +3214,159 @@ def template_fill_preview(token: str, user=Depends(current_user)):
     return FileResponse(pdf, media_type="application/pdf",
                         filename=f"{path.stem}.pdf",
                         content_disposition_type="inline")
+
+
+# ---------- 8a4. BỘ HỒ SƠ ĐÃ ĐIỀN — LƯU ĐỂ MỞ LẠI (7 ngày) ----------
+class HoSoLuuFileIn(BaseModel):
+    token: str
+    ten_file: str = ""
+    ten_ket_qua: str = ""
+    so_trong: int = 0
+
+
+class HoSoLuuOIn(BaseModel):
+    khoa: str
+    literal: str = ""
+    goi_y: str = ""
+    gia_tri: str = ""
+    nguon: str = ""
+
+
+class HoSoLuuIn(BaseModel):
+    ten: str
+    kieu: str = "bo_mau"
+    bo_id: int | None = None
+    bo_ten: str = ""
+    files: list[HoSoLuuFileIn] = []
+    zip_token: str | None = None
+    so_o: int = 0
+    da_dien: list[HoSoLuuOIn] = []
+    con_thieu: list[HoSoLuuOIn] = []
+
+
+class HoSoLuuTen(BaseModel):
+    ten: str
+
+
+def _ho_so_luu_ra(ban_ghi: dict, day_du: bool = False) -> dict:
+    """Bản ghi trên đĩa → JSON cho giao diện.
+
+    Thêm hai thứ chỉ biết lúc đọc: hạn còn lại, và file nào CÒN trên máy chủ —
+    bản ghi sống cùng mốc 7 ngày với file nhưng một lượt dọn có thể xen vào
+    giữa, đừng để người dùng bấm Tải rồi mới thấy 404.
+    """
+    from app import ho_so_da_luu as _hs, template_fill as _tf
+    files = [{**f, "con": _tf.find_fill_file(f.get("token") or "") is not None}
+             for f in (ban_ghi.get("files") or [])]
+    zip_token = ban_ghi.get("zip_token")
+    ra = {
+        "ma": ban_ghi.get("ma"),
+        "ten": ban_ghi.get("ten"),
+        "kieu": ban_ghi.get("kieu"),
+        "bo_id": ban_ghi.get("bo_id"),
+        "bo_ten": ban_ghi.get("bo_ten"),
+        "luc": ban_ghi.get("luc"),
+        "so_o": ban_ghi.get("so_o") or 0,
+        "so_da_dien": len(ban_ghi.get("da_dien") or []),
+        "so_thieu": len(ban_ghi.get("con_thieu") or []),
+        "so_file": len(files),
+        "so_file_con": sum(1 for f in files if f["con"]),
+        "con_lai_ngay": round(_hs.con_lai_ngay(ban_ghi), 2),
+        "zip_token": zip_token,
+        "zip_con": bool(zip_token) and _tf.find_fill_file(zip_token) is not None,
+        "files": files,
+    }
+    if day_du:
+        ra["da_dien"] = ban_ghi.get("da_dien") or []
+        ra["con_thieu"] = ban_ghi.get("con_thieu") or []
+    return ra
+
+
+@app.get("/ho-so-da-luu")
+def ho_so_da_luu_list(user=Depends(current_user)):
+    """Hồ sơ đã điền mà NGƯỜI NÀY bấm Lưu — danh sách bên trái khu Soạn tài
+    liệu. Không ai xem được của nhau (kể cả admin: bên Quản trị chỉ thấy số
+    lượng và dung lượng, không mở nội dung)."""
+    require(user, INTERNAL_ROLES)
+    from app import ho_so_da_luu as _hs
+    return {"items": [_ho_so_luu_ra(b) for b in _hs.danh_sach(user["id"])],
+            "giu_ngay": _hs.GIU_NGAY, "toi_da": _hs.MAX_MOI_NGUOI}
+
+
+@app.post("/ho-so-da-luu")
+def ho_so_da_luu_tao(body: HoSoLuuIn, user=Depends(current_user)):
+    """Lưu kết quả vừa điền để mở lại trong 7 ngày.
+
+    Không nhân bản file: bản ghi chỉ trỏ tới token đã có. Mọi token phải là
+    của chính người bấm Lưu — token do giao diện gửi lên nên phải soát lại,
+    không tin lời khai của trình duyệt.
+    """
+    require(user, INTERNAL_ROLES)
+    from app import ho_so_da_luu as _hs, template_fill as _tf
+    if len(body.files) > _hs.MAX_FILE:
+        raise HTTPException(422, f"Một bộ tối đa {_hs.MAX_FILE} file")
+    if len(body.da_dien) > _hs.MAX_O or len(body.con_thieu) > _hs.MAX_O:
+        raise HTTPException(422, "Bảng đối chiếu quá dài")
+    tokens = [f.token for f in body.files if f.token]
+    if body.zip_token:
+        tokens.append(body.zip_token)
+    if not tokens:
+        raise HTTPException(400, "Chưa có file kết quả nào để lưu — hãy bấm "
+                                 "Điền trước.")
+    mat = []
+    for tk in tokens:
+        _fill_cua_toi(tk, user)
+        if _tf.find_fill_file(tk) is None:
+            mat.append(tk)
+    if mat:
+        raise HTTPException(404, "Một số file kết quả không còn trên máy chủ "
+                                 "(quá 7 ngày) — hãy điền lại rồi lưu.")
+    ban_ghi = _hs.luu(user_id=user["id"], ten=body.ten, kieu=body.kieu,
+                      bo_id=body.bo_id, bo_ten=body.bo_ten,
+                      files=[f.model_dump() for f in body.files],
+                      zip_token=body.zip_token, so_o=body.so_o,
+                      da_dien=[o.model_dump() for o in body.da_dien],
+                      con_thieu=[o.model_dump() for o in body.con_thieu])
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "luu_ho_so_da_dien", "template_fill", None,
+                 {"ma": ban_ghi["ma"], "so_file": len(ban_ghi["files"]),
+                  "so_thieu": len(ban_ghi["con_thieu"]), "kieu": ban_ghi["kieu"]})
+    return _ho_so_luu_ra(ban_ghi, day_du=True)
+
+
+@app.get("/ho-so-da-luu/{ma}")
+def ho_so_da_luu_get(ma: str, user=Depends(current_user)):
+    """Mở lại một hồ sơ đã lưu — kèm bảng đối chiếu để điền lại chỗ còn thiếu."""
+    require(user, INTERNAL_ROLES)
+    from app import ho_so_da_luu as _hs
+    ban_ghi = _hs.lay(ma, user["id"])
+    if ban_ghi is None:
+        raise HTTPException(404, "Hồ sơ đã lưu không còn (quá 7 ngày) hoặc "
+                                 "không phải của bạn.")
+    return _ho_so_luu_ra(ban_ghi, day_du=True)
+
+
+@app.put("/ho-so-da-luu/{ma}")
+def ho_so_da_luu_doi_ten(ma: str, body: HoSoLuuTen, user=Depends(current_user)):
+    require(user, INTERNAL_ROLES)
+    from app import ho_so_da_luu as _hs
+    ban_ghi = _hs.doi_ten(ma, user["id"], body.ten)
+    if ban_ghi is None:
+        raise HTTPException(404, "Hồ sơ đã lưu không còn hoặc không phải của bạn.")
+    return _ho_so_luu_ra(ban_ghi)
+
+
+@app.delete("/ho-so-da-luu/{ma}")
+def ho_so_da_luu_xoa(ma: str, user=Depends(current_user)):
+    """Xoá bản ghi. File .docx vẫn tự hết hạn theo lịch 7 ngày của nó."""
+    require(user, INTERNAL_ROLES)
+    from app import ho_so_da_luu as _hs
+    if not _hs.xoa(ma, user["id"]):
+        raise HTTPException(404, "Hồ sơ đã lưu không còn hoặc không phải của bạn.")
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "xoa_ho_so_da_luu", "template_fill", None,
+                 {"ma": ma})
+    return {"ok": True}
 
 
 # ---------- 8b. CÀI ĐẶT AI (phong cách tư vấn, bản đồ Drive) ----------

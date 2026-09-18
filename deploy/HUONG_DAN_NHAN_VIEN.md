@@ -220,7 +220,11 @@ Ba bước:
 2. **Điền cột "Giá trị điền"** rồi **tải lên**. Đừng sửa cột *Mã ô*. **Hoặc** dùng luôn phiếu sẵn có của bộ: bấm tên file mẫu ở bước 1 để tải về, gõ đè lên các chỗ trống rồi tải lên — máy so với bản mẫu gốc và bóc ra đúng phần bạn đã gõ.
 3. **Điền N file của bộ** — mỗi file mẫu ra một file kết quả, **giữ nguyên định dạng Word gốc**.
 
-Sau khi xong, mỗi file có ba nút: **Xem nhanh** (đọc nội dung ngay tại chỗ, dòng vàng là chỗ trống chưa có dữ liệu), **PDF** (xem đúng định dạng Word), **Tải**. Từ 2 file trở lên có thêm **Tải cả bộ (.zip)**.
+Sau khi xong, mỗi file có ba nút: **Xem nhanh** (đọc nội dung ngay tại chỗ, dòng vàng là chỗ trống chưa có dữ liệu), **PDF** (xem đúng định dạng Word), **Tải**.
+
+**Thanh lưu ở đáy cửa sổ** (luôn hiện khi cuộn): đặt tên cho bộ → **Lưu bộ hồ sơ** → mở lại bất cứ lúc nào trong 7 ngày ở mục **“Bộ hồ sơ đã điền”** dưới danh sách Bản nháp (cột trái). Cạnh đó là **Tải cả bộ (.zip)** khi bộ có từ 2 file. **Đóng cửa sổ mà chưa bấm Lưu là mất dấu bộ vừa điền** — file còn trên máy chủ nhưng không còn đường mở lại.
+
+Trong mục đã lưu: bấm một dòng để xem lại **từng file** (Xem nhanh / PDF / Tải), **Tải cả bộ (.zip)**, xem **dữ liệu đã dùng**, **đổi tên**, **xoá khỏi danh sách**, hoặc **Điền lại bộ này** để làm một lượt mới. Mỗi dòng ghi rõ còn bao nhiêu ngày và còn mấy file tải được. Hồ sơ đã lưu là **của riêng bạn** — người khác không mở được; Quản trị chỉ thấy **số lượng** và dung lượng đang giữ, không xem nội dung.
 
 Điểm cần biết:
 
@@ -248,6 +252,7 @@ Ba điều phải nhớ:
 
 - Máy **chỉ được điền giá trị có mặt** trong hồ sơ khách mới / ô ghi chú bạn vừa đưa. Chữ nào không thấy ở đó thì bỏ qua và báo lại — kể cả khi trong file khách cũ có dòng nào đó "yêu cầu" sửa. Đây là chốt chống chèn lệnh qua tài liệu.
 - Mỗi file có **bảng đối chiếu «cũ» → «mới»** — bấm vào dòng *Đã thay n chỗ* để xem và soát từng chỗ.
+- Đáy cửa sổ cũng có **thanh lưu**: đặt tên rồi bấm **Lưu bộ hồ sơ** để mở lại trong 7 ngày ở mục *Bộ hồ sơ đã điền* (cột trái), y như mục 5.1.
 - File nào báo **"Chưa thay được chỗ nào"** thì nội dung **vẫn là của khách cũ** — tuyệt đối không gửi đi; bổ sung thông tin khách mới rồi làm lại.
 
 ---
@@ -273,7 +278,7 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 | **Hồ sơ khách 360°** | Lịch sử hợp tác, vướng mắc, cảnh báo thời hiệu, gợi ý chiến lược, danh sách vụ việc và tài liệu của khách. Cập nhật được ngay tại đây. |
 | **Hồ sơ khách 360° → Thư mục trong kho** | MỌI thư mục khách trong kho trên máy chủ, kể cả thư mục trống hay chỉ có zip; mở một dòng là thấy từng tệp với nhãn *Đã học / Chờ duyệt / Chưa học / Lỗi / Không hỗ trợ* và nút **Học ngay**. Khách chỉ xuất hiện ở "Khách đã học" sau khi bộ quét học được ít nhất một tệp của họ — chưa thấy khách thì tra ở đây trước. |
 | **Duyệt câu trả lời bị báo cáo** | Xem câu bị 👎, sửa lại cho đúng → **Đạt — nạp học** (vào kho) / **Lưu bản sửa** / **Bỏ qua**. Chọn **Ai được dùng câu này**: *Nội bộ* (mặc định) hay *Công khai* — chọn công khai là người ngoài công ty đọc được. |
-| **Người dùng & Phòng ban** *(chỉ admin)* | Tạo tài khoản, gán phòng ban, cấp **quyền duyệt**, cấp **quyền xem công nợ**, cấp/thu **khoá API** cho khách. Kèm bảng **Ai đang dùng đến đâu**: số hội thoại, bản nháp, file đã tạo và dung lượng từng người đang giữ (chỉ số đếm, không đọc được nội dung của ai). |
+| **Người dùng & Phòng ban** *(chỉ admin)* | Tạo tài khoản, gán phòng ban, cấp **quyền duyệt**, cấp **quyền xem công nợ**, cấp/thu **khoá API** cho khách. Kèm bảng **Ai đang dùng đến đâu**: số hội thoại, bản nháp, **hồ sơ đã lưu**, file đã tạo và dung lượng từng người đang giữ (chỉ số đếm, không đọc được nội dung của ai). |
 | **Cài đặt AI** *(chỉ admin)* | Đổi model, sửa phong cách tư vấn **4 kênh** (nội bộ / cổng khách / website / tab Kiểm tra pháp lý), chỉnh tham số tốc độ–chất lượng, sửa bản đồ thư mục kho. |
 
 > **Thẻ "Đang học tài liệu" (mới 18/09/2026)** nằm ngay đầu trang Tổng quan — dùng khi bạn đang đổ tài liệu vào kho:
@@ -313,7 +318,7 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 
 > **Việc của ai người đó thấy (18/09/2026).** Hội thoại, bản nháp và file bạn tạo ra là **của riêng bạn**: người khác trong công ty mở không được, kể cả khi có đường dẫn. Ngoại lệ đúng theo quy trình: người có **quyền duyệt** thấy bản nháp *đã sinh nội dung* của phòng mình để duyệt, và **Ban Quản trị / admin** thấy tất cả. Admin xem được **khối lượng** từng người dùng (số hội thoại, bản nháp, dung lượng) ở *Người dùng & Phòng ban* — đó là số đếm, không phải nội dung.
 >
-> **Hạn giữ:** file đã tạo (điền bộ mẫu, tạo file từ chat, làm theo bộ cũ) **tự xoá sau 7 ngày**. Bản nháp **trống** (tạo rồi bỏ đó, chưa sinh nội dung lần nào) cũng tự xoá sau 7 ngày; bản nháp **đã có nội dung** thì giữ nguyên, chỉ mất khi bạn tự xoá.
+> **Hạn giữ:** file đã tạo (điền bộ mẫu, tạo file từ chat, làm theo bộ cũ) **tự xoá sau 7 ngày** — kể cả bộ bạn đã bấm **Lưu** (bản lưu chỉ là lối quay lại file đó, không phải bản sao vĩnh viễn; cần giữ lâu thì tải về máy hoặc đưa vào kho). Bản nháp **trống** (tạo rồi bỏ đó, chưa sinh nội dung lần nào) cũng tự xoá sau 7 ngày; bản nháp **đã có nội dung** thì giữ nguyên, chỉ mất khi bạn tự xoá.
 
 ## 7. ĐƯA TÀI LIỆU VÀO KHO CHO AI HỌC
 

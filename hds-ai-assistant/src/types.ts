@@ -406,6 +406,39 @@ export interface BoMauDienResult {
 
 /** Kết quả dựng bộ hồ sơ khách mới theo bộ hồ sơ khách cũ
  *  (POST /ho-so/theo-ban-cu) — không cần mã chỗ trống. */
+/** Một file trong bộ hồ sơ ĐÃ LƯU (18/09/2026). `con` = còn trên máy chủ. */
+export interface HoSoDaLuuFile {
+  token: string;
+  ten_file: string;
+  ten_ket_qua: string;
+  so_trong: number;
+  con?: boolean;
+}
+
+/** Bộ hồ sơ đã điền, người dùng bấm LƯU để mở lại trong 7 ngày.
+ *  Bản ghi chỉ trỏ tới file đã có — không nhân bản hồ sơ khách. */
+export interface HoSoDaLuu {
+  ma: string;
+  ten: string;
+  kieu: 'bo_mau' | 'ban_cu';
+  bo_id: number | null;
+  bo_ten: string;
+  /** Giây epoch lúc lưu. */
+  luc: number;
+  so_o: number;
+  so_da_dien: number;
+  so_thieu: number;
+  so_file: number;
+  /** File còn trên máy chủ (đã dọn thì nhỏ hơn so_file). */
+  so_file_con: number;
+  con_lai_ngay: number;
+  zip_token: string | null;
+  zip_con: boolean;
+  files: HoSoDaLuuFile[];
+  da_dien?: Array<{ khoa: string; literal: string; gia_tri: string; nguon: string }>;
+  con_thieu?: Array<{ khoa: string; literal: string; goi_y: string }>;
+}
+
 export interface HoSoCuResult {
   files: Array<{
     ten_file: string;
@@ -848,6 +881,8 @@ export interface SuDungNguoiDung {
     hoi_thoai: number;
     tin_nhan: number;
     ban_nhap: number;
+    /** Bộ hồ sơ đã điền mà người này bấm Lưu (tự xoá sau 7 ngày). */
+    ho_so_da_luu?: number;
     tai_lieu_da_nap: number;
     /** File đã tạo còn trong hạn giữ. */
     file_dang_giu: number;

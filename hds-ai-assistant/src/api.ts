@@ -224,6 +224,38 @@ export const dienTheoBanCu = ApiJs.dienTheoBanCu as (params: {
   onProgress?: (pct: number) => void;
 }) => Promise<import('./types').HoSoCuResult>;
 
+// ---- Lưu bộ hồ sơ đã điền, mở lại trong 7 ngày (18/09/2026) ----
+export const luuHoSoDaDien = ApiJs.luuHoSoDaDien as (body: {
+  ten: string;
+  kieu?: 'bo_mau' | 'ban_cu';
+  bo_id?: number | null;
+  bo_ten?: string;
+  files: Array<{ token: string; ten_file: string; ten_ket_qua?: string; so_trong?: number }>;
+  zip_token?: string | null;
+  so_o?: number;
+  da_dien?: Array<{ khoa: string; literal?: string; gia_tri?: string; nguon?: string }>;
+  con_thieu?: Array<{ khoa: string; literal?: string; goi_y?: string }>;
+}) => Promise<import('./types').HoSoDaLuu>;
+
+export const listHoSoDaLuu = ApiJs.listHoSoDaLuu as () => Promise<{
+  items: import('./types').HoSoDaLuu[];
+  giu_ngay: number;
+  toi_da: number;
+}>;
+
+export const getHoSoDaLuu = ApiJs.getHoSoDaLuu as (
+  ma: string
+) => Promise<import('./types').HoSoDaLuu>;
+
+export const renameHoSoDaLuu = ApiJs.renameHoSoDaLuu as (
+  ma: string,
+  ten: string
+) => Promise<import('./types').HoSoDaLuu>;
+
+export const deleteHoSoDaLuu = ApiJs.deleteHoSoDaLuu as (
+  ma: string
+) => Promise<{ ok: boolean }>;
+
 export const xemTemplateFill = ApiJs.xemTemplateFill as (
   token: string
 ) => Promise<{ ten_file: string; doan: string[]; cat_bot: boolean }>;
