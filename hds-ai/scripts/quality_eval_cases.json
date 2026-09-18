@@ -276,6 +276,7 @@
           "sổ nhân sự"
         ],
         "source_locator_contains_any": [
+          "documents.person_folder",
           "employees"
         ]
       },
@@ -335,6 +336,7 @@
         "sổ nhân sự"
       ],
       "source_locator_contains_any": [
+        "documents.person_folder",
         "employees"
       ]
     },

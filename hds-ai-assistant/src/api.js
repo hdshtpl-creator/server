@@ -1036,6 +1036,26 @@ export async function getTienDoHoc() {
   return request('/kho/tien-do');
 }
 
+// GET /users/su-dung — admin xem từng người dùng đã làm gì, giữ bao nhiêu dung lượng.
+export async function getSuDungNguoiDung() {
+  if (useMockBackend) {
+    return {
+      giu_ngay: 7,
+      tong_dung_luong: 18_432_000,
+      khong_ro_chu: { so_file: 2, bytes: 240_000 },
+      items: [
+        { id: 1, full_name: 'Quản trị hệ thống', email: 'admin@hdslaw.vn', role: 'admin',
+          active: true, hoi_thoai: 42, tin_nhan: 318, ban_nhap: 9, tai_lieu_da_nap: 120,
+          file_dang_giu: 14, dung_luong: 12_800_000, hoat_dong_cuoi: '2026-09-18 11:20:00' },
+        { id: 4, full_name: 'Nguyễn Thị Hương', email: 'huong@hdslaw.vn', role: 'chuyen_vien',
+          active: true, hoi_thoai: 15, tin_nhan: 96, ban_nhap: 3, tai_lieu_da_nap: 8,
+          file_dang_giu: 5, dung_luong: 5_392_000, hoat_dong_cuoi: '2026-09-18 09:05:00' },
+      ],
+    };
+  }
+  return request('/users/su-dung');
+}
+
 // POST /kho/thu-muc — tạo thư mục con trong kho
 export async function taoThuMucKho({ path = '', ten }) {
   if (useMockBackend) return { ok: true, path: path ? `${path}/${ten}` : ten, ten };
@@ -1671,6 +1691,52 @@ export async function dienBoMau({ boId, files = [], fileIds = [], giaTri = {},
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${apiBaseUrl}/bo-mau/${toIntOrNull(boId)}/dien`);
+    if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
+    xhr.upload.onprogress = (e) => {
+      if (onProgress && e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* rơi xuống nhánh lỗi */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(parseErrorBody(xhr.responseText, xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error('Không kết nối được máy chủ khi tải tệp lên.'));
+    xhr.send(form);
+  });
+}
+
+// POST /ho-so/theo-ban-cu — dựng bộ hồ sơ khách MỚI theo bộ hồ sơ khách CŨ
+// (không cần mã chỗ trống; AI đọc hiểu rồi thay thông tin chủ thể).
+export async function dienTheoBanCu({ cu = [], moi = [], ghiChu = '', onProgress } = {}) {
+  if (useMockBackend) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (onProgress) onProgress(100);
+    return {
+      files: Array.from(cu).map((f, i) => ({
+        ten_file: f.name, ten_ket_qua: `${f.name} - khach moi.docx`, token: `mockcu${i}`,
+        so_thay: 6, loi: null, ghi_chu: '',
+        da_thay: [
+          { cu: 'CÔNG TY TNHH ABC', moi: 'CÔNG TY CỔ PHẦN XYZ', so_cho: 3 },
+          { cu: '0101234567', moi: '0209988776', so_cho: 1 },
+        ],
+        khong_thay: [{ cu: 'Ông Trần Văn A', ly_do: 'không tìm thấy nguyên văn trong file' }],
+      })),
+      zip_token: cu.length > 1 ? 'mockcuzip' : null,
+      so_file_cu: cu.length,
+      truong_doc_duoc: [{ khoa: 'ho_ten', nhan: 'Họ tên', gia_tri: 'Lê Thị B' }],
+      chua_thay_duoc: [],
+      loi_tai_len: [],
+      canh_bao: ['Bộ này được dựng bằng cách thay thông tin khách cũ — hãy đọc TOÀN VĂN từng file.'],
+    };
+  }
+  const form = new FormData();
+  Array.from(cu).forEach((f) => form.append('cu', f));
+  Array.from(moi).forEach((f) => form.append('moi', f));
+  form.append('ghi_chu', ghiChu || '');
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${apiBaseUrl}/ho-so/theo-ban-cu`);
     if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
     xhr.upload.onprogress = (e) => {
       if (onProgress && e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));

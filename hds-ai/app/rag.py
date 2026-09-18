@@ -423,7 +423,8 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                        d.source_version,c.chunk_index,d.doc_type,d.client_id,cl.name,
                        d.extraction_status,d.person_folder,
                        d.so_hieu,d.loai_van_ban,d.trich_yeu,d.ngay_ban_hanh,
-                       d.ngay_hieu_luc,d.trang_thai_hieu_luc
+                       d.ngay_hieu_luc,d.trang_thai_hieu_luc,
+                       d.access_level,d.department_id
                   FROM chunks c JOIN documents d ON d.id=c.document_id
                   LEFT JOIN clients cl ON cl.id=d.client_id"""
     # KHÔNG lọc theo extraction_status: mọi bản scan OCR đều mang status
@@ -506,6 +507,8 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
             "so_hieu": r[17], "loai_van_ban": r[18], "trich_yeu": r[19],
             "ngay_ban_hanh": r[20], "ngay_hieu_luc": r[21],
             "trang_thai_hieu_luc": r[22],
+            # Hai cột cho chốt "không mở được thì không đọc" (loc_theo_quyen_mo).
+            "access_level": r[23], "department_id": r[24],
         })
         item["semantic_score"] = max(item["semantic_score"], float(r[5] or 0))
         item["lexical_score"] = max(item["lexical_score"], float(r[6] or 0))
@@ -680,7 +683,8 @@ def head_chunks(document_ids, level, client_id=None, dept_ids=None,
                                   d.client_id,cl.name,d.extraction_status,
                                   d.person_folder,
                                   d.so_hieu,d.loai_van_ban,d.trich_yeu,
-                                  d.ngay_ban_hanh,d.ngay_hieu_luc,d.trang_thai_hieu_luc
+                                  d.ngay_ban_hanh,d.ngay_hieu_luc,d.trang_thai_hieu_luc,
+                                  d.access_level,d.department_id
                              FROM (
                                SELECT c.*, row_number() OVER (
                                         PARTITION BY c.document_id
@@ -707,6 +711,7 @@ def head_chunks(document_ids, level, client_id=None, dept_ids=None,
         "so_hieu": r[15], "loai_van_ban": r[16], "trich_yeu": r[17],
         "ngay_ban_hanh": r[18], "ngay_hieu_luc": r[19],
         "trang_thai_hieu_luc": r[20],
+        "access_level": r[21], "department_id": r[22],
         # Đủ cao để `relevant_sources` không giấu mất khỏi panel trích dẫn:
         # đây là giấy tờ được CHỌN CÓ CHỦ ĐÍCH, không phải đoán từ vector.
         "score": 0.6,
@@ -1256,6 +1261,16 @@ def _van_ban_nhac_trong_cau_hoi(question: str) -> list:
         if loai == ("luat",) and i > 0 and fold[i - 1] == "phap":
             i += 1
             continue
+        # "Công ty LUẬT TNHH HDS", "Văn phòng LUẬT sư X", "hãng luật": chữ
+        # "luật" là một phần TÊN TỔ CHỨC, không phải đạo luật. Kiểm thử
+        # 18/09/2026: câu "soạn hợp đồng giữa Công ty Luật TNHH HDS và…" bị
+        # cảnh báo "Kho chưa có: Luật TNHH HDS".
+        if loai == ("luat",) and (
+                fold[max(0, i - 2):i] in (["cong", "ty"], ["van", "phong"])
+                or (i > 0 and fold[i - 1] in ("cty", "hang", "cong ty"))
+                or (i + 1 < len(fold) and fold[i + 1] in ("su", "tnhh", "hop", "co"))):
+            i += 1
+            continue
         if not loai:
             i += 1
             continue
@@ -1474,7 +1489,7 @@ def _tai_lieu_luat_trong_kho(level, client_id=None, dept_ids=None,
 
 def build_prompt(question, chunks, temp_chunks=None, method=None,
                  company="", history=None, chunk_chars=None, budget=None,
-                 summary=None, van_ban_thieu=None):
+                 summary=None, van_ban_thieu=None, phat_hien_tu_dong=""):
     # Model KHÔNG tự biết hôm nay là ngày nào. Không nói cho nó thì nó đọc "hợp
     # đồng đến 01/08/2024" mà tưởng còn hiệu lực, dù thực tế đã qua 2 năm. Đây
     # là mốc để nó phán đoán còn hạn / đã hết hạn / quá hạn.
@@ -1625,6 +1640,12 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             "nhân sự, biểu mẫu) thay cho căn cứ pháp luật. Chỉ trả lời phần "
             "có tài liệu tham khảo thật, phần còn lại ghi rõ 'chưa đối chiếu "
             "được, cần bổ sung văn bản vào kho'." + chr(10))
+    if phat_hien_tu_dong:
+        parts.append(
+            "PHÁT HIỆN TỰ ĐỘNG TỪ BỘ QUY TẮC RÀ SOÁT (đã đối chiếu con số với "
+            "ngưỡng luật định — coi là CHẮC CHẮN, phải nêu lại trong phần phân "
+            "tích, không được kết luận ngược lại nếu không có căn cứ khác):"
+            + chr(10) + phat_hien_tu_dong + chr(10))
     if _yeu_cau_thu_tuc(question):
         parts.append(
             "TRÌNH BÀY: câu hỏi này là về THỦ TỤC/HỒ SƠ. Trả lời theo đúng khung, "
@@ -2396,6 +2417,37 @@ def _canh_bao_so_hieu(text: str, chunks) -> str:
             + "; ".join(dong) + ".*")
 
 
+def phat_hien_tu_dong_tu_dinh_kem(conversation_id, use_temp: bool) -> str:
+    """Chạy bộ quy tắc ra_soat_rui_ro trên các file đính kèm của hội thoại
+    (chế độ Kiểm tra pháp lý). Trả khối chữ ngắn cho prompt; không phải hợp
+    đồng, không nhận diện được loại, hay lỗi gì → chuỗi rỗng, không chặn lượt.
+    """
+    if not conversation_id or not use_temp:
+        return ""
+    try:
+        from app import ra_soat_rui_ro, template_fill
+        dong = []
+        for fname, text in template_fill._temp_texts(conversation_id)[:3]:
+            if not (text or "").strip():
+                continue
+            kq = ra_soat_rui_ro.ra_soat(text, tieu_de=fname)
+            if not kq or (kq.get("do_tin_cay") or 0) < 0.5:
+                continue
+            xau = [m for m in kq.get("muc") or []
+                   if m.get("trang_thai") in ("canh_bao", "thieu")]
+            if not xau:
+                continue
+            dong.append(f"- File «{fname}» — nhận diện là {kq.get('ten_loai')}; "
+                        f"mức rủi ro theo bộ quy tắc: {kq.get('tong_ket', {}).get('muc_rui_ro')}.")
+            for m in xau[:10]:
+                dong.append(f"  · [{'THIẾU' if m['trang_thai'] == 'thieu' else 'CẢNH BÁO'}] "
+                            f"{m.get('ten')}: {m.get('giai_thich')}"
+                            + (f" Căn cứ: {m['can_cu']}." if m.get('can_cu') else ""))
+        return chr(10).join(dong)[:4000]
+    except Exception:  # noqa: BLE001 — bộ quy tắc hỏng không được làm mất lượt rà soát
+        return ""
+
+
 def _canh_bao_kho_thieu(text, van_ban_thieu) -> str:
     """Dòng mở đầu DO MÁY CHÈN khi kho không có văn bản người hỏi nêu đích danh.
 
@@ -2436,19 +2488,36 @@ def _canh_bao_hieu_luc(text, chunks) -> str:
                                                  "het_hieu_luc_mot_phan"):
             ten = (c.get("so_hieu") or c.get("title") or f"Nguồn {n}")
             trang_thai = ("ĐÃ HẾT HIỆU LỰC" if tt == "het_hieu_luc"
-                          else "đã bị sửa đổi, bổ sung")
+                          else "đã được sửa đổi, bổ sung")
             boi = (c.get("thay_the_boi") or "").strip()
             dong = f"[Nguồn {n}] {ten} — {trang_thai}"
             if boi:
-                dong += f" (bởi {boi})"
+                # Danh sách văn bản sửa đổi có thể dài 7-8 cái (kiểm thử
+                # 18/09/2026: Luật Doanh nghiệp kéo theo cả Luật Bảo vệ môi
+                # trường, Luật Thanh tra…) — in hết là người đọc mất luôn ý
+                # chính. Nêu hai cái đầu, còn lại đếm.
+                phan = [p.strip() for p in boi.split(";") if p.strip()]
+                dong += " (bởi " + "; ".join(phan[:2])
+                if len(phan) > 2:
+                    dong += f" và {len(phan) - 2} văn bản khác"
+                dong += ")"
             if dong not in dinh_dem:
-                dinh_dem.append(dong)
+                dinh_dem.append((tt, dong))
     if not dinh_dem:
         return text
+    # Chữ mở đầu phải đúng bản chất: "hết hiệu lực một phần" nghĩa là văn bản
+    # VẪN ĐANG có hiệu lực nhưng có điều đã bị sửa — nói "đã mất hiệu lực" là
+    # làm người đọc bỏ oan một căn cứ còn dùng được (kiểm thử vai thực tập
+    # sinh 18/09/2026).
+    if any(tt == "het_hieu_luc" for tt, _d in dinh_dem):
+        mo_dau = ("*⚠ Có căn cứ trích từ văn bản đã mất hiệu lực — đối chiếu "
+                  "văn bản đang có hiệu lực trước khi dùng: ")
+    else:
+        mo_dau = ("*ℹ Căn cứ trích từ văn bản đã được sửa đổi, bổ sung — kiểm "
+                  "tra điều được dẫn có nằm trong phần bị sửa không (ưu tiên "
+                  "bản hợp nhất nếu kho có): ")
     return (text + chr(10) * 2 + "---" + chr(10)
-            + "*⚠ Căn cứ trích từ văn bản đã mất hiệu lực — đối chiếu văn bản "
-            + "đang có hiệu lực trước khi dùng: "
-            + "; ".join(dinh_dem[:4]) + ".*")
+            + mo_dau + "; ".join(d for _tt, d in dinh_dem[:4]) + ".*")
 
 
 def validate_grounding(text, chunks, answer_mode="grounded", strict=True,
@@ -2968,6 +3037,7 @@ def prepare(question, channel, client_id=None, conversation_id=None,
             kept = luat_them + kept
             timings["kho_luat_them"] = len(luat_them)
 
+    phat_hien_tu_dong = ""
     # CHẾ ĐỘ KIỂM TRA PHÁP LÝ: hồ sơ khách nằm ở file đính kèm (temp_chunks),
     # còn CĂN CỨ để soi đúng/sai phải đến từ kệ luật/án lệ/bản án/quan điểm.
     # Vector so câu lệnh "kiểm tra hợp đồng này" với toàn kho dễ vớ về hồ sơ
@@ -2987,6 +3057,11 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         legal_added = [c for c in legal_extra if c["chunk_id"] not in seen_ids]
         kept = legal_added + kept
         timings["can_cu_phap_ly_them"] = len(legal_added)
+        # Bộ quy tắc rà soát chạy TRƯỚC model: con số vượt ngưỡng, điều khoản
+        # thiếu/một chiều là phát hiện chắc chắn, model chỉ việc diễn giải.
+        phat_hien_tu_dong = phat_hien_tu_dong_tu_dinh_kem(conversation_id, use_temp)
+        if phat_hien_tu_dong:
+            timings["phat_hien_tu_dong"] = phat_hien_tu_dong.count(chr(10) + "  ·")
 
     # VĂN BẢN TRÚNG ĐÃ CHẾT → KÉO BẢN SỐNG VÀO. Luật cũ và luật mới gần nhau
     # nhất về vector, nên nguồn trúng rất hay là bản đã bị thay thế/sửa đổi.
@@ -3080,6 +3155,16 @@ def prepare(question, channel, client_id=None, conversation_id=None,
             kept = added + (kept if timings.get("kho_luat_them") else kept[:PERSON_OTHER_CHUNKS])
             timings["bo_ho_so_them"] = len(added)
             timings["bo_ho_so_dinh_danh"] = len(head)
+    # CHỐT QUYỀN MỞ (18/09/2026): đoạn của tài liệu người hỏi không được mở
+    # thì không vào prompt, không vào panel — chỉ còn tên che ở chân câu.
+    tai_lieu_khoa = []
+    if channel == "internal" and role:
+        kept, bi_khoa = loc_theo_quyen_mo(kept, role, dept_ids, is_banqt,
+                                          can_finance=can_finance,
+                                          dept_codes=dept_codes)
+        if bi_khoa:
+            timings["bo_qua_khong_quyen_mo"] = len(bi_khoa)
+            tai_lieu_khoa = _ten_khoa(bi_khoa)
     chunks = fit_context(kept,
                          _num("chunk_char_limit", CHUNK_CHARS, int),
                          _num("context_char_budget", CONTEXT_CHARS, int),
@@ -3221,7 +3306,8 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     prompt = build_prompt(question, chunks, temp_chunks, method,
                           company=company, history=history, summary=summary,
                           chunk_chars=_num("chunk_char_limit", CHUNK_CHARS, int),
-                          budget=budget_eff, van_ban_thieu=van_ban_thieu)
+                          budget=budget_eff, van_ban_thieu=van_ban_thieu,
+                          phat_hien_tu_dong=phat_hien_tu_dong)
     timings["so_doan"] = len(chunks)
     note(f"Đã chọn {len(chunks)} nguồn — model đang đọc và soạn câu trả lời…")
     answer_mode = "mixed" if company and chunks else ("grounded" if chunks else "operational")
@@ -3248,6 +3334,7 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         "state": state_update,
         "strict_grounding": strict,
         "van_ban_thieu": van_ban_thieu,
+        "tai_lieu_khoa": tai_lieu_khoa,
     }
 
 
@@ -3759,6 +3846,7 @@ def answer(question, channel, user_id=None, client_id=None, conversation_id=None
         text, grounding_status = validate_grounding(
             text, chunks, p["answer_mode"], p["strict_grounding"], channel)
         text = _canh_bao_kho_thieu(text, p.get("van_ban_thieu"))
+        text = _canh_bao_khoa(text, p.get("tai_lieu_khoa"))
         timings["ai_ms"] = latency
         timings.update({k: v for k, v in llm_stats.items()
                         if k in ("prompt_tokens", "gen_tokens", "load_ms",
@@ -3893,6 +3981,7 @@ def answer_stream(question, channel, user_id=None, client_id=None, conversation_
     text, grounding_status = validate_grounding(
         reviewed, chunks, p["answer_mode"], p["strict_grounding"], channel)
     text = _canh_bao_kho_thieu(text, p.get("van_ban_thieu"))
+    text = _canh_bao_khoa(text, p.get("tai_lieu_khoa"))
     if text != raw_text:
         # Giao diện thay toàn bộ nội dung đã stream khi bot đọc lại chỉnh câu
         # trả lời, hoặc khi bộ kiểm chứng bỏ citation giả/chặn câu không nguồn.
@@ -4013,6 +4102,73 @@ def can_open_doc(role_level, dept_ids, is_banqt, doc, can_finance=False,
     if rules:
         return _rules_allow_open(rules, role_level, dept_codes, doc_type)
     return True
+
+
+def loc_theo_quyen_mo(chunks, role_level, dept_ids, is_banqt, can_finance=False,
+                      dept_codes=None, rules=None):
+    """Chia đoạn thành (đọc được, bị khoá) theo ĐÚNG ma trận mở tài liệu.
+
+    RLS chỉ lọc thô theo access_level/phòng; ma trận access_rules mới nói vai
+    này được MỞ loại tài liệu nào. Trước 18/09/2026 chat chỉ dựa vào RLS, nên
+    vai trợ lý — không được mở hồ sơ nhân sự, hồ sơ khách — vẫn nhận nguyên
+    văn CCCD, sơ yếu lý lịch của nhân viên trong panel nguồn (kiểm thử vai
+    thực tập sinh). Nguyên tắc: không mở được thì không đọc được; chỉ được
+    biết là CÓ tài liệu đó (tên che).
+
+    Đoạn không mang access_level (nguồn khác retrieve/head_chunks) giữ nguyên.
+    """
+    if is_banqt or not role_level:
+        return list(chunks), []
+    if rules is None:
+        rules = load_access_rules()
+    ok, khoa = [], []
+    for c in chunks:
+        if "access_level" not in c:
+            ok.append(c)
+            continue
+        doc = {"access_level": c.get("access_level"),
+               "department_id": c.get("department_id"),
+               "doc_type": c.get("doc_type"), "client_id": c.get("client_id"),
+               "title": c.get("title")}
+        if can_open_doc(role_level, dept_ids, is_banqt, doc, can_finance=can_finance,
+                        rules=rules, dept_codes=dept_codes):
+            ok.append(c)
+        else:
+            khoa.append(c)
+    return ok, khoa
+
+
+def _ten_khoa(chunks) -> list:
+    """Tên (đã che) của các tài liệu bị khoá — mỗi tài liệu một dòng."""
+    ra, seen = [], set()
+    for c in chunks:
+        did = c.get("document_id")
+        if did in seen:
+            continue
+        seen.add(did)
+        if c.get("doc_type") == "ho_so_ns":
+            # Tên bộ hồ sơ nhân sự LÀ tên người ("Ngân — CCCD"): với người
+            # không được mở thì ngay cái tên cũng là dữ liệu cá nhân — che.
+            ra.append("[Hồ sơ nhân sự] 🔒 Tài khoản chưa có quyền xem")
+            continue
+        ra.append(mask_title({"doc_type": c.get("doc_type"),
+                              "access_level": c.get("access_level"),
+                              "department_name": None, "title": c.get("title")},
+                             False))
+    return ra
+
+
+def _canh_bao_khoa(text: str, ten_khoa) -> str:
+    """Footer: có tài liệu liên quan nhưng người hỏi chưa có quyền mở."""
+    ten_khoa = [t for t in (ten_khoa or []) if t]
+    if not ten_khoa:
+        return text
+    dong = "; ".join(ten_khoa[:4]) + (f" và {len(ten_khoa) - 4} tài liệu khác"
+                                     if len(ten_khoa) > 4 else "")
+    return (text + chr(10) * 2 + "---" + chr(10)
+            + "*🔒 Có tài liệu liên quan mà tài khoản của bạn chưa được mở, nên "
+            + "bot không đọc chúng để trả lời: " + dong
+            + ". Cần thì nhờ người phụ trách phòng / Ban quản trị.*")
 
 
 def mask_title(doc, can_open):

@@ -40,6 +40,9 @@ const RA_SOAT_BADGE: Record<string, { label: string; cls: string }> = {
   dat: { label: 'ĐẠT', cls: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300' },
   canh_bao: { label: 'CẢNH BÁO', cls: 'bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300' },
   thieu: { label: 'THIẾU', cls: 'bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300' },
+  // Máy mới kiểm là CÓ điều khoản, chưa đánh giá nội dung — đừng tô xanh như
+  // ĐẠT (kiểm thử 18/09/2026: điều khoản bảo mật bất lợi vẫn bị chấm ĐẠT).
+  co_mat: { label: 'CÓ · chưa đánh giá', cls: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' },
 };
 const RUI_RO_LABEL: Record<string, { label: string; cls: string }> = {
   thap: { label: 'Rủi ro thấp', cls: 'text-emerald-700 dark:text-emerald-300' },
@@ -148,7 +151,7 @@ const RaSoatModal: React.FC<{
                   </thead>
                   <tbody>
                     {ketQua.muc.map((m, i) => {
-                      const b = RA_SOAT_BADGE[m.trang_thai] || RA_SOAT_BADGE.dat;
+                      const b = (m.chi_co_mat ? RA_SOAT_BADGE.co_mat : RA_SOAT_BADGE[m.trang_thai]) || RA_SOAT_BADGE.dat;
                       return (
                         <tr key={m.ma + i} className="border-t border-slate-100 dark:border-slate-800 align-top">
                           <td className="px-3 py-2 text-slate-400">{i + 1}</td>
@@ -409,7 +412,7 @@ export const LegalCheckWorkspace: React.FC = () => {
       id: `h-${m.id}`,
       sender: m.role === 'user' ? ('user' as const) : ('ai' as const),
       text: m.content,
-      timestamp: /(\d{1,2}:\d{2})/.exec(m.created_at || '')?.[1] || '',
+      timestamp: /\b(\d{1,2}:\d{2})/.exec(m.created_at || '')?.[1] || '',
       serverMessageId: m.id,
       sources: m.evidence ?? m.sources,
       grounding_status: m.grounding_status,

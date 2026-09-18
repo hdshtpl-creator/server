@@ -11,6 +11,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -80,6 +81,32 @@ DRAFT_COLUMNS = (
     "current_version", "created_by", "creator_name", "approved_by", "approver_name",
     "approved_at", "approval_note", "created_at", "updated_at",
 )
+
+
+# Bản nháp TRỐNG (tạo rồi bỏ đó, chưa sinh nội dung lần nào) tự dọn sau 7
+# ngày — chủ dự án 18/09/2026: "các bản nháp hoặc bộ hồ sơ này lưu 7 ngày rồi
+# tự xoá". CỐ Ý chỉ dọn bản trống: bản đã có nội dung là việc thật của luật
+# sư, xoá tự động là mất trắng. Dọn nhiều nhất một lần mỗi giờ, nhân lúc ai đó
+# mở danh sách — hệ thống không có bộ hẹn giờ riêng.
+GIU_BAN_NHAP_TRONG_NGAY = 7
+_DON_LAN_CUOI = 0.0
+
+
+def _don_ban_nhap_trong():
+    global _DON_LAN_CUOI
+    if time.time() - _DON_LAN_CUOI < 3600:
+        return
+    _DON_LAN_CUOI = time.time()
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """DELETE FROM document_drafts
+                        WHERE status='draft' AND current_version=0
+                          AND updated_at < now() - make_interval(days => %s)""",
+                    (GIU_BAN_NHAP_TRONG_NGAY,))
+    except Exception:  # noqa: BLE001 — dọn rác không được phép làm hỏng lượt xem
+        pass
 
 
 def _require_internal(user):
@@ -648,6 +675,7 @@ def build_router(current_user, require_reviewer) -> APIRouter:
     @router.get("/drafts")
     def drafts_list(user=Depends(current_user), status: str = "", limit: int = 100):
         _require_internal(user)
+        _don_ban_nhap_trong()
         if status and status not in {"draft", "generated", "approved"}:
             raise HTTPException(422, "Trạng thái bản nháp không hợp lệ")
         limit = max(1, min(limit, 200))

@@ -15,6 +15,7 @@ import type {
 import { DOC_TYPES, DOC_TYPE_LABELS } from '../../constants';
 import { DiffView } from '../common/DiffView';
 import { DienBoMauPanel } from './DienBoMauPanel';
+import { DienTheoBanCuPanel } from './DienTheoBanCuPanel';
 import {
   AlertTriangle,
   BookOpen,
@@ -136,6 +137,9 @@ export const DraftsWorkspace: React.FC = () => {
   // — khác hẳn bản nháp một văn bản nên panel riêng, không trộn vào form.
   const [boMauList, setBoMauList] = useState<BoMau[]>([]);
   const [boMauChon, setBoMauChon] = useState<BoMau | null>(null);
+  // Luồng "theo bộ hồ sơ khách cũ" (18/09/2026): không gắn với bộ mẫu nào,
+  // không cần mã chỗ trống — AI đọc bộ cũ rồi thay thông tin chủ thể.
+  const [theoBanCu, setTheoBanCu] = useState(false);
   const [sourceQuery, setSourceQuery] = useState('');
   const [showRevise, setShowRevise] = useState(false);
   const [revisionInstructions, setRevisionInstructions] = useState('');
@@ -288,6 +292,7 @@ export const DraftsWorkspace: React.FC = () => {
   const openCreate = async () => {
     setShowCreate(true);
     setBoMauChon(null);
+    setTheoBanCu(false);
     if (documents.length || clients.length || boMauList.length) return;
     try {
       const [docs, clientRows, templateRows, boMauRes] = await Promise.all([
@@ -307,9 +312,9 @@ export const DraftsWorkspace: React.FC = () => {
 
   const createDraft = async (event: React.FormEvent) => {
     event.preventDefault();
-    // Đang ở luồng điền bộ mẫu: Enter trong ô của panel không được biến thành
-    // lệnh tạo bản nháp rỗng.
-    if (boMauChon) return;
+    // Đang ở luồng điền bộ mẫu / theo bản cũ: Enter trong ô của panel không
+    // được biến thành lệnh tạo bản nháp rỗng.
+    if (boMauChon || theoBanCu) return;
     if (!form.title.trim() || busy) return;
     setBusy('create');
     setError(null);
@@ -888,10 +893,16 @@ export const DraftsWorkspace: React.FC = () => {
             <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
               <div>
                 <h3 className="font-bold text-base">
-                  {boMauChon ? `Điền bộ hồ sơ «${boMauChon.ten}»` : 'Tạo bản nháp'}
+                  {theoBanCu
+                    ? 'Làm bộ hồ sơ theo bản của khách cũ'
+                    : boMauChon
+                    ? `Điền bộ hồ sơ «${boMauChon.ten}»`
+                    : 'Tạo bản nháp'}
                 </h3>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  {boMauChon
+                  {theoBanCu
+                    ? 'Không cần mã chỗ trống — AI đọc bộ cũ rồi thay thông tin sang khách mới.'
+                    : boMauChon
                     ? 'Điền dữ liệu vào các file Word có sẵn của bộ, giữ nguyên định dạng gốc.'
                     : 'Nguồn đã chọn là phạm vi duy nhất AI được dùng.'}
                 </p>
@@ -900,13 +911,21 @@ export const DraftsWorkspace: React.FC = () => {
             </div>
 
             <div className="p-5 space-y-4">
-              {(templates.length > 0 || boMauList.length > 0) && (
-                <label className="space-y-1 block">
+              {/* Ô này LUÔN hiện: công ty chưa có mẫu phương pháp hay bộ mẫu
+                  nào thì vẫn còn lối "làm theo bộ hồ sơ khách cũ". */}
+              <label className="space-y-1 block">
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Mẫu soạn thảo</span>
                   <select
-                    value={boMauChon ? `bo:${boMauChon.id}` : form.template_id ?? ''}
+                    value={theoBanCu ? 'ban_cu' : boMauChon ? `bo:${boMauChon.id}` : form.template_id ?? ''}
                     onChange={(event) => {
                       const raw = event.target.value;
+                      if (raw === 'ban_cu') {
+                        setTheoBanCu(true);
+                        setBoMauChon(null);
+                        setForm((prev) => ({ ...prev, template_id: null, input_data: {} }));
+                        return;
+                      }
+                      setTheoBanCu(false);
                       if (raw.startsWith('bo:')) {
                         // Bộ mẫu hồ sơ: đổi sang luồng ĐIỀN CẢ BỘ .docx, không
                         // phải sinh bản nháp — panel riêng bên dưới.
@@ -944,8 +963,16 @@ export const DraftsWorkspace: React.FC = () => {
                         ))}
                       </optgroup>
                     )}
+                    <optgroup label="Chưa có mẫu đặt sẵn">
+                      <option value="ban_cu">Làm theo bộ hồ sơ khách cũ (không cần mã chỗ trống)</option>
+                    </optgroup>
                   </select>
-                  {boMauChon ? (
+                  {theoBanCu ? (
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                      Tải lên bộ hồ sơ của một khách đã làm xong + thông tin khách mới; AI đọc hiểu
+                      rồi thay thông tin chủ thể, giữ nguyên định dạng và điều khoản.
+                    </p>
+                  ) : boMauChon ? (
                     <p className="text-[10px] text-slate-500 dark:text-slate-400">
                       {boMauChon.mo_ta
                         ? `${boMauChon.mo_ta} — `
@@ -957,13 +984,14 @@ export const DraftsWorkspace: React.FC = () => {
                     selectedTemplate?.description && (
                       <p className="text-[10px] text-slate-500 dark:text-slate-400">{selectedTemplate.description}</p>
                     )
-                  )}
-                </label>
-              )}
+                )}
+              </label>
 
               {boMauChon && <DienBoMauPanel bo={boMauChon} />}
 
-              {!boMauChon && (
+              {theoBanCu && <DienTheoBanCuPanel />}
+
+              {!boMauChon && !theoBanCu && (
               <>
               <div className="grid sm:grid-cols-2 gap-4">
                 <label className="space-y-1">
@@ -1128,9 +1156,9 @@ export const DraftsWorkspace: React.FC = () => {
 
             <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-2">
               <button type="button" onClick={() => setShowCreate(false)} className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
-                {boMauChon ? 'Đóng' : 'Huỷ'}
+                {boMauChon || theoBanCu ? 'Đóng' : 'Huỷ'}
               </button>
-              {!boMauChon && (
+              {!boMauChon && !theoBanCu && (
                 <button type="submit" disabled={!form.title.trim() || busy === 'create'} className="px-4 py-2 rounded-xl bg-hds-navy text-hds-gold text-xs font-bold flex items-center gap-2 disabled:opacity-50">
                   {busy === 'create' ? <Loader2 className="w-4 h-4 animate-spin" /> : <FilePlus2 className="w-4 h-4" />}
                   Tạo bản nháp

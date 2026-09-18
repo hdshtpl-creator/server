@@ -217,8 +217,17 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
     }
   };
 
-  const taiFile = async (token: string | null, ten: string) => {
+  const taiFile = async (token: string | null, ten: string, soTrong = 0) => {
     if (!token) return;
+    if (
+      soTrong > 0 &&
+      !window.confirm(
+        `«${ten}» còn ${soTrong} chỗ trống chưa có dữ liệu — file tải về sẽ hiện nguyên ` +
+          'các ô {{…}} ở những chỗ đó.\n\nVẫn tải về?'
+      )
+    ) {
+      return;
+    }
     try {
       await api.downloadTemplateFill(token, ten);
     } catch (err: any) {
@@ -240,13 +249,13 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
   const soThieu = ketQua?.con_thieu?.length || 0;
 
   const oNhap = (o: BoMauChoTrong, vien: 'thuong' | 'thieu' = 'thuong') => (
-    <label key={o.khoa} className="space-y-1">
-      <span className="block text-[10px] font-semibold text-slate-600 dark:text-slate-300 truncate">
+    <label key={o.khoa} className="space-y-1" title={`Mã ô: ${o.literal}`}>
+      <span className="block text-[11px] font-semibold text-slate-700 dark:text-slate-200 truncate">
         {o.goi_y || o.literal}
-        <span className="ml-1 font-mono text-slate-400">{o.literal}</span>
       </span>
       <input
         value={giaTriHienTai(o.khoa)}
+        placeholder={`Ví dụ: điền ${(o.goi_y || '').toLowerCase() || 'thông tin'}…`}
         onChange={(e) => setGiaTri((truoc) => ({ ...truoc, [o.khoa]: e.target.value }))}
         className={`w-full px-2 py-1.5 rounded-lg border text-[11px] outline-none focus:ring-2 focus:ring-hds-blue dark:bg-slate-900 ${
           vien === 'thieu'
@@ -488,8 +497,14 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
             <p className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
               Đã điền {(ketQua.files || []).filter((f) => f.token).length}/{(ketQua.files || []).length} file
               · {soDaDien}/{ketQua.so_o} ô có dữ liệu
-              {soThieu > 0 && ` · còn thiếu ${soThieu} ô`}
             </p>
+            {soThieu > 0 && (
+              <p className="mt-1 text-[11px] font-bold text-amber-800 dark:text-amber-300">
+                ⚠ Còn {soThieu} ô chưa có dữ liệu — những chỗ đó trong file vẫn là ô trống
+                <span className="font-mono"> {'{{…}}'}</span>. Điền nốt ở khung màu vàng bên dưới
+                rồi bấm <b>Điền lại</b> trước khi gửi ra ngoài.
+              </p>
+            )}
             {(ketQua.doc_file || []).length > 0 && (
               <ul className="mt-1.5 space-y-0.5">
                 {ketQua.doc_file.map((d, i) => (
@@ -522,7 +537,13 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
           {ketQua.zip_token && (
             <button
               type="button"
-              onClick={() => taiFile(ketQua.zip_token, `${bo.ten} - da dien.zip`)}
+              onClick={() =>
+                taiFile(
+                  ketQua.zip_token,
+                  `${bo.ten} - da dien.zip`,
+                  (ketQua.files || []).reduce((n, f) => n + f.con_trong.length, 0)
+                )
+              }
               className="w-full px-3 py-2 rounded-xl border border-hds-navy text-hds-navy dark:text-blue-300 dark:border-blue-700 text-[11px] font-bold flex items-center justify-center gap-1.5 hover:bg-hds-soft dark:hover:bg-slate-800"
             >
               <Package className="w-3.5 h-3.5" /> Tải cả bộ (.zip)
@@ -563,7 +584,7 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => taiFile(f.token, f.ten_ket_qua || f.ten_file)}
+                        onClick={() => taiFile(f.token, f.ten_ket_qua || f.ten_file, f.con_trong.length)}
                         className="px-2 py-1 rounded-lg bg-hds-navy text-hds-gold text-[10px] font-bold flex items-center gap-1"
                       >
                         <Download className="w-3 h-3" /> Tải
@@ -658,7 +679,8 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
 
           <p className="text-[10px] text-slate-500 dark:text-slate-400">
             Văn bản sẽ gửi ra ngoài — hãy <b>rà toàn văn</b> từng file (tên bên, con số, ngày
-            tháng, điều khoản) trước khi dùng. File kết quả tự xoá sau 24 giờ, không vào kho.
+            tháng, điều khoản) trước khi dùng. File kết quả là <b>của riêng bạn</b> (người khác
+            không mở được) và <b>tự xoá sau 7 ngày</b>, không vào kho tri thức.
           </p>
         </div>
       )}

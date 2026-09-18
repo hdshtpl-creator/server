@@ -1472,16 +1472,38 @@ def _heading_path(text: str, position: int) -> str:
     này thì hai điều trùng số bị trộn vào nhau khi tra cứu.
     """
     path = []
+    # Mỗi cấp chỉ được tính khi nó nằm SAU cấp cha gần nhất. Kiểm thử vai thực
+    # tập sinh 18/09/2026 với Luật Doanh nghiệp: Chương V (công ty cổ phần)
+    # không chia Mục, nên "Mục 2. Công ty TNHH một thành viên" của Chương III
+    # vẫn là "Mục gần nhất phía trên" và bị dán vào Điều 111–113 → nhãn đoạn
+    # nói Điều 113 thuộc công ty TNHH, model tin nhãn và dẫn sai điều.
+    tu_vi_tri = 0
     for pattern in (RE_PHAN, RE_CHUONG, RE_MUC):
-        last = None
+        last, last_pos = None, None
         for match in pattern.finditer(text):
-            if match.start() < position:
-                last = match.group(1).strip()
-            else:
+            if match.start() >= position:
                 break
+            if match.start() < tu_vi_tri:
+                continue          # thuộc về cấp cha trước đó, không phải cha hiện tại
+            if not _la_dong_tieu_de(match.group(1)):
+                continue
+            last, last_pos = match.group(1).strip(), match.start()
         if last:
             path.append(re.sub(r"\s+", " ", last))
+            tu_vi_tri = last_pos
     return ", ".join(path)
+
+
+def _la_dong_tieu_de(dong: str) -> bool:
+    """Dòng tiêu đề cấp Phần/Chương/Mục thật — không phải một câu văn tình cờ
+    bắt đầu bằng chữ đó ("Phần vốn nhà nước tại công ty và công ty mẹ." từng
+    bị nhận là 'Phần' và chui vào nhãn của Điều 113)."""
+    d = re.sub(r"\s+", " ", (dong or "")).strip()
+    if not d or d.endswith((".", ",", ";", ":")):
+        return False
+    if re.match(r"^Phần\s+", d, re.IGNORECASE):
+        return bool(re.match(r"^Phần\s+(thứ\s+\w+|[IVXLCDM]+|\d+)\b", d, re.IGNORECASE))
+    return True
 
 
 RE_TRANG = re.compile(r"^\[Trang\s+(\d+)\]\s*$", re.MULTILINE | re.IGNORECASE)

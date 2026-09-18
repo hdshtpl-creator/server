@@ -215,6 +215,15 @@ export const dienBoMau = ApiJs.dienBoMau as (params: {
   onProgress?: (pct: number) => void;
 }) => Promise<import('./types').BoMauDienResult>;
 
+export const dienTheoBanCu = ApiJs.dienTheoBanCu as (params: {
+  /** Bộ hồ sơ khách CŨ (.docx) — giữ nguyên định dạng, chỉ thay chủ thể. */
+  cu: File[];
+  /** Hồ sơ / form thông tin khách MỚI (mọi định dạng máy đọc được). */
+  moi?: File[];
+  ghiChu?: string;
+  onProgress?: (pct: number) => void;
+}) => Promise<import('./types').HoSoCuResult>;
+
 export const xemTemplateFill = ApiJs.xemTemplateFill as (
   token: string
 ) => Promise<{ ten_file: string; doan: string[]; cat_bot: boolean }>;
@@ -569,6 +578,9 @@ export const quetKho = ApiJs.quetKho as () => Promise<{ ok: boolean; pid: number
 
 export const getTienDoHoc = ApiJs.getTienDoHoc as () =>
   Promise<import('./types').TienDoHoc>;
+
+export const getSuDungNguoiDung = ApiJs.getSuDungNguoiDung as () =>
+  Promise<import('./types').SuDungNguoiDung>;
 
 export const taoThuMucKho = ApiJs.taoThuMucKho as (params: {
   path?: string;

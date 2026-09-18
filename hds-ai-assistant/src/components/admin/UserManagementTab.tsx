@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { User, UserRole, Department, Client } from '../../types';
 import { ROLE_META } from '../../constants';
+import { SuDungCard } from './SuDungCard';
 import {
   Users,
   UserPlus,
@@ -236,6 +237,9 @@ export const UserManagementTab: React.FC = () => {
           <span>Tải lại</span>
         </button>
       </div>
+
+      {/* Ai đang dùng đến đâu — chỉ admin, chỉ số đếm (18/09/2026) */}
+      <SuDungCard />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Biểu mẫu tạo tài khoản */}

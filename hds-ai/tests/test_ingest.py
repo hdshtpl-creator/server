@@ -740,3 +740,56 @@ class OcrTrangKhoLonTests(unittest.TestCase):
         with patch.dict(sys.modules, {"pytesseract": gia}):
             with self.assertRaises(RuntimeError):
                 ingest._tesseract_text(object())
+
+
+class HeadingPathTheoCapChaTests(unittest.TestCase):
+    """Kiểm thử vai thực tập sinh 18/09/2026 với Luật Doanh nghiệp: Chương V
+    (công ty cổ phần) không chia Mục, nên "Mục 2. Công ty TNHH một thành viên"
+    của Chương III bị dán vào Điều 111–113 — model tin nhãn, dẫn sai điều."""
+
+    LAW = """LUẬT DOANH NGHIỆP
+Số: 59/2020/QH14
+
+Chương III
+CÔNG TY TRÁCH NHIỆM HỮU HẠN
+
+Mục 1. CÔNG TY TNHH HAI THÀNH VIÊN TRỞ LÊN
+
+Điều 46. Công ty trách nhiệm hữu hạn hai thành viên trở lên
+Nội dung điều 46.
+
+Mục 2. CÔNG TY TRÁCH NHIỆM HỮU HẠN MỘT THÀNH VIÊN
+
+Điều 74. Công ty trách nhiệm hữu hạn một thành viên
+Nội dung điều 74.
+
+Chương V
+CÔNG TY CỔ PHẦN
+
+Điều 111. Công ty cổ phần
+Phần vốn nhà nước tại công ty và công ty mẹ.
+Nội dung điều 111.
+
+Điều 113. Thanh toán cổ phần đã đăng ký mua khi đăng ký thành lập doanh nghiệp
+Trong thời hạn 90 ngày.
+"""
+
+    def _tieu_de(self, so_dieu):
+        pieces = chunk_law_structured(self.LAW)
+        return next(p.section_title for p in pieces
+                    if p.source_locator == f"dieu:{so_dieu}")
+
+    def test_dieu_trong_muc_van_mang_muc(self):
+        self.assertIn("Mục 2", self._tieu_de(74))
+        self.assertIn("Chương III", self._tieu_de(74))
+
+    def test_chuong_khong_chia_muc_khong_mang_muc_cua_chuong_truoc(self):
+        for so in (111, 113):
+            with self.subTest(dieu=so):
+                tieu_de = self._tieu_de(so)
+                self.assertIn("Chương V", tieu_de)
+                self.assertNotIn("Mục", tieu_de)
+                self.assertNotIn("TRÁCH NHIỆM HỮU HẠN", tieu_de)
+
+    def test_cau_van_bat_dau_bang_chu_phan_khong_thanh_tieu_de(self):
+        self.assertNotIn("Phần vốn", self._tieu_de(113))

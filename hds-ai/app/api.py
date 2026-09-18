@@ -1459,6 +1459,80 @@ def users_list(user=Depends(current_user)):
             for r in rows]
 
 
+@app.get("/users/su-dung")
+def users_su_dung(user=Depends(current_user)):
+    """AI CỦA AI: từng người dùng đã làm gì và đang giữ bao nhiêu dung lượng.
+
+    Chủ dự án 18/09/2026: "bản nháp / tạo file / lịch sử chat là của riêng
+    từng người, không xem được của nhau; chỉ admin được toàn quyền xem user đã
+    làm gì và đang tốn bộ nhớ bao nhiêu". Đây là màn hình cho vế sau — CHỈ
+    admin, và chỉ trả về SỐ ĐẾM, không trả nội dung hội thoại hay bản nháp của
+    ai cả.
+    """
+    require(user, {"admin"})
+    from app import template_fill as _tf
+
+    hoi_thoai, tin_nhan, ban_nhap, tai_lieu, hoat_dong = {}, {}, {}, {}, {}
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, full_name, email, role, coalesce(active,true)
+                             FROM users ORDER BY id""")
+            nguoi = cur.fetchall()
+            cur.execute("""SELECT user_id, count(*), max(started_at)
+                             FROM conversations WHERE user_id IS NOT NULL
+                            GROUP BY user_id""")
+            for uid, n, luc in cur.fetchall():
+                hoi_thoai[uid] = n
+                hoat_dong[uid] = max(filter(None, [hoat_dong.get(uid), luc]), default=None)
+            cur.execute("""SELECT c.user_id, count(*), max(m.created_at)
+                             FROM messages m JOIN conversations c ON c.id=m.conversation_id
+                            WHERE c.user_id IS NOT NULL GROUP BY c.user_id""")
+            for uid, n, luc in cur.fetchall():
+                tin_nhan[uid] = n
+                hoat_dong[uid] = max(filter(None, [hoat_dong.get(uid), luc]), default=None)
+            cur.execute("""SELECT created_by, count(*), max(updated_at)
+                             FROM document_drafts WHERE created_by IS NOT NULL
+                            GROUP BY created_by""")
+            for uid, n, luc in cur.fetchall():
+                ban_nhap[uid] = n
+                hoat_dong[uid] = max(filter(None, [hoat_dong.get(uid), luc]), default=None)
+            cur.execute("""SELECT uploaded_by, count(*) FROM documents
+                            WHERE uploaded_by IS NOT NULL AND coalesce(active,true)
+                            GROUP BY uploaded_by""")
+            tai_lieu = dict(cur.fetchall())
+
+    # File tạm còn hạn: đọc chủ sở hữu ghi kèm trong từng thư mục token.
+    so_file, dung_luong, khong_chu = {}, {}, {"so_file": 0, "bytes": 0}
+    root = _tf.fills_dir()
+    if root.exists():
+        for thu_muc in root.iterdir():
+            if not thu_muc.is_dir():
+                continue
+            try:
+                cong = sum(f.stat().st_size for f in thu_muc.iterdir() if f.is_file())
+            except OSError:
+                continue
+            chu = _tf.chu_so_huu(thu_muc.name)
+            if chu is None:
+                khong_chu["so_file"] += 1
+                khong_chu["bytes"] += cong
+                continue
+            so_file[chu] = so_file.get(chu, 0) + 1
+            dung_luong[chu] = dung_luong.get(chu, 0) + cong
+
+    items = [{
+        "id": r[0], "full_name": r[1], "email": r[2], "role": r[3], "active": r[4],
+        "hoi_thoai": hoi_thoai.get(r[0], 0), "tin_nhan": tin_nhan.get(r[0], 0),
+        "ban_nhap": ban_nhap.get(r[0], 0), "tai_lieu_da_nap": tai_lieu.get(r[0], 0),
+        "file_dang_giu": so_file.get(r[0], 0), "dung_luong": dung_luong.get(r[0], 0),
+        "hoat_dong_cuoi": str(hoat_dong.get(r[0]))[:19] if hoat_dong.get(r[0]) else None,
+    } for r in nguoi]
+    items.sort(key=lambda x: (-x["dung_luong"], -x["tin_nhan"], x["id"]))
+    return {"items": items, "khong_ro_chu": khong_chu,
+            "giu_ngay": _tf.FILL_KEEP_DAYS,
+            "tong_dung_luong": sum(dung_luong.values()) + khong_chu["bytes"]}
+
+
 @app.post("/users")
 def users_add(body: UserIn, user=Depends(current_user)):
     require(user, {"admin"})
@@ -1646,8 +1720,12 @@ def documents_browse(user=Depends(current_user), q: str = "", limit: int = 300):
                 AND coalesce(d.extraction_status,'ready')='ready'"""
     params = []
     if q:
-        sql += " AND (d.title ILIKE %s OR d.summary ILIKE %s)"
-        params += [f"%{q}%", f"%{q}%"]
+        # Tên file luật là "Luật số 59-2020-QH14" — gõ "Luật Doanh nghiệp" mà
+        # chỉ soi title thì ra toàn nghị định (kiểm thử 18/09/2026). Trích yếu
+        # và số hiệu mới là chỗ tên thật của văn bản nằm.
+        sql += (" AND (d.title ILIKE %s OR d.summary ILIKE %s"
+                " OR d.trich_yeu ILIKE %s OR d.so_hieu ILIKE %s)")
+        params += [f"%{q}%"] * 4
     sql += " ORDER BY d.created_at DESC LIMIT %s"
     params.append(limit)
     with db.session(role="internal", admin=True) as conn:
@@ -2596,12 +2674,13 @@ def _preview_pdf(resolved: Path, cache_key) -> Path:
 
 
 def _don_preview_fill(now: float | None = None):
-    """File đã điền là hàng tạm 24 giờ — bản PDF xem trước của nó cũng vậy,
+    """File đã điền là hàng tạm 7 ngày — bản PDF xem trước của nó cũng vậy,
     không thì thư mục preview phình theo mỗi lượt điền bộ."""
+    from app.template_fill import FILL_KEEP_HOURS
     root = DATA_WORK / "preview"
     if not root.exists():
         return
-    cutoff = (now or time.time()) - 24 * 3600
+    cutoff = (now or time.time()) - FILL_KEEP_HOURS * 3600
     for child in root.glob("fill-*.pdf"):
         try:
             if child.stat().st_mtime < cutoff:
@@ -2680,16 +2759,36 @@ def template_files(user=Depends(current_user)):
     return {"items": items}
 
 
+def _fill_cua_toi(token: str, user):
+    """File đã tạo là CỦA RIÊNG người tạo (chủ dự án 18/09/2026: "bản nháp
+    hoặc tạo file… là của người đó, không xem được của nhau; chỉ admin được
+    toàn quyền").
+
+    File sinh trước khi có chốt này không ghi chủ — vẫn cho mở (token là chuỗi
+    32 ký tự ngẫu nhiên, chỉ người tạo mới có) và tất cả sẽ tự hết hạn trong 7
+    ngày.
+    """
+    from app import template_fill as _tf
+    chu = _tf.chu_so_huu(token)
+    if chu is None or chu == user["id"]:
+        return
+    if user["role"] == "admin" or user.get("is_banqt"):
+        return
+    raise HTTPException(403, "File này do người khác tạo — bạn không mở được. "
+                             "Hãy tự tạo bản của mình.")
+
+
 @app.get("/template-fills/{token}/download")
 def template_fill_download(token: str, user=Depends(current_user)):
     """Tải file mẫu ĐÃ ĐIỀN chủ thể (tạo từ khung chat). File là hàng tạm
-    trong data/work/template_fills, tự dọn sau 24 giờ."""
+    trong data/work/template_fills, của riêng người tạo, tự dọn sau 7 ngày."""
     require(user, INTERNAL_ROLES)
     from app import template_fill as _tf
+    _fill_cua_toi(token, user)
     path = _tf.find_fill_file(token)
     if path is None:
-        raise HTTPException(404, "File đã điền không còn trên máy chủ (quá 24 "
-                                 "giờ hoặc token sai). Hãy tạo lại từ khung chat.")
+        raise HTTPException(404, "File đã điền không còn trên máy chủ (quá 7 "
+                                 "ngày hoặc token sai). Hãy tạo lại từ khung chat.")
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user["id"], "download_template_fill", "template_fill",
                  None, {"token": token})
@@ -2967,7 +3066,7 @@ async def bo_mau_dien_ca_bo(bo_id: int,
             ket_qua = await run_in_threadpool(
                 bo_mau_dien.chay, bo, uploads=uploads, file_ids=chon_file,
                 gia_tri_tay=tay, dung_ai=bool(dung_ai),
-                model=(model or "").strip() or None)
+                model=(model or "").strip() or None, user_id=user["id"])
         except bo_mau_dien.LoiDien as e:
             raise HTTPException(400, str(e))
 
@@ -2982,16 +3081,108 @@ async def bo_mau_dien_ca_bo(bo_id: int,
     return ket_qua
 
 
+@app.post("/ho-so/theo-ban-cu")
+async def ho_so_theo_ban_cu(cu: list[UploadFile] = File(...),
+                            moi: list[UploadFile] = File(default=[]),
+                            ghi_chu: str = Form(""),
+                            model: str = Form(""),
+                            user=Depends(current_user)):
+    """Dựng bộ hồ sơ cho khách MỚI theo bộ hồ sơ khách CŨ — KHÔNG cần mã chỗ
+    trống (18/09/2026).
+
+    cu: các file .docx của khách cũ (giữ nguyên định dạng, chỉ thay thông tin
+    chủ thể). moi: hồ sơ / form thông tin của khách mới (mọi định dạng máy đọc
+    được). ghi_chu: người dùng gõ thêm (tên mới, mã số thuế mới…).
+    """
+    import tempfile
+
+    require(user, INTERNAL_ROLES)
+    from app import ho_so_cu
+    from app.ingest import (ATTACHMENT_EXTENSIONS, ExtractionError,
+                            extract_text_with_metadata)
+    from fastapi.concurrency import run_in_threadpool
+
+    cu, moi = cu or [], moi or []
+    if len(cu) > ho_so_cu.MAX_FILE_CU:
+        raise HTTPException(400, f"Mỗi lượt tối đa {ho_so_cu.MAX_FILE_CU} file hồ sơ cũ")
+    if len(moi) > ho_so_cu.MAX_FILE_MOI:
+        raise HTTPException(400, f"Mỗi lượt tối đa {ho_so_cu.MAX_FILE_MOI} file khách mới")
+
+    limit = MAX_UPLOAD_MB * 1024 * 1024
+
+    async def _nhan(f, tmp_dir, chi_docx: bool):
+        """Lưu một file tải lên vào thư mục tạm, trả (tên, đường dẫn, lỗi)."""
+        safe = _safe_filename(f.filename or "ho_so")
+        suffix = Path(safe).suffix.lower()
+        try:
+            if chi_docx and suffix != ".docx":
+                return safe, None, "bộ hồ sơ cũ chỉ nhận .docx (giữ định dạng Word)"
+            if not chi_docx and suffix not in ATTACHMENT_EXTENSIONS:
+                return safe, None, f"chưa đọc được định dạng {suffix or '(không rõ)'}"
+            dest = Path(tmp_dir) / f"{uuid.uuid4().hex[:8]}{suffix}"
+            size = 0
+            with dest.open("wb") as out:
+                while chunk := await f.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > limit:
+                        return safe, None, f"vượt quá {MAX_UPLOAD_MB} MB"
+                    out.write(chunk)
+            return safe, dest, None
+        finally:
+            await f.close()
+
+    loi_tai_len = []
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        files_cu = []
+        for f in cu:
+            ten, dest, loi = await _nhan(f, tmp_dir, chi_docx=True)
+            if loi:
+                loi_tai_len.append({"ten_file": ten, "loi": loi})
+            else:
+                files_cu.append({"ten_file": ten, "duong_dan": dest})
+        files_moi = []
+        for f in moi:
+            ten, dest, loi = await _nhan(f, tmp_dir, chi_docx=False)
+            if loi:
+                loi_tai_len.append({"ten_file": ten, "loi": loi})
+                continue
+            van_ban = ""
+            try:
+                extraction = await run_in_threadpool(extract_text_with_metadata, dest,
+                                                     ATTACHMENT_EXTENSIONS)
+                van_ban = extraction.text or ""
+            except ExtractionError as e:
+                loi_tai_len.append({"ten_file": ten,
+                                    "loi": f"{e.message} {e.hint}".strip()})
+            files_moi.append({"ten_file": ten, "van_ban": van_ban})
+
+        try:
+            ket_qua = await run_in_threadpool(
+                ho_so_cu.chay, files_cu, files_moi, ghi_chu,
+                user_id=user["id"], model=(model or "").strip() or None)
+        except ho_so_cu.LoiHoSoCu as e:
+            raise HTTPException(400, str(e))
+
+    ket_qua["loi_tai_len"] = loi_tai_len
+    ket_qua["canh_bao"] = ho_so_cu.tom_tat_canh_bao(ket_qua)
+    with db.session(role="internal", admin=True) as conn:
+        db.audit(conn, user["id"], "ho_so_theo_ban_cu", "template_fill", None,
+                 {"so_file_cu": len(files_cu), "so_file_moi": len(files_moi),
+                  "so_file_tao": len([r for r in ket_qua["files"] if r["token"]])})
+    return ket_qua
+
+
 @app.get("/template-fills/{token}/xem")
 def template_fill_xem(token: str, user=Depends(current_user)):
     """XEM NHANH nội dung file đã điền ngay trên giao diện (không tải về, không
     cần LibreOffice) — người soát đối chiếu số liệu trước khi lấy file."""
     require(user, INTERNAL_ROLES)
     from app import bo_mau_dien, template_fill as _tf
+    _fill_cua_toi(token, user)
     path = _tf.find_fill_file(token)
     if path is None:
-        raise HTTPException(404, "File đã điền không còn trên máy chủ (quá 24 "
-                                 "giờ hoặc token sai).")
+        raise HTTPException(404, "File đã điền không còn trên máy chủ (quá 7 "
+                                 "ngày hoặc token sai).")
     if path.suffix.lower() != ".docx":
         raise HTTPException(409, "Gói .zip không có bản xem nhanh — hãy tải về.")
     try:
@@ -3008,10 +3199,11 @@ def template_fill_preview(token: str, user=Depends(current_user)):
     LibreOffice trên máy chủ; thiếu thì 409 để giao diện lùi về xem nhanh)."""
     require(user, INTERNAL_ROLES)
     from app import template_fill as _tf
+    _fill_cua_toi(token, user)
     path = _tf.find_fill_file(token)
     if path is None:
-        raise HTTPException(404, "File đã điền không còn trên máy chủ (quá 24 "
-                                 "giờ hoặc token sai).")
+        raise HTTPException(404, "File đã điền không còn trên máy chủ (quá 7 "
+                                 "ngày hoặc token sai).")
     if path.suffix.lower() != ".docx":
         raise HTTPException(409, "Gói .zip không có bản xem trước — hãy tải về.")
     _don_preview_fill()

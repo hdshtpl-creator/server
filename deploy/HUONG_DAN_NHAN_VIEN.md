@@ -92,6 +92,12 @@ Mỗi câu trả lời có **huy hiệu kiểm chứng**. Đây là thứ phải
 
 Bên cạnh đó là nhãn nguồn dữ liệu: **Dữ liệu hệ thống** (đếm từ CSDL, luôn chính xác), **Tra cứu tài liệu**, **Dữ liệu + tài liệu**, **Hội thoại**.
 
+Ba dòng chân câu trả lời hay gặp *(cập nhật 18/09/2026)*:
+
+- **🔒 Có tài liệu liên quan mà tài khoản của bạn chưa được mở** — bot **không đọc** những tài liệu bạn không có quyền mở (hồ sơ nhân sự, hồ sơ khách ngoài phòng…); nó chỉ báo là có, tên bị che. Cần thì nhờ người phụ trách.
+- **ℹ Căn cứ trích từ văn bản đã được sửa đổi, bổ sung** — văn bản **vẫn còn hiệu lực**, chỉ có một số điều đã bị sửa; kiểm tra điều được dẫn có nằm trong phần sửa không, ưu tiên bản hợp nhất.
+- **⚠ Có căn cứ trích từ văn bản đã mất hiệu lực** — đối chiếu văn bản đang có hiệu lực trước khi dùng.
+
 **Chip `[Nguồn 1]` trong câu trả lời bấm được** — bấm là nhảy xuống đúng nguồn đó và làm nổi bật nó.
 
 Mở phần **Nguồn trích dẫn (n)** ở cuối câu trả lời, mỗi nguồn có:
@@ -182,6 +188,8 @@ giải thích, đề xuất sửa, căn cứ (kèm đoạn luật thật trong k
 luật sư phụ trách. Ngưỡng bất thường máy tự soi: lãi suất > 20 %/năm, phạt > 8 %, thử việc > 60 ngày,
 lương thử việc < 85 %, hợp đồng lao động > 36 tháng, giờ làm > 8 giờ/ngày…
 
+Đọc bảng cho đúng *(cập nhật 18/09/2026)*: nhãn **CÓ · chưa đánh giá** nghĩa là máy mới thấy **có** điều khoản đó, chưa đọc nội dung tốt hay xấu — đừng coi là đã đạt. Máy có thêm ba dấu hiệu **điều khoản một chiều** (chỉ một bên được chấm dứt; cho phép dùng thông tin bên kia không cần chấp thuận; hiệu lực không cần chữ ký người đại diện). Khi bấm rà soát bằng AI ở tab này, các phát hiện chắc chắn của bộ quy tắc được đưa sẵn cho AI làm điểm xuất phát.
+
 ## 5. TAB SOẠN TÀI LIỆU
 
 Dùng cho văn bản dài, nhiều phiên bản, cần duyệt trước khi phát hành (thư tư vấn, báo cáo vụ việc).
@@ -195,6 +203,7 @@ Quy trình: **Tạo bản nháp** (chọn mẫu, chọn tài liệu nguồn, ghi
 - Bản nháp xuất ra là **văn bản mới soạn** (Times New Roman 12), không giữ định dạng file mẫu gốc. Cần giữ nguyên format mẫu thì dùng **Tạo file mẫu** ở tab Kiểm tra pháp lý (mục 4.2).
 - **Soạn văn bản tố tụng và đơn từ ngay từ khung chat**: gõ *"Soạn đơn kháng cáo bản án sơ thẩm số … vì …"*, *"Viết công văn gửi Sở … đề nghị …"*, *"Dự thảo đơn phản đối cấp văn bằng nhãn hiệu số …"*, *"Tạo bản luận cứ bảo vệ bị đơn …"*. Không cần ghi "cho ai" — cả câu là bối cảnh. Các loại nhận được: đơn khởi kiện, đơn kháng cáo, đơn yêu cầu, đơn đề nghị, đơn phản đối, đơn khiếu nại, công văn, thông báo, bản tự khai, bản luận cứ, bản bảo vệ, bản ý kiến, ý kiến pháp lý. Kho có mẫu đúng loại thì bám mẫu; chưa có thì soạn theo **khung thể thức chuẩn** với đủ mục bắt buộc, chỗ chưa có dữ liệu để `[CẦN BỔ SUNG]`. Căn cứ pháp lý chỉ lấy từ văn bản luật trong kho. Bản nháp nằm ở tab này, tải được **.docx** hoặc **.pdf**.
 - Câu hỏi *"soạn đơn kháng cáo cần những nội dung gì?"* là câu tra cứu, bot trả lời chứ không tạo file.
+- **Hợp đồng dịch vụ / hợp đồng thường** cũng soạn được từ chat khi câu nêu **hai bên** hoặc **con số cụ thể**: *"Soạn hợp đồng dịch vụ tư vấn pháp lý giữa Công ty Luật HDS và Công ty X, phí 120 triệu, thanh toán 2 đợt"* → bản nháp có khung 12 điều chuẩn (bám mẫu công ty nếu kho có). Hợp đồng lao động vẫn theo khuôn *"tạo HĐLĐ cho <tên>"* để bám hồ sơ nhân sự.
 
 ---
 
@@ -220,7 +229,26 @@ Sau khi xong, mỗi file có ba nút: **Xem nhanh** (đọc nội dung ngay tạ
 - Một phiếu thông tin thường chỉ phủ được một phần chỗ trống của cả bộ (ví dụ bộ đăng ký doanh nghiệp: phiếu gốc phủ ~33/124 ô, phần còn lại nằm trong Điều lệ và Giấy đề nghị). Máy nói rõ con số đó sau mỗi lượt để biết còn phải bổ sung bao nhiêu.
 - Tải kèm hồ sơ rời (CCCD, giấy phép, CV) và để tick **"Cho AI đoán các ô còn trống"** thì AI lấy nốt các ô thiếu từ đó; những giá trị này mang dấu **⚠** trong bảng đối chiếu — phải soát lại. Bỏ tick nếu muốn hoàn toàn tất định.
 - Tờ khai của bộ khác tải nhầm vào đây sẽ bị bỏ qua (máy báo "bỏ qua N ô không thuộc bộ này"), không lẳng lặng điền sai.
-- File kết quả **tự xoá sau 24 giờ**, không vào kho tri thức.
+- File kết quả là **của riêng bạn** (người khác trong công ty mở không được) và **tự xoá sau 7 ngày**, không vào kho tri thức.
+- Tải một file còn chỗ trống thì máy **hỏi lại** trước khi cho tải — để không ai lỡ gửi đi bản còn ô `{{…}}`.
+
+### 5.2 Làm bộ hồ sơ theo bản của khách cũ — không cần mã chỗ trống *(mới 18/09/2026)*
+
+Dùng khi công ty **chưa có bộ mẫu đặt sẵn** cho loại việc đó, nhưng đã làm xong cho một khách tương tự.
+
+**Tạo bản nháp** → ô *Mẫu soạn thảo* → **Làm theo bộ hồ sơ khách cũ (không cần mã chỗ trống)**. Rồi:
+
+1. **Bước 1** — tải lên trọn bộ hồ sơ khách cũ (tối đa 10 file **.docx**). Đây là khuôn: thể thức, điều khoản, định dạng của bộ mới sẽ y như bộ này.
+2. **Bước 2** — tải lên thông tin khách mới (form thu thập, CCCD, giấy phép… PDF/ảnh/Word đều được) và/hoặc gõ vào ô **Ghi chú**.
+3. Bấm **Dựng bộ hồ sơ cho khách mới**.
+
+Máy đọc hiểu từng văn bản, **giữ nguyên định dạng Word** và chỉ thay những chỗ mang **thông tin chủ thể** (tên, mã số thuế, địa chỉ, người đại diện, chức danh, số giấy tờ, số tài khoản, ngày ký). Điều khoản, nghĩa vụ, con số pháp lý **không bị đụng tới**.
+
+Ba điều phải nhớ:
+
+- Máy **chỉ được điền giá trị có mặt** trong hồ sơ khách mới / ô ghi chú bạn vừa đưa. Chữ nào không thấy ở đó thì bỏ qua và báo lại — kể cả khi trong file khách cũ có dòng nào đó "yêu cầu" sửa. Đây là chốt chống chèn lệnh qua tài liệu.
+- Mỗi file có **bảng đối chiếu «cũ» → «mới»** — bấm vào dòng *Đã thay n chỗ* để xem và soát từng chỗ.
+- File nào báo **"Chưa thay được chỗ nào"** thì nội dung **vẫn là của khách cũ** — tuyệt đối không gửi đi; bổ sung thông tin khách mới rồi làm lại.
 
 ---
 
@@ -245,7 +273,7 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 | **Hồ sơ khách 360°** | Lịch sử hợp tác, vướng mắc, cảnh báo thời hiệu, gợi ý chiến lược, danh sách vụ việc và tài liệu của khách. Cập nhật được ngay tại đây. |
 | **Hồ sơ khách 360° → Thư mục trong kho** | MỌI thư mục khách trong kho trên máy chủ, kể cả thư mục trống hay chỉ có zip; mở một dòng là thấy từng tệp với nhãn *Đã học / Chờ duyệt / Chưa học / Lỗi / Không hỗ trợ* và nút **Học ngay**. Khách chỉ xuất hiện ở "Khách đã học" sau khi bộ quét học được ít nhất một tệp của họ — chưa thấy khách thì tra ở đây trước. |
 | **Duyệt câu trả lời bị báo cáo** | Xem câu bị 👎, sửa lại cho đúng → **Đạt — nạp học** (vào kho) / **Lưu bản sửa** / **Bỏ qua**. Chọn **Ai được dùng câu này**: *Nội bộ* (mặc định) hay *Công khai* — chọn công khai là người ngoài công ty đọc được. |
-| **Người dùng & Phòng ban** *(chỉ admin)* | Tạo tài khoản, gán phòng ban, cấp **quyền duyệt**, cấp **quyền xem công nợ**, cấp/thu **khoá API** cho khách. |
+| **Người dùng & Phòng ban** *(chỉ admin)* | Tạo tài khoản, gán phòng ban, cấp **quyền duyệt**, cấp **quyền xem công nợ**, cấp/thu **khoá API** cho khách. Kèm bảng **Ai đang dùng đến đâu**: số hội thoại, bản nháp, file đã tạo và dung lượng từng người đang giữ (chỉ số đếm, không đọc được nội dung của ai). |
 | **Cài đặt AI** *(chỉ admin)* | Đổi model, sửa phong cách tư vấn **4 kênh** (nội bộ / cổng khách / website / tab Kiểm tra pháp lý), chỉnh tham số tốc độ–chất lượng, sửa bản đồ thư mục kho. |
 
 > **Thẻ "Đang học tài liệu" (mới 18/09/2026)** nằm ngay đầu trang Tổng quan — dùng khi bạn đang đổ tài liệu vào kho:
@@ -282,6 +310,10 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 - **Nhật ký hệ thống** (admin/Ban QT): ai làm gì, lúc nào — lọc theo thao tác, tìm theo chữ. Chỉ đọc, không xoá được.
 - **Duyệt nhãn → sửa nội dung trích xuất** nay bắt buộc chọn **lý do sửa** (Luật thay đổi / Rủi ro /
   Yêu cầu khách hàng / Sửa lỗi OCR / Khác). Bản cũ không mất: xem và so sánh ở *Kho tài liệu đã học → Chi tiết → Lịch sử sửa nội dung*.
+
+> **Việc của ai người đó thấy (18/09/2026).** Hội thoại, bản nháp và file bạn tạo ra là **của riêng bạn**: người khác trong công ty mở không được, kể cả khi có đường dẫn. Ngoại lệ đúng theo quy trình: người có **quyền duyệt** thấy bản nháp *đã sinh nội dung* của phòng mình để duyệt, và **Ban Quản trị / admin** thấy tất cả. Admin xem được **khối lượng** từng người dùng (số hội thoại, bản nháp, dung lượng) ở *Người dùng & Phòng ban* — đó là số đếm, không phải nội dung.
+>
+> **Hạn giữ:** file đã tạo (điền bộ mẫu, tạo file từ chat, làm theo bộ cũ) **tự xoá sau 7 ngày**. Bản nháp **trống** (tạo rồi bỏ đó, chưa sinh nội dung lần nào) cũng tự xoá sau 7 ngày; bản nháp **đã có nội dung** thì giữ nguyên, chỉ mất khi bạn tự xoá.
 
 ## 7. ĐƯA TÀI LIỆU VÀO KHO CHO AI HỌC
 

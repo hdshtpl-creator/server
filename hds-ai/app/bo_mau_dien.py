@@ -80,6 +80,109 @@ def lam_sach_gia_tri(value) -> str:
 # ---------------------------------------------------------------------------
 # Quét chỗ trống của cả bộ
 # ---------------------------------------------------------------------------
+# Nhãn người đọc: mẫu của công ty gõ KHÔNG DẤU ("Ho ten", "Ngay sinh") và
+# nhiều ô đứng một mình chỉ có mã ({{NDD1.T}}). Chủ dự án 18/09/2026: "tiêu đề
+# các trường thông tin cần rõ ràng, có dấu; hạn chế mã vì code và AI tự xử lý".
+# Hai bảng dưới đây chỉ đổi CHỮ HIỂN THỊ — mã vẫn là thứ máy dùng để điền.
+_NHAN_CO_DAU = {
+    "ho ten": "Họ và tên", "ho va ten": "Họ và tên", "ten": "Tên",
+    "ho, chu dem va ten": "Họ, chữ đệm và tên",
+    "ten tieng viet": "Tên tiếng Việt", "ten tieng anh": "Tên tiếng Anh",
+    "ten viet tat": "Tên viết tắt", "loai hinh": "Loại hình doanh nghiệp",
+    "mo hinh to chuc": "Mô hình tổ chức", "noi tiep nhan ho so": "Nơi tiếp nhận hồ sơ",
+    "ngay sinh": "Ngày sinh", "ngay, thang, nam sinh": "Ngày, tháng, năm sinh",
+    "gioi tinh": "Giới tính", "quoc tich": "Quốc tịch", "dan toc": "Dân tộc",
+    "so dinh danh": "Số định danh cá nhân",
+    "so dinh danh ca nhan": "Số định danh cá nhân",
+    "so cccd": "Số CCCD", "cccd": "Số CCCD", "cmnd": "Số CMND",
+    "ho chieu": "Số hộ chiếu", "ngay cap": "Ngày cấp", "noi cap": "Nơi cấp",
+    "dia chi": "Địa chỉ", "dia chi lien lac": "Địa chỉ liên lạc",
+    "dia chi thuong tru": "Địa chỉ thường trú",
+    "so nha": "Số nhà", "duong": "Đường", "phuong": "Phường", "xa": "Xã",
+    "quan": "Quận", "huyen": "Huyện", "tinh": "Tỉnh / Thành phố",
+    "thanh pho": "Thành phố", "quoc gia": "Quốc gia",
+    "dien thoai": "Điện thoại", "so dien thoai": "Số điện thoại",
+    "email": "Email", "fax": "Fax", "website": "Website",
+    "ma so thue": "Mã số thuế", "mst": "Mã số thuế",
+    "von dieu le": "Vốn điều lệ", "bang chu": "Bằng chữ",
+    "menh gia co phan": "Mệnh giá cổ phần", "so co phan": "Số cổ phần",
+    "ty le": "Tỷ lệ", "chuc danh": "Chức danh", "chuc vu": "Chức vụ",
+    "nguoi dai dien": "Người đại diện theo pháp luật",
+    "nganh nghe": "Ngành nghề kinh doanh",
+    "nganh nghe kinh doanh": "Ngành nghề kinh doanh",
+    "so tai khoan": "Số tài khoản", "ngan hang": "Ngân hàng",
+    "thong tin thue": "Thông tin thuế", "von phap dinh": "Vốn pháp định",
+    "so luong lao dong": "Số lượng lao động", "nguoi nop ho so": "Người nộp hồ sơ",
+    "ma loai hinh tu giao dien": "Mã loại hình (hệ thống tự điền)",
+    "loai bo ho so": "Loại bộ hồ sơ", "khu cong nghiep": "Khu công nghiệp",
+    "khu che xuat": "Khu chế xuất", "khu kinh te": "Khu kinh tế",
+    "khu cong nghe cao": "Khu công nghệ cao",
+    "dat quoc phong/an ninh": "Đất quốc phòng / an ninh",
+    "von dieu le/kinh doanh": "Vốn điều lệ (hoặc vốn kinh doanh)",
+}
+# Mảnh mã → chữ, để ô chỉ có mã ({{NDD1.T}}) vẫn đọc ra nghĩa.
+_MANH_MA = {
+    "tct": "Tổ chức / công ty", "tsc": "Trụ sở chính", "nnhs": "Người nộp hồ sơ",
+    "ndd": "Người đại diện", "cd": "Chức danh", "cdong": "Cổ đông",
+    "csh": "Chủ sở hữu", "gv": "Góp vốn", "nn": "Ngành nghề",
+    "vdl": "Vốn điều lệ", "cpph": "Cổ phần phát hành", "tvhgd": "Thành viên hộ gia đình",
+    "admin": "Thông tin quản trị", "form type": "Loại hồ sơ",
+    "t": "họ tên", "ttv": "tên tiếng Việt", "tta": "tên tiếng Anh",
+    "tvt": "tên viết tắt", "lh": "loại hình", "mhtc": "mô hình tổ chức",
+    "ns": "ngày sinh", "gt": "giới tính", "sdd": "số định danh",
+    "dc": "địa chỉ", "sn": "số nhà", "p": "phường", "x": "xã",
+    "qg": "quốc gia", "dt": "điện thoại", "web": "website", "fax": "fax",
+    "email": "email", "mst": "mã số thuế", "s": "số tiền", "c": "bằng chữ",
+    "stt": "số thứ tự", "mgc": "mệnh giá cổ phần", "tlbq": "tỷ lệ biểu quyết",
+    "kcn": "khu công nghiệp", "kcx": "khu chế xuất", "kkt": "khu kinh tế",
+    "kcnc": "khu công nghệ cao", "qpan": "đất quốc phòng / an ninh",
+    "tax": "thông tin thuế", "raw json": "dữ liệu thô", "dsgv": "danh sách góp vốn",
+    "legal reps": "người đại diện theo pháp luật",
+    "authorized reps": "người được uỷ quyền", "nt": "người thực hiện",
+    "tlbq bq": "tỷ lệ biểu quyết",
+}
+
+
+def dep_hoa_nhan(nhan: str) -> str:
+    """Nhãn hiển thị: thêm dấu cho những cụm quen thuộc, giữ nguyên phần còn
+    lại. Không đụng tới mã — mã vẫn đi riêng trong trường `literal`."""
+    goc = re.sub(r"\s+", " ", (nhan or "")).strip(" .:-–—|/\t,;")
+    if not goc:
+        return ""
+    key = _fold(goc)
+    if key in _NHAN_CO_DAU:
+        return _NHAN_CO_DAU[key]
+    # "Ho ten (ghi bang chu in hoa)" → đổi phần đầu, giữ phần chú thích.
+    m = re.match(r"^(.*?)\s*([(\[].*)$", goc)
+    if m and _fold(m.group(1)) in _NHAN_CO_DAU:
+        return f"{_NHAN_CO_DAU[_fold(m.group(1))]} {m.group(2)}"
+    return goc
+
+
+def nhan_tu_ma(literal: str) -> str:
+    """Đoán chữ cho ô CHỈ CÓ MÃ: "{{NDD1.T}}" → "Người đại diện 1 · họ tên".
+    Không đoán được mảnh nào thì trả phần mã cho đỡ trống."""
+    ben_trong = (literal or "").strip("{} ").strip()
+    ca_cum = _fold(ben_trong.replace("_", " ").replace(".", " "))
+    if ca_cum in _MANH_MA:
+        ten = _MANH_MA[ca_cum]
+        return ten[:1].upper() + ten[1:]
+    phan = []
+    # Chỉ tách theo dấu chấm / gạch: "LEGAL_REPS" là MỘT mảnh ("người đại diện
+    # theo pháp luật"), tách tiếp là ra "Legal · REPS" chẳng ai đọc được.
+    for manh in re.split(r"[.\-/]+", ben_trong):
+        if not manh:
+            continue
+        so = re.sub(r"[^0-9]", "", manh)
+        chu = _fold(re.sub(r"[0-9]", "", manh)).replace("_", " ").strip()
+        ten = _MANH_MA.get(chu, "")
+        if not ten:
+            ten = chu.upper() if len(chu) <= 4 else chu.capitalize()
+        phan.append(f"{ten} {so}".strip() if so else ten)
+    ra = " · ".join(p for p in phan if p)
+    return (ra[:1].upper() + ra[1:]) if ra else ben_trong
+
+
 def _nhan_o(doan: str, dau: int, cuoi_truoc: int, nhan_dau: str = "",
             thu_tu: int = 1, tong: int = 1) -> str:
     """Nhãn của MỘT chỗ trống: chữ nằm giữa chỗ trống trước nó và nó.
@@ -95,13 +198,17 @@ def _nhan_o(doan: str, dau: int, cuoi_truoc: int, nhan_dau: str = "",
     truoc = (doan or "")[cuoi_truoc:dau]
     truoc = re.sub(r"\s+", " ", truoc).strip(" .:-–—|/\t,;()")
     if len(truoc) >= 2:
-        return truoc[-MAX_GOI_Y_CHARS:]
+        return dep_hoa_nhan(truoc[-MAX_GOI_Y_CHARS:])
     if nhan_dau and tong > 1:
         return f"{nhan_dau} — phần {thu_tu}/{tong}"[:MAX_GOI_Y_CHARS]
-    # Chỗ trống đứng một mình cả dòng: lấy phần chữ còn lại của dòng.
+    # Chỗ trống đứng một mình cả dòng: lấy phần chữ còn lại của dòng, không có
+    # chữ nào thì đọc nghĩa từ chính mã ô.
     sach = re.sub(r"\s+", " ",
                   template_fill.PLACEHOLDER_RE.sub(" ", doan or "")).strip()
-    return sach[:MAX_GOI_Y_CHARS]
+    if len(sach) >= 2:
+        return dep_hoa_nhan(sach[:MAX_GOI_Y_CHARS])
+    m = template_fill.PLACEHOLDER_RE.search(doan or "")
+    return nhan_tu_ma(m.group(0)) if m else ""
 
 
 def _la_tieu_de_muc(text: str) -> bool:
@@ -621,7 +728,7 @@ def doan_bang_ai(dong_thieu, van_ban: str, bo_ten: str, model=None):
 # ---------------------------------------------------------------------------
 # Điền vào từng file của bộ
 # ---------------------------------------------------------------------------
-def dien(bo: dict, gia_tri: dict, file_ids=None, nguon=None):
+def dien(bo: dict, gia_tri: dict, file_ids=None, nguon=None, user_id=None):
     """Điền {{…}} vào từng file mẫu của bộ, mỗi file một bản kết quả .docx.
 
     Trả [{file_id, ten_file, ten_ket_qua, token, so_thay, da_dien, con_trong,
@@ -660,7 +767,7 @@ def dien(bo: dict, gia_tri: dict, file_ids=None, nguon=None):
         con_trong = [literal for literal, khoa in placeholders
                      if not gia_tri.get(khoa)]
         try:
-            token, out_path = template_fill.save_filled(doc, ten_out)
+            token, out_path = template_fill.save_filled(doc, ten_out, user_id=user_id)
         except Exception as exc:  # noqa: BLE001
             ket_qua.append({"file_id": f["id"], "ten_file": ten_goc,
                             "ten_ket_qua": None, "token": None, "so_thay": 0,
@@ -697,7 +804,7 @@ def xem_nhanh(path: Path) -> dict:
 # Luồng chính — gọi từ api.py
 # ---------------------------------------------------------------------------
 def chay(bo: dict, *, uploads=None, file_ids=None, gia_tri_tay=None,
-         dung_ai: bool = True, model=None):
+         dung_ai: bool = True, model=None, user_id=None):
     """Điền cả bộ từ tờ khai / hồ sơ tải lên. Trả dict cho giao diện."""
     if not (bo.get("files") or []):
         raise LoiDien("Bộ mẫu chưa có file .docx nào — vào Quản trị → Bộ mẫu hồ "
@@ -738,7 +845,7 @@ def chay(bo: dict, *, uploads=None, file_ids=None, gia_tri_tay=None,
         gia_tri.pop(k, None)
         nguon.pop(k, None)
 
-    ket_qua = dien(bo, gia_tri, file_ids, nguon)
+    ket_qua = dien(bo, gia_tri, file_ids, nguon, user_id=user_id)
     template_fill.cleanup_old_fills()
 
     made = [r for r in ket_qua if r["token"]]
@@ -755,7 +862,7 @@ def chay(bo: dict, *, uploads=None, file_ids=None, gia_tri_tay=None,
                 payload = doc_factory.bundle_zip(entries)
                 zip_token, _p = template_fill.save_filled_bytes(
                     payload, f"{bo.get('ten') or 'bo-ho-so'} - da dien",
-                    extension="zip")
+                    extension="zip", user_id=user_id)
         except Exception:  # noqa: BLE001 — gói hỏng thì vẫn còn từng file lẻ
             zip_token = None
 

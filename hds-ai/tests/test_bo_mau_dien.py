@@ -114,12 +114,27 @@ class ToKhaiTests(_KhoTam):
         ])])
         dong, _ = bmd.quet_bo(bo)
         nhan = {d["khoa"]: d["goi_y"] for d in dong}
-        self.assertEqual(nhan["ns"], "Ngay sinh")
-        self.assertEqual(nhan["gt"], "Gioi tinh")
-        self.assertEqual(nhan["dc_sn"], "Dia chi")
+        # Nhãn hiển thị được THÊM DẤU (mẫu công ty gõ không dấu) — chủ dự án
+        # 18/09/2026: "tiêu đề các trường cần rõ ràng, có dấu càng tốt".
+        self.assertEqual(nhan["ns"], "Ngày sinh")
+        self.assertEqual(nhan["gt"], "Giới tính")
+        self.assertEqual(nhan["dc_sn"], "Địa chỉ")
         # Giữa hai ô chỉ có dấu phẩy: mượn nhãn đầu dòng kèm số phần.
-        self.assertEqual(nhan["dc_p"], "Dia chi — phần 2/3")
+        self.assertEqual(nhan["dc_p"], "Địa chỉ — phần 2/3")
         self.assertTrue(all(d["muc"] == "A. THONG TIN CHUNG" for d in dong))
+
+    def test_o_chi_co_ma_van_doc_ra_chu(self):
+        """Ô đứng riêng chỉ có mã: giao diện phải hiện CHỮ, không phải
+        "{{NDD1.T}} {{NDD1.T}}" như ảnh chủ dự án gửi 18/09/2026."""
+        self.assertEqual(bmd.nhan_tu_ma("{{NDD1.T}}"), "Người đại diện 1 · họ tên")
+        self.assertEqual(bmd.nhan_tu_ma("{{ADMIN.LEGAL_REPS}}"),
+                         "Thông tin quản trị · người đại diện theo pháp luật")
+        self.assertEqual(bmd.dep_hoa_nhan("Ho ten"), "Họ và tên")
+        self.assertEqual(bmd.dep_hoa_nhan("Ho, chu dem va ten (ghi bang chu in hoa)"),
+                         "Họ, chữ đệm và tên (ghi bang chu in hoa)")
+        # Nhãn lạ thì giữ nguyên, không bịa chữ.
+        self.assertEqual(bmd.dep_hoa_nhan("Ghi chú riêng của phòng"),
+                         "Ghi chú riêng của phòng")
 
     def test_o_con_nguyen_cho_trong_khong_tinh_la_gia_tri(self):
         self.assertEqual(bmd.lam_sach_gia_tri("{{TCT.TEN}}"), "")

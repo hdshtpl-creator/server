@@ -48,6 +48,11 @@ export const BoMauTab: React.FC = () => {
   // Bộ đang được ĐIỀN (tải tờ khai → điền → tải lên) — cùng panel với tab Soạn
   // tài liệu, để người vừa tải bộ lên dùng thử ngay tại chỗ.
   const [dienBo, setDienBo] = useState<BoMau | null>(null);
+  // File .docx chọn NGAY trong khung tạo bộ: chủ dự án 18/09/2026 báo "không
+  // tải được file lên, bấm nút tạo xong báo lỗi rồi mới tải lên được" — vì
+  // trước đây phải tạo bộ rồi mới có ô tải file. Giờ một lượt là xong.
+  const [fileMoi, setFileMoi] = useState<File[]>([]);
+  const fileMoiRef = useRef<HTMLInputElement | null>(null);
   const fileInputs = useRef<Record<number, HTMLInputElement | null>>({});
 
   const fetchAll = async () => {
@@ -89,14 +94,30 @@ export const BoMauTab: React.FC = () => {
         mo_ta: moTa.trim() || undefined,
         department_id: deptId ? Number(deptId) : null,
       });
-      showToast(`Đã tạo bộ «${ten.trim()}». Giờ tải các file .docx mẫu vào bộ.`, 'success');
+      if (fileMoi.length) {
+        const kq = await api.uploadBoMauFiles({ boId: res.id, files: fileMoi });
+        const ok = kq.ket_qua.filter((k) => k.ok).length;
+        showToast(`Đã tạo bộ «${ten.trim()}» và thêm ${ok}/${fileMoi.length} file.`,
+                  ok ? 'success' : 'error');
+        kq.ket_qua.filter((k) => !k.ok).forEach((k) => showToast(`${k.ten_file}: ${k.loi}`, 'error'));
+      } else {
+        showToast(`Đã tạo bộ «${ten.trim()}». Giờ tải các file .docx mẫu vào bộ.`, 'success');
+      }
       setTen('');
       setMoTa('');
       setDeptId('');
+      setFileMoi([]);
+      if (fileMoiRef.current) fileMoiRef.current.value = '';
       await fetchAll();
       setOpenId(res.id);
     } catch (err: any) {
-      showToast(err?.message || 'Không tạo được bộ mẫu.', 'error');
+      const msg = err?.message || 'Không tạo được bộ mẫu.';
+      showToast(
+        /đã có bộ mẫu/i.test(msg)
+          ? `${msg}. Bộ đó đang nằm ở danh sách bên phải — mở ra và bấm “Tải file .docx vào bộ”.`
+          : msg,
+        'error'
+      );
     } finally {
       setCreating(false);
     }
@@ -209,7 +230,7 @@ export const BoMauTab: React.FC = () => {
               <div>
                 <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Tạo bộ mẫu mới</h3>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Tạo bộ trước, rồi tải các file .docx vào bộ.
+                  Đặt tên bộ, chọn luôn các file .docx mẫu — bấm một nút là xong.
                 </p>
               </div>
             </div>
@@ -240,6 +261,24 @@ export const BoMauTab: React.FC = () => {
                   placeholder="Bộ này dùng cho trường hợp nào, gồm những giấy tờ gì"
                   className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl focus:ring-2 focus:ring-hds-blue focus:outline-none resize-none"
                 />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  File .docx mẫu (chọn luôn ở đây cũng được)
+                </label>
+                <input
+                  ref={fileMoiRef}
+                  type="file"
+                  multiple
+                  accept=".docx"
+                  onChange={(e) => setFileMoi(Array.from(e.target.files || []))}
+                  className="w-full text-[11px] file:mr-2 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-hds-navy file:text-hds-gold file:font-bold file:cursor-pointer"
+                />
+                <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                  {fileMoi.length
+                    ? `${fileMoi.length} file sẽ được tải vào bộ ngay sau khi tạo.`
+                    : 'Bỏ trống cũng được — tạo bộ xong vẫn tải file vào sau được.'}
+                </p>
               </div>
               <div>
                 <label htmlFor="bo-mau-dept" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">

@@ -997,6 +997,19 @@ _SCENARIO_MARKERS = (
 _NOI_BO_MARKERS = ("hds", "cong ty toi", "cty toi", "cong ty minh", "cty minh",
                    "cua minh", "ben minh", "noi bo", "dang phu trach",
                    "trong kho", "kho tai lieu")
+# Câu hỏi về MỘT QUY PHẠM (mức, thời hạn, điều kiện luật định) — kiểm thử vai
+# thực tập sinh 18/09/2026: "thời gian THỬ VIỆC tối đa đối với NGƯỜI LAO ĐỘNG
+# có trình độ cao đẳng là bao nhiêu ngày?" bị trả lời bằng danh sách 3 nhân sự
+# HDS, vì "nguoi lao dong" ∈ STAFF_WORDS mà câu không có tên văn bản nào.
+_RE_QUY_PHAM = re.compile(
+    r"\b(thu viec|lam them|nghi phep|nghi le|bao hiem|luong toi thieu|"
+    r"ky luat|sa thai|boi thuong|phat vi pham|lai suat|thoi hieu|"
+    r"bao truoc|tro cap|thai san|tuoi nghi huu|"
+    r"toi da|toi thieu|duoc phep|bat buoc|quy dinh|theo luat|theo bo luat)\b|"
+    r"\bbao nhieu\s+(ngay|thang|nam|tuan|gio|phan tram|%)")
+# …nhưng "khách X còn BAO NHIÊU NGÀY đến hạn" vẫn là dữ liệu vận hành.
+_RE_VAN_HANH = re.compile(r"\b(vu viec|han chot|den han|qua han|khach hang|khach|"
+                          r"tai khoan|dang nhap)\b")
 # Câu vận hành thật đều ngắn ("HDS có mấy khách?"). Dài hơn mức này gần như
 # chắc chắn là một tình huống pháp lý được mô tả.
 _SCENARIO_MIN_CHARS = 180
@@ -1033,6 +1046,10 @@ def _legal_or_scenario_question(q_folded: str) -> bool:
     if co_dieu_khoan:
         return True
     if any(m in q_folded for m in _SCENARIO_MARKERS):
+        return True
+    # Hỏi về một quy phạm (mức, thời hạn, điều kiện) mà không dính dữ liệu vận
+    # hành (vụ việc, hạn chót, khách) → là câu hỏi luật.
+    if _RE_QUY_PHAM.search(q_folded) and not _RE_VAN_HANH.search(q_folded):
         return True
     # Dài như một đề bài mà không nhắc tên công ty mình → là tình huống.
     if (len(q_folded) >= _SCENARIO_MIN_CHARS

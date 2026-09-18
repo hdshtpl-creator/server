@@ -245,3 +245,31 @@ class PromptCoDuBaChinhSachMoi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CauHoiQuyPhamKhongPhaiDemNhanSuTests(unittest.TestCase):
+    """Kiểm thử vai thực tập sinh 18/09/2026: câu hỏi về một QUY PHẠM (mức,
+    thời hạn) có chữ "người lao động" từng bị trả lời bằng danh sách nhân sự
+    HDS — sai hoàn toàn và lộ tên người cho vai trợ lý."""
+
+    def test_thu_viec_toi_da_la_cau_hoi_luat(self):
+        self.assertIsNone(company_context.infer_intent(
+            "Thời gian thử việc tối đa đối với người lao động có trình độ cao "
+            "đẳng là bao nhiêu ngày?"))
+
+    def test_muc_quy_pham_khac(self):
+        for q in [
+            "người lao động được nghỉ phép năm bao nhiêu ngày?",
+            "lương tối thiểu vùng áp dụng cho người lao động là bao nhiêu?",
+            "người lao động phải báo trước bao nhiêu ngày khi nghỉ việc?",
+            "làm thêm giờ tối đa bao nhiêu giờ một tháng?",
+        ]:
+            with self.subTest(q=q):
+                self.assertIsNone(company_context.infer_intent(q))
+
+    def test_cau_van_hanh_van_la_van_hanh(self):
+        # "bao nhiêu ngày" đi kèm vụ việc / hạn chót vẫn là dữ liệu HDS.
+        self.assertEqual(company_context.infer_intent("vụ SunGroup còn bao nhiêu ngày đến hạn"),
+                         "matter_alerts")
+        self.assertEqual(company_context.infer_intent("hds có bao nhiêu người lao động"),
+                         "staff_directory")

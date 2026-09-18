@@ -48,7 +48,14 @@ MAX_PARTY_PROMPT_CHARS = 10_000
 
 DATA_RAW = Path(os.getenv("DATA_RAW", "./data/raw"))
 DATA_WORK = Path(os.getenv("DATA_WORK", "./data/work"))
-FILL_KEEP_HOURS = 24
+# Hàng tạm giữ 7 NGÀY (chủ dự án 18/09/2026: "các bản nháp hoặc bộ hồ sơ
+# này lưu 7 ngày rồi tự xoá") — 24 giờ cũ quá ngắn cho một bộ hồ sơ làm
+# dở qua cuối tuần.
+FILL_KEEP_DAYS = 7
+FILL_KEEP_HOURS = FILL_KEEP_DAYS * 24
+# Tên file ghi chủ sở hữu trong thư mục token. Không nằm trong
+# FILL_EXTENSIONS nên find_fill_file không nhầm nó là kết quả.
+CHU_FILE = "_chu.json"
 FILL_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 # Đuôi file kết quả được phép tải về: .docx từng file, .zip gói cả bộ (bộ mẫu
 # 30-100 file mà bấm từng nút Tải là không ai làm nổi — 15/09/2026).
@@ -350,18 +357,43 @@ def cleanup_old_fills(now: float | None = None):
             continue
 
 
-def save_filled(doc, filename: str) -> tuple[str, Path]:
+def _ghi_chu_so_huu(out_dir: Path, user_id):
+    """Ghi CHỦ của file tạm. File do một người tạo ra từ hồ sơ khách của họ —
+    người khác trong công ty không có việc gì phải mở được (18/09/2026)."""
+    if user_id is None:
+        return
+    try:
+        (out_dir / CHU_FILE).write_text(
+            json.dumps({"user_id": int(user_id), "luc": time.time()}),
+            encoding="utf-8")
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def chu_so_huu(token: str):
+    """id người tạo file, hoặc None nếu không ghi nhận được (file cũ)."""
+    if not FILL_TOKEN_RE.match(token or ""):
+        return None
+    try:
+        data = json.loads((fills_dir() / token / CHU_FILE).read_text(encoding="utf-8"))
+        return int(data.get("user_id"))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def save_filled(doc, filename: str, user_id=None) -> tuple[str, Path]:
     from app.drafting import safe_export_name
     token = uuid.uuid4().hex
     out_dir = fills_dir() / token
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / safe_export_name(filename, "docx")
     doc.save(str(out))
+    _ghi_chu_so_huu(out_dir, user_id)
     return token, out
 
 
 def save_filled_bytes(payload: bytes, filename: str,
-                      extension: str = "docx") -> tuple[str, Path]:
+                      extension: str = "docx", user_id=None) -> tuple[str, Path]:
     """Như save_filled nhưng nhận sẵn bytes — cho file soạn mới bằng
     drafting.render_docx (luồng tạo bộ file) và gói .zip cả bộ."""
     from app.drafting import safe_export_name
@@ -372,6 +404,7 @@ def save_filled_bytes(payload: bytes, filename: str,
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / safe_export_name(filename, extension)
     out.write_bytes(payload)
+    _ghi_chu_so_huu(out_dir, user_id)
     return token, out
 
 
@@ -554,7 +587,7 @@ def handle(question, template_doc_id, *, user_id, dept_ids=None, is_banqt=False,
     not_found = [(old, new) for old, new in replacements if counts.get(old, 0) == 0]
 
     cleanup_old_fills()
-    token, out_path = save_filled(doc, f"{title} - da dien")
+    token, out_path = save_filled(doc, f"{title} - da dien", user_id=user_id)
 
     # ---- Câu trả lời: bảng đối chiếu để luật sư kiểm tra ----
     lines = [f"Đã tạo file từ mẫu **{title}** (giữ nguyên định dạng gốc)."]

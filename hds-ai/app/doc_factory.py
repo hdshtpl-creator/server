@@ -602,7 +602,7 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
     # trusted_text. Bù lại:
     # (1) mọi thay thế vẫn qua bộ lọc cấu trúc của sanitize_replacements;
     # (2) câu trả lời liệt kê từng chỗ đã thay + mục "TỰ QUYẾT ĐỊNH" bắt buộc;
-    # (3) file là hàng tạm 24 giờ, không vào kho tri thức.
+    # (3) file là hàng tạm 7 ngày, của riêng người tạo, không vào kho tri thức.
     results = []      # (ten_file, token, out_path, mo_ta, warnings, details)
     total = len(plan_files)
     party_note = (f"YÊU CẦU CHUNG: {question.strip()}\n"
@@ -694,7 +694,8 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
                 extra_note = str(payload.get("ghi_chu") or "").strip()
                 if extra_note:
                     warnings.append(extra_note)
-                token, out_path = template_fill.save_filled(doc, ten_file)
+                token, out_path = template_fill.save_filled(doc, ten_file,
+                                                            user_id=user_id)
                 mo_ta = f"điền khuôn ({changed} chỗ thay)"
             else:
                 # Soạn mới bằng Markdown → .docx
@@ -707,7 +708,8 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
                     raise ValueError("model trả nội dung rỗng")
                 n_holes = md.count("[CẦN BỔ SUNG")
                 payload_bytes = render_docx(md, ten_file, [])
-                token, out_path = template_fill.save_filled_bytes(payload_bytes, ten_file)
+                token, out_path = template_fill.save_filled_bytes(
+                    payload_bytes, ten_file, user_id=user_id)
                 mo_ta = ("soạn mới"
                          + (f", {n_holes} chỗ [CẦN BỔ SUNG]" if n_holes else ""))
         except Exception as exc:  # noqa: BLE001 — một file hỏng không huỷ cả bộ
@@ -730,7 +732,7 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
             ten_goi = (bo["ten"] if bo is not None else "bo-file") + " - da dien"
             zip_bytes = bundle_zip([(p.name, p) for _t, _tok, p, _m, _w, _d in made])
             zip_token, zip_path = template_fill.save_filled_bytes(
-                zip_bytes, ten_goi, extension="zip")
+                zip_bytes, ten_goi, extension="zip", user_id=user_id)
             zip_evidence = {"kind": "system",
                             "title": f"Tải cả bộ ({len(made)} file)",
                             "source_locator": f"template_fill#{zip_token}",
@@ -789,7 +791,7 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
                  "file" + (" (hoặc tải cả bộ .zip)" if zip_evidence else "")
                  + ". Văn bản sẽ gửi ra ngoài — vui lòng RÀ TOÀN VĂN từng "
                  "file (tên bên, con số, ngày tháng, điều khoản) trước khi dùng; "
-                 "file tự xoá sau 24 giờ.")
+                 "file là của riêng bạn và tự xoá sau 7 ngày.")
 
     evidence = [{
         "kind": "system",

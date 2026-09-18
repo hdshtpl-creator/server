@@ -92,7 +92,19 @@ _KIND_TU_DO = {
     "don khoi kien", "don khang cao", "don yeu cau", "don de nghi", "don phan doi",
     "don khieu nai", "cong van", "thong bao", "ban tu khai", "ban luan cu",
     "ban bao ve", "ban y kien", "y kien phap ly",
+    # 18/09/2026 (kiểm thử vai thực tập sinh): "Soạn hợp đồng dịch vụ tư vấn
+    # pháp lý GIỮA Công ty Luật HDS VÀ Công ty X, phí 120 triệu…" không có vế
+    # "cho <tên>" nên rơi về tra cứu và bot chỉ in hợp đồng ra khung chat —
+    # không thành bản nháp để sửa/duyệt/xuất Word. Hợp đồng (trừ HĐLĐ — vẫn
+    # phải "cho <tên>" để bám hồ sơ nhân sự) soạn tự do được khi câu có hai
+    # bên "giữa … và …" hoặc con số cụ thể — xem _CAN_CHI_TIET_HOP_DONG.
+    "hop dong dich vu", "hop dong",
 }
+# Với hợp đồng, lệnh soạn tự do phải nêu HAI BÊN hoặc CON SỐ cụ thể — không thì
+# "soạn hợp đồng dịch vụ" trần trụi vẫn là câu tra cứu như cũ.
+_CAN_CHI_TIET_HOP_DONG = re.compile(
+    r"\bgiua\b.+\bva\b|\d+([.,]\d+)?\s*(trieu|ty|nghin|dong|%)|\bmst\b|ma so thue|"
+    r"\bben a\b|\bben b\b")
 # "soạn đơn kháng cáo bản án sơ thẩm số …" / "hãy viết công văn gửi Sở …"
 RE_DRAFT_TU_DO = re.compile(
     r"^\s*(?:hay\s+|nho\s+|giup toi\s+|giup\s+)?(?:tao|soan thao|soan|lam|viet|du thao)\s+"
@@ -108,7 +120,40 @@ _RE_HOI_CACH_SOAN = re.compile(
 # Khung mục bắt buộc theo thể thức thông dụng — dùng làm KHUNG TÀI LIỆU khi kho
 # chưa có mẫu đúng loại, và luôn liệt kê vào chỉ dẫn để model không bỏ mục
 # (phản hồi Huế 29/08: "chưa xác định được loại văn bản, mục đích, bố cục").
+_KHUNG_HOP_DONG = """# CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM
+## Độc lập - Tự do - Hạnh phúc
+# HỢP ĐỒNG [CẦN BỔ SUNG: tên loại hợp đồng]
+Số: [CẦN BỔ SUNG: số hợp đồng]
+[CẦN BỔ SUNG: địa danh], ngày … tháng … năm 2026
+## Căn cứ
+- Bộ luật Dân sự số 91/2015/QH13; [CẦN BỔ SUNG: luật chuyên ngành áp dụng]
+- Nhu cầu và khả năng của các bên
+## Các bên ký kết
+**Bên A:** [CẦN BỔ SUNG: tên, mã số doanh nghiệp/CCCD, địa chỉ, người đại diện, chức vụ]
+**Bên B:** [CẦN BỔ SUNG: tên, mã số doanh nghiệp/CCCD, địa chỉ, người đại diện, chức vụ]
+## Điều 1. Đối tượng và phạm vi
+## Điều 2. Giá trị hợp đồng và phương thức thanh toán
+## Điều 3. Thời hạn và tiến độ thực hiện
+## Điều 4. Quyền và nghĩa vụ của Bên A
+## Điều 5. Quyền và nghĩa vụ của Bên B
+## Điều 6. Nghiệm thu / bàn giao
+## Điều 7. Bảo mật thông tin
+## Điều 8. Phạt vi phạm và bồi thường thiệt hại
+(phạt vi phạm giữa thương nhân không quá 8% giá trị phần nghĩa vụ bị vi phạm — Điều 301 Luật Thương mại 2005)
+## Điều 9. Bất khả kháng
+## Điều 10. Chấm dứt hợp đồng
+(quyền chấm dứt cân bằng cho cả hai bên, có thời hạn báo trước)
+## Điều 11. Giải quyết tranh chấp
+(thương lượng → hoà giải → Toà án có thẩm quyền / Trọng tài — ghi rõ)
+## Điều 12. Hiệu lực và điều khoản chung
+## Chữ ký các bên
+**ĐẠI DIỆN BÊN A** — **ĐẠI DIỆN BÊN B**
+(ký, ghi rõ họ tên, đóng dấu)
+"""
+
 _KHUNG_VAN_BAN = {
+    "hop dong": _KHUNG_HOP_DONG,
+    "hop dong dich vu": _KHUNG_HOP_DONG,
     "don khoi kien": """# CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM
 ## Độc lập - Tự do - Hạnh phúc
 [CẦN BỔ SUNG: địa danh], ngày … tháng … năm 2026
@@ -304,6 +349,8 @@ def _detect_tu_do(question: str, folded: str):
     if _RE_HOI_CACH_SOAN.search(phan_sau) or folded.rstrip().endswith("?"):
         return None
     kind_key = m.group(1)
+    if kind_key.startswith("hop dong") and not _CAN_CHI_TIET_HOP_DONG.search(folded):
+        return None
     kind_label = dict(_KINDS)[kind_key]
     boi_canh = (question or "").strip()
     return {"kind": kind_key, "kind_label": kind_label,

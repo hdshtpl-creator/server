@@ -404,6 +404,29 @@ export interface BoMauDienResult {
   ghi_chu_ai: string;
 }
 
+/** Kết quả dựng bộ hồ sơ khách mới theo bộ hồ sơ khách cũ
+ *  (POST /ho-so/theo-ban-cu) — không cần mã chỗ trống. */
+export interface HoSoCuResult {
+  files: Array<{
+    ten_file: string;
+    ten_ket_qua: string | null;
+    token: string | null;
+    so_thay: number;
+    da_thay: Array<{ cu: string; moi: string; so_cho: number }>;
+    khong_thay: Array<{ cu: string; ly_do: string }>;
+    ghi_chu: string;
+    loi: string | null;
+  }>;
+  zip_token: string | null;
+  so_file_cu: number;
+  /** Trường bóc được bằng quy tắc từ hồ sơ khách mới (đối chiếu được). */
+  truong_doc_duoc: Array<{ khoa: string; nhan: string; gia_tri: string }>;
+  /** File không thay được chỗ nào — vẫn là hồ sơ khách cũ. */
+  chua_thay_duoc: string[];
+  loi_tai_len?: Array<{ ten_file: string; loi: string }>;
+  canh_bao: string[];
+}
+
 export interface BoMauUploadResult {
   ok: boolean;
   ket_qua: Array<{
@@ -813,6 +836,30 @@ export interface KhoQuetKetThuc {
   log_tail: string[];
 }
 
+/** Admin xem từng người dùng làm gì và giữ bao nhiêu dung lượng
+ *  (GET /users/su-dung). Chỉ SỐ ĐẾM — không có nội dung hội thoại/bản nháp. */
+export interface SuDungNguoiDung {
+  items: Array<{
+    id: number;
+    full_name: string;
+    email: string;
+    role: string;
+    active: boolean;
+    hoi_thoai: number;
+    tin_nhan: number;
+    ban_nhap: number;
+    tai_lieu_da_nap: number;
+    /** File đã tạo còn trong hạn giữ. */
+    file_dang_giu: number;
+    dung_luong: number;
+    hoat_dong_cuoi: string | null;
+  }>;
+  /** File tạm sinh trước khi hệ thống ghi chủ sở hữu. */
+  khong_ro_chu: { so_file: number; bytes: number };
+  giu_ngay: number;
+  tong_dung_luong: number;
+}
+
 /** Nhịp học tài liệu cho thẻ theo dõi trên Tổng quan (GET /kho/tien-do). */
 export interface TienDoHoc {
   quet: KhoQuetTrangThai;
@@ -1107,6 +1154,8 @@ export interface RaSoatMuc {
   ma: string;
   ten: string;
   trang_thai: 'dat' | 'canh_bao' | 'thieu' | string;
+  /** true = máy chỉ kiểm SỰ CÓ MẶT của điều khoản, chưa đánh giá nội dung. */
+  chi_co_mat?: boolean;
   dieu_khoan?: string | null;
   trich?: string | null;
   giai_thich?: string;

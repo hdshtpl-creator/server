@@ -118,7 +118,7 @@ def _nguong_phat_va_lai():
          "goi_y": "Hạ mức phạt về tối đa 8% giá trị phần nghĩa vụ bị vi phạm, hoặc tách "
                   "riêng phạt và bồi thường thiệt hại."},
         {"ma": "lai_cham_nam", "ten": "Lãi chậm thanh toán (theo năm)",
-         "regex": r"(?:lai|lai suat)[^.\n]{0,40}?cham[^.\n]{0,60}?"
+         "regex": r"(?:(?:lai|lai suat)[^.\n]{0,40}?cham|cham[^.\n]{0,40}?lai)[^.\n]{0,60}?"
                   r"(\d{1,3}(?:[.,]\d+)?)\s*%\s*(?:/|moi|mot|tren|trong mot)?\s*nam",
          "kieu": "max", "gia_tri": 20, "don_vi": "%/năm",
          "can_cu": "Điều 357, 468 Bộ luật Dân sự 2015; Điều 306 Luật Thương mại 2005",
@@ -127,7 +127,7 @@ def _nguong_phat_va_lai():
          "goi_y": "Đưa lãi chậm thanh toán về ≤ 20%/năm hoặc theo lãi suất nợ quá hạn "
                   "trung bình trên thị trường (Điều 306 LTM 2005)."},
         {"ma": "lai_cham_thang", "ten": "Lãi chậm thanh toán (theo tháng)",
-         "regex": r"(?:lai|lai suat)[^.\n]{0,40}?cham[^.\n]{0,60}?"
+         "regex": r"(?:(?:lai|lai suat)[^.\n]{0,40}?cham|cham[^.\n]{0,40}?lai)[^.\n]{0,60}?"
                   r"(\d{1,2}(?:[.,]\d+)?)\s*%\s*(?:/|moi|mot|tren|trong mot)\s*thang",
          "kieu": "max", "gia_tri": 1.67, "don_vi": "%/tháng",
          "can_cu": "Điều 357, 468 Bộ luật Dân sự 2015",
@@ -166,6 +166,46 @@ _QUYEN_NGHIA_VU = _dk("quyen_nghia_vu", "Quyền và nghĩa vụ của các bên
                       "Điều 398 Bộ luật Dân sự 2015",
                       "Tách riêng quyền và nghĩa vụ của từng bên thành điều khoản "
                       "để dễ đối chiếu khi có vi phạm.")
+# Dấu hiệu điều khoản MỘT CHIỀU / bất lợi cho một bên — CÓ mới là rủi ro. Máy
+# chỉ nhận diện theo cụm chữ, kết luận cuối vẫn là của luật sư; nhưng không có
+# nhóm này thì "Bảo mật: bên B được dùng thông tin bên A không cần chấp thuận"
+# được chấm ĐẠT chỉ vì có chữ "bảo mật" (kiểm thử 18/09/2026).
+_MOT_CHIEU_CHAM_DUT = _dk(
+    "mot_chieu_cham_dut", "Quyền chấm dứt một chiều",
+    [r"khong (duoc|co quyen) (don phuong )?cham dut[^.\n]{0,60}(trong )?moi truong hop",
+     r"cham dut[^.\n]{0,60}(bat ky|bat cu) (luc|thoi diem) nao[^.\n]{0,60}khong can (bao|thong bao) truoc",
+     r"khong can (bao|thong bao) truoc[^.\n]{0,40}cham dut"],
+    False, "Điều 3 (bình đẳng, thiện chí), Điều 428 Bộ luật Dân sự 2015",
+    "Cân bằng quyền chấm dứt: cả hai bên đều được đơn phương chấm dứt khi bên kia vi "
+    "phạm nghiêm trọng, có thời hạn báo trước và cách xử lý phần đã thực hiện.",
+    nguoc=True,
+    giai_thich_co="Điều khoản chấm dứt chỉ trói MỘT bên (bên kia chấm dứt lúc nào cũng "
+                  "được / bên này không được chấm dứt trong mọi trường hợp) — bất lợi "
+                  "rõ cho bên bị trói, dễ bị coi là trái nguyên tắc bình đẳng, thiện chí.")
+_DUNG_THONG_TIN_KHONG_CHAP_THUAN = _dk(
+    "dung_thong_tin_khong_chap_thuan", "Dùng / tiết lộ thông tin bên kia không cần chấp thuận",
+    [r"(su dung|dung|cong bo|tiet lo|chia se|khai thac)[^.\n]{0,80}thong tin[^.\n]{0,80}"
+     r"(khong can|ma khong can|khong phai)[^.\n]{0,20}(su )?(chap thuan|dong y|xin phep)"],
+    False, "Điều 38 Bộ luật Dân sự 2015; Luật Bảo vệ dữ liệu cá nhân; Điều 517 BLDS 2015",
+    "Bỏ quyền tự ý dùng/tiết lộ thông tin; quy định rõ mục đích, phạm vi, và phải có "
+    "chấp thuận bằng văn bản của bên có thông tin.",
+    nguoc=True,
+    giai_thich_co="Cho phép một bên dùng/tiết lộ thông tin của bên kia mà KHÔNG cần "
+                  "chấp thuận — ngược với mục đích của điều khoản bảo mật và có thể vi "
+                  "phạm quy định về dữ liệu cá nhân, bí mật kinh doanh.")
+_HIEU_LUC_KHONG_CHU_KY = _dk(
+    "hieu_luc_khong_chu_ky", "Hiệu lực không cần chữ ký người đại diện",
+    [r"(co )?hieu luc[^.\n]{0,60}khong can (co )?chu ky",
+     r"khong can (co )?chu ky[^.\n]{0,60}(nguoi dai dien|dai dien theo phap luat)"],
+    False, "Điều 117, 401 Bộ luật Dân sự 2015; Điều 12 Luật Doanh nghiệp 2020",
+    "Hợp đồng chỉ có hiệu lực khi được người có thẩm quyền (người đại diện theo pháp "
+    "luật hoặc người được uỷ quyền hợp lệ) ký; bỏ câu này và bổ sung uỷ quyền nếu "
+    "người ký không phải đại diện theo pháp luật.",
+    nguoc=True,
+    giai_thich_co="Tuyên bố hợp đồng có hiệu lực dù không có chữ ký của người đại diện "
+                  "theo pháp luật — dễ dẫn tới hợp đồng vô hiệu do người ký không có "
+                  "thẩm quyền.")
+
 _CHAM_DUT = _dk("cham_dut", "Chấm dứt / đơn phương chấm dứt hợp đồng",
                 [r"cham dut", r"huy bo (hop dong)?|huy hop dong", r"don phuong"], False,
                 "Điều 422–428 Bộ luật Dân sự 2015",
@@ -341,6 +381,7 @@ LOAI_HOP_DONG["hop_dong_dich_vu"] = {
             "Thêm nghĩa vụ giữ bí mật thông tin biết được trong quá trình thực hiện "
             "dịch vụ."),
         _CHAM_DUT, _PHAT_BOI_THUONG, _BAT_KHA_KHANG, _TRANH_CHAP,
+        _MOT_CHIEU_CHAM_DUT, _DUNG_THONG_TIN_KHONG_CHAP_THUAN, _HIEU_LUC_KHONG_CHU_KY,
     ],
     "nguong": _nguong_phat_va_lai(),
 }
@@ -918,22 +959,29 @@ def _kiem_nguong(ng: dict, text: str, fold: str, vung) -> dict | None:
 def _muc_dieu_khoan(dk: dict, hit) -> dict:
     ten = dk["ten"]
     if dk.get("nguoc"):
-        # Điều khoản mà CÓ mới là rủi ro (hạn chế bất hợp lý — Điều 144 SHTT).
+        # Điều khoản mà CÓ mới là rủi ro (hạn chế bất hợp lý — Điều 144 SHTT,
+        # hoặc điều khoản một chiều). Lời giải thích riêng nếu quy tắc có.
         if hit:
+            giai_thich = dk.get("giai_thich_co") or (
+                f"Phát hiện nội dung có dấu hiệu '{ten.lower()}' tại {hit[0]} — loại "
+                f"điều khoản này mặc nhiên vô hiệu theo {dk['can_cu']}.")
             return {"ma": dk["ma"], "ten": ten, "trang_thai": "canh_bao",
                     "dieu_khoan": hit[0], "trich": hit[1],
-                    "giai_thich": f"Phát hiện nội dung có dấu hiệu '{ten.lower()}' tại "
-                                  f"{hit[0]} — loại điều khoản này mặc nhiên vô hiệu theo "
-                                  f"{dk['can_cu']}.",
+                    "giai_thich": giai_thich,
                     "de_xuat": dk["goi_y"], "can_cu": dk["can_cu"]}
         return {"ma": dk["ma"], "ten": ten, "trang_thai": "dat", "dieu_khoan": None,
                 "trich": None,
                 "giai_thich": f"Không thấy nội dung thuộc nhóm '{ten.lower()}'.",
                 "de_xuat": "", "can_cu": dk["can_cu"]}
     if hit:
+        # CHỈ KIỂM SỰ CÓ MẶT. Nói thẳng ra — kiểm thử 18/09/2026: "Bảo mật —
+        # ĐẠT" cho một điều khoản bảo mật cho phép bên kia dùng thông tin
+        # không cần chấp thuận, người soát tưởng máy đã đọc và duyệt nội dung.
         return {"ma": dk["ma"], "ten": ten, "trang_thai": "dat", "dieu_khoan": hit[0],
-                "trich": hit[1],
-                "giai_thich": f"Có điều khoản về {ten.lower()} tại {hit[0]}.",
+                "trich": hit[1], "chi_co_mat": True,
+                "giai_thich": f"Có điều khoản về {ten.lower()} tại {hit[0]} — máy mới "
+                              "kiểm là CÓ, chưa đánh giá nội dung có lợi hay bất lợi; "
+                              "đọc phần trích và phần rà soát bằng AI để kết luận.",
                 "de_xuat": "", "can_cu": dk["can_cu"]}
     if dk["bat_buoc"]:
         return {"ma": dk["ma"], "ten": ten, "trang_thai": "thieu", "dieu_khoan": None,
@@ -951,8 +999,9 @@ def _muc_dieu_khoan(dk: dict, hit) -> dict:
 def _muc_chung(chung: dict, hit) -> dict:
     if hit:
         return {"ma": chung["ma"], "ten": chung["ten"], "trang_thai": "dat",
-                "dieu_khoan": hit[0], "trich": hit[1],
-                "giai_thich": f"Có {chung['ten'].lower()} tại {hit[0]}.",
+                "dieu_khoan": hit[0], "trich": hit[1], "chi_co_mat": True,
+                "giai_thich": f"Có {chung['ten'].lower()} tại {hit[0]} — máy mới kiểm "
+                              "là CÓ, chưa đánh giá nội dung.",
                 "de_xuat": "", "can_cu": chung["can_cu"]}
     return {"ma": chung["ma"], "ten": chung["ten"], "trang_thai": "canh_bao",
             "dieu_khoan": None, "trich": None, "giai_thich": chung["giai_thich"],
