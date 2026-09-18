@@ -24,18 +24,37 @@ Ba việc, theo thứ tự:
    (id, trạng thái duyệt KHÔNG đổi) — chỉ DELETE/INSERT chunks, đúng khuôn
    PUT /review/{id}/content.
 
+4. **--sua-nhan** (nhanh, KHÔNG embed): chỉ sửa NHÃN Chương/Mục/Điều ở đầu
+   mỗi đoạn và cột ``section_title``. Dùng khi bộ cắt đổi cách tính nhãn
+   (18/09/2026: Mục của Chương trước bị dán sang Chương sau — Điều 111–113
+   Luật Doanh nghiệp mang nhãn "Mục 2. Công ty TNHH một thành viên").
+   Cắt lại trong bộ nhớ, **đối chiếu từng đoạn**: chỉ ghi khi số đoạn và
+   THÂN đoạn khớp y nguyên, tức chắc chắn chỉ có nhãn đổi. Vector giữ
+   nguyên (nó được tính từ nhãn cũ, nhưng khác biệt chỉ nằm ở một dòng nhãn
+   — đổi lại toàn kho tốn hàng chục giờ GPU mà gần như không đổi thứ hạng).
+   Ngăn "1. VĂN BẢN PHÁP LUẬT" hiện có 10.221 văn bản / 390.210 đoạn: học
+   lại ≈ 30 giờ, sửa nhãn ≈ vài phút.
+
 Chạy:  python -m app.backfill_van_ban            # metadata + quan hệ
        python -m app.backfill_van_ban --dry-run  # chỉ liệt kê, không ghi
        python -m app.backfill_van_ban --lam-lai-doan   # thêm bước 3
        python -m app.backfill_van_ban --doc-id 123 --tat-ca --lam-lai-doan
+       python -m app.backfill_van_ban --sua-nhan --dry-run   # đếm đoạn sai nhãn
+       python -m app.backfill_van_ban --sua-nhan             # sửa nhãn thật
                                           # một tài liệu: bóc lại danh tính + cắt lại
                                           # đoạn dù đã có khuôn mới (sửa nhãn sai)
 """
+import contextlib
 import json
 import sys
 from pathlib import Path
 
 from app import db, van_ban
+
+# Khoá CHUNG với bộ quét kho (deploy/hoc-tu-thu-muc.sh --cron dùng flock trên
+# đúng tệp này). Hai bộ cùng ghi bảng chunks là hỏng dữ liệu — bài học lô 26k
+# bản án: "hai learner không chạy song song".
+KHOA_QUET = "/tmp/hds-ai-quet-kho.lock"
 
 
 def _doc_text(doc_id, source_path, da_sua_tay=False):
@@ -203,12 +222,162 @@ def buoc_lam_lai_doan(dry_run=False, doc_id=None, ep=False):
     print(f"\nXong: {n_ok}/{len(rows)} văn bản đã có đoạn khuôn mới.")
 
 
+def tach_nhan(content: str):
+    """(dòng nhãn, thân đoạn). Đoạn không mở đầu bằng "[…]" thì nhãn rỗng."""
+    if content.startswith("["):
+        dong, xuong_dong, than = content.partition("\n")
+        if xuong_dong and dong.rstrip().endswith("]"):
+            return dong, than
+    return "", content
+
+
+def doi_chieu_nhan(pieces, rows):
+    """So đoạn CẮT LẠI với đoạn ĐÃ HỌC, trả (danh sách sửa, lý do bỏ qua).
+
+    Thuần, không CSDL — để test được. `rows`: [(chunk_id, chunk_index,
+    content, section_title)] đã sắp theo chunk_index.
+
+    Chỉ chấp nhận khi số đoạn bằng nhau VÀ thân từng đoạn giống hệt: lúc đó
+    khác biệt duy nhất là nhãn, ghi đè an toàn. Lệch một chút là bộ cắt đã
+    đổi cách chia — phải học lại đàng hoàng, không vá nhãn.
+    """
+    if len(pieces) != len(rows):
+        return [], f"lệch số đoạn (kho {len(rows)} ≠ cắt lại {len(pieces)})"
+    sua = []
+    for piece, (cid, _idx, content, section_title) in zip(pieces, rows):
+        nhan_cu, than_cu = tach_nhan(content or "")
+        nhan_moi, than_moi = tach_nhan(piece.content)
+        if than_cu != than_moi:
+            return [], "thân đoạn đã khác — cần học lại, không vá nhãn"
+        if nhan_cu != nhan_moi or (section_title or "") != (piece.section_title or ""):
+            sua.append((cid, piece.content, piece.section_title))
+    return sua, ""
+
+
+@contextlib.contextmanager
+def _giu_khoa_quet():
+    """Giữ khoá của bộ quét kho trong suốt lượt backfill (Linux).
+
+    Máy dev Windows không có cron quét — không có fcntl thì chạy thẳng.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        yield True
+        return
+    fh = open(KHOA_QUET, "w")
+    try:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        yield True
+    finally:
+        fh.close()
+
+
+def buoc_sua_nhan(dry_run=False, doc_id=None):
+    """Bước 4: sửa nhãn Chương/Mục/Điều, KHÔNG embed lại."""
+    from app.ingest import clean, extract_text_with_metadata
+    from app.ingest import chunk_law_structured
+
+    sql = """SELECT d.id, d.title, d.source_path
+               FROM documents d
+              WHERE d.doc_type='law' AND coalesce(d.active,true)
+                AND d.source_path IS NOT NULL
+                AND coalesce(d.extraction_status,'ready') <> 'edited'"""
+    params = []
+    if doc_id:
+        sql += " AND d.id=%s"
+        params.append(doc_id)
+    sql += " ORDER BY d.id"
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows_doc = cur.fetchall()
+    if not rows_doc:
+        print("Không có văn bản luật nào để soát nhãn.")
+        return
+    print(f">> Soát nhãn {len(rows_doc)} văn bản luật "
+          f"({'chỉ xem' if dry_run else 'sẽ ghi'})…")
+
+    n_doc_sua = n_doan_sua = n_bo_qua = n_mat_file = 0
+    ly_do = {}
+    for i, (did, title, spath) in enumerate(rows_doc, 1):
+        path = Path(spath)
+        if not path.exists():
+            n_mat_file += 1
+            continue
+        try:
+            text = clean(extract_text_with_metadata(path).text)
+            pieces = chunk_law_structured(text, ten_file=path.name)
+        except Exception as e:  # noqa: BLE001 — một file hỏng không dừng cả lượt
+            n_bo_qua += 1
+            ly_do[f"đọc lỗi: {type(e).__name__}"] = ly_do.get(
+                f"đọc lỗi: {type(e).__name__}", 0) + 1
+            continue
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT id, chunk_index, content, section_title
+                                 FROM chunks WHERE document_id=%s
+                                ORDER BY chunk_index""", (did,))
+                rows = cur.fetchall()
+            sua, vi_sao = doi_chieu_nhan(pieces, rows)
+            if vi_sao:
+                n_bo_qua += 1
+                ly_do[vi_sao] = ly_do.get(vi_sao, 0) + 1
+                continue
+            if not sua:
+                continue
+            n_doc_sua += 1
+            n_doan_sua += len(sua)
+            print(f"  [{did}] {str(title)[:45]:45s} — {len(sua)} đoạn sai nhãn")
+            if dry_run:
+                continue
+            with conn.cursor() as cur:
+                for cid, content, section_title in sua:
+                    cur.execute("""UPDATE chunks
+                                      SET content=%s, section_title=%s
+                                    WHERE id=%s""", (content, section_title, cid))
+        if i % 500 == 0:
+            print(f"     … đã soát {i}/{len(rows_doc)} văn bản")
+
+    print(f"\n{'Sẽ sửa' if dry_run else 'Đã sửa'}: {n_doan_sua} đoạn của "
+          f"{n_doc_sua} văn bản.")
+    if n_mat_file:
+        print(f"Bỏ qua {n_mat_file} văn bản mất file gốc.")
+    for vi_sao, so in sorted(ly_do.items(), key=lambda x: -x[1]):
+        print(f"Bỏ qua {so} văn bản — {vi_sao}.")
+    if n_bo_qua:
+        print("Những văn bản bỏ qua vì lệch cấu trúc cần học lại đàng hoàng "
+              "(--lam-lai-doan), không vá nhãn được.")
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     dry = "--dry-run" in args
     mot_id = None
     if "--doc-id" in args:
         mot_id = int(args[args.index("--doc-id") + 1])
+    if "--sua-nhan" in args:
+        # Sửa nhãn là việc riêng, KHÔNG kéo theo bước metadata/quan hệ.
+        from app import kho
+        try:
+            dang_quet = kho.trang_thai_quet().get("dang_chay")
+        except Exception:  # noqa: BLE001 — không đọc được trạng thái thì cứ thử khoá
+            dang_quet = False
+        if dang_quet:
+            print("Bộ quét kho ĐANG CHẠY — dừng lại để hai bộ không cùng ghi "
+                  "bảng chunks. Đợi quét xong rồi chạy lại.")
+            sys.exit(1)
+        with _giu_khoa_quet() as co_khoa:
+            if not co_khoa:
+                print("Không lấy được khoá quét kho (lượt quét khác đang giữ). "
+                      "Đợi rồi chạy lại.")
+                sys.exit(1)
+            buoc_sua_nhan(dry_run=dry, doc_id=mot_id)
+        sys.exit(0)
     buoc_metadata(dry_run=dry, doc_id=mot_id, tat_ca="--tat-ca" in args)
     if "--lam-lai-doan" in args:
         buoc_lam_lai_doan(dry_run=dry, doc_id=mot_id, ep=("--ep" in args) or bool(mot_id))

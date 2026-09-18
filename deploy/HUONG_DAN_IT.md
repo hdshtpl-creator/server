@@ -318,6 +318,36 @@ cd hds-ai
 .venv/bin/python -m app.backfill_van_ban --lam-lai-doan
 ```
 
+### Sửa nhãn Chương/Mục của đoạn luật (18/09/2026) — KHÔNG học lại
+
+Khi bộ cắt đổi cách tính nhãn (ví dụ bản 18/09/2026: Mục của Chương trước bị
+dán sang Chương sau, Điều 111–113 Luật Doanh nghiệp mang nhãn *"Mục 2. Công ty
+TNHH một thành viên"*), **đừng học lại cả ngăn**:
+
+```bash
+cd hds-ai
+.venv/bin/python -m app.backfill_van_ban --sua-nhan --dry-run  # đếm đoạn sai nhãn
+.venv/bin/python -m app.backfill_van_ban --sua-nhan            # sửa thật
+```
+
+Bước này cắt lại trong bộ nhớ, đối chiếu **từng đoạn**, chỉ ghi khi số đoạn và
+thân đoạn khớp y nguyên — tức chắc chắn chỉ có nhãn đổi; vector **giữ nguyên**
+nên chạy vài phút thay vì hàng chục giờ. Văn bản nào lệch cấu trúc thì nó bỏ
+qua và nêu lý do: những cái đó mới cần `--lam-lai-doan`.
+
+Nó **tự giữ khoá của bộ quét kho** (`/tmp/hds-ai-quet-kho.lock`) và từ chối
+chạy khi bộ quét đang chạy — hai bộ cùng ghi bảng `chunks` là hỏng dữ liệu.
+Chọn lúc kho đang rảnh: `tail -2 hds-ai/data/quet_kho_lich_su.log` thấy các
+lượt chỉ vài chục giây ("0 mới … 27 giây") nghĩa là không còn tài liệu mới.
+
+> **Đừng dùng `hoc-lai-file.sh` để sửa nhãn.** Script đó **xoá rồi học lại**,
+> không có chế độ chọn theo ngăn (chỉ `--hong`, `--pdf`, `--bo <tên>`, hoặc mã
+> tài liệu), và `--pdf` sẽ ôm luôn hơn 32.000 bản án. Riêng ngăn
+> *1. VĂN BẢN PHÁP LUẬT* hiện có **10.221 văn bản / 390.210 đoạn** — đo trên
+> kho thật 18/09/2026, tốc độ học ≈ 13.000 đoạn/giờ (đã gồm trích xuất + OCR +
+> vector) nên học lại mất **khoảng 30 giờ**, và trong suốt thời gian đó số văn
+> bản đã xoá không tra cứu được.
+
 Backfill **không** đụng trạng thái duyệt (tuyệt đối không "học lại cả kho" để
 điền metadata — PDF sẽ rơi hết về hàng chờ duyệt, bot mất cả kho luật đang
 phục vụ). Máy chỉ tự đánh dấu chiều xấu đi (hết hiệu lực / đã sửa đổi);

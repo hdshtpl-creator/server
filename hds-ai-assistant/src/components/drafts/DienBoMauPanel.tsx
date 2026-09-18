@@ -144,11 +144,18 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
     return m;
   }, [choTrong]);
 
-  const themFile = (ds: FileList | null) => {
-    if (!ds || !ds.length) return;
+  /** Thêm tệp vừa chọn vào danh sách.
+   *
+   *  Nhận MẢNG File chứ không nhận FileList: FileList là vật sống của ô
+   *  input, `input.value = ''` (đặt ngay sau handler để chọn lại đúng tệp đó
+   *  vẫn nổ change) làm rỗng nó, mà React đọc tham số này bên trong updater —
+   *  chạy sau handler. Đó là lỗi "chọn file xong không thấy gì" (18/09/2026).
+   */
+  const themFile = (ds: File[]) => {
+    if (!ds.length) return;
     setFiles((truoc) => {
       const gop = [...truoc];
-      Array.from(ds).forEach((f) => {
+      ds.forEach((f) => {
         if (!gop.some((x) => x.name === f.name && x.size === f.size)) gop.push(f);
       });
       return gop.slice(0, 10);
@@ -355,8 +362,14 @@ export const DienBoMauPanel: React.FC<Props> = ({ bo, onClose }) => {
             accept={DINH_DANG}
             className="sr-only"
             onChange={(e) => {
-              themFile(e.target.files);
+              const chon = Array.from(e.target.files || []);   // chụp TRƯỚC khi reset
               e.target.value = '';
+              if (!chon.length) return;
+              const cu = files.length;
+              themFile(chon);
+              if (cu + chon.length > 10) {
+                showToast('Mỗi lượt tối đa 10 file — các file dư đã bị bỏ.', 'info');
+              }
             }}
           />
           <button

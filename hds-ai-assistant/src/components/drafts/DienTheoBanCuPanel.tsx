@@ -42,11 +42,13 @@ export const DienTheoBanCuPanel: React.FC = () => {
   const cuRef = useRef<HTMLInputElement | null>(null);
   const moiRef = useRef<HTMLInputElement | null>(null);
 
-  const them = (ds: FileList | null, dat: React.Dispatch<React.SetStateAction<File[]>>) => {
-    if (!ds || !ds.length) return;
+  /** Nhận MẢNG File, không nhận FileList — xem chú thích cùng lỗi ở
+   *  DienBoMauPanel: reset ô input làm rỗng FileList trước khi React đọc. */
+  const them = (ds: File[], dat: React.Dispatch<React.SetStateAction<File[]>>) => {
+    if (!ds.length) return;
     dat((truoc) => {
       const gop = [...truoc];
-      Array.from(ds).forEach((f) => {
+      ds.forEach((f) => {
         if (!gop.some((x) => x.name === f.name && x.size === f.size)) gop.push(f);
       });
       return gop.slice(0, 10);
@@ -140,8 +142,9 @@ export const DienTheoBanCuPanel: React.FC = () => {
           accept={accept}
           className="sr-only"
           onChange={(e) => {
-            them(e.target.files, dat);
+            const chon = Array.from(e.target.files || []);   // chụp TRƯỚC khi reset
             e.target.value = '';
+            them(chon, dat);
           }}
         />
         <button
