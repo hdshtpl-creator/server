@@ -178,19 +178,22 @@ systemctl status hds-ai-backend           # phải là active (running)
 curl -s http://localhost:11434/api/tags   # phải liệt kê qwen3 và bge-m3
 ```
 
-Mở web bằng địa chỉ script in ra, đăng nhập `admin@hdslaw.vn` / `admin123` → **đổi mật khẩu ngay**.
+Mở web bằng địa chỉ script in ra, đăng nhập `admin@hdslaw.vn` bằng **mật khẩu tạm script in ở cuối** (ngẫu nhiên, chỉ in một lần). Web bắt đổi mật khẩu ngay trước khi cho vào.
 
-Tài khoản mẫu tạo sẵn (đổi hoặc xoá trước khi dùng thật):
+Từ 22/09/2026 `seed_accounts` **chỉ tạo một tài khoản admin** và **không đụng** tài khoản đã có — chạy lại bao nhiêu lần cũng vô hại. Nhân viên tạo trên web (mục 8). Quên mật khẩu admin duy nhất:
 
-| Email | Mật khẩu | Vai |
-|---|---|---|
-| admin@hdslaw.vn | admin123 | admin |
-| giamdoc@hdslaw.vn | demo123 | ban_qt |
-| truong.dndt@hdslaw.vn | demo123 | truong_bph (Doanh nghiệp - Đầu tư) |
-| cv.tranhtung@hdslaw.vn | demo123 | chuyen_vien (Tranh tụng) |
-| troly@hdslaw.vn | demo123 | tro_ly (Hỗ trợ pháp lý) |
+```bash
+cd /opt/hds-ai/hds-ai && sudo -u hds .venv/bin/python -m app.seed_accounts --reset-admin
+```
 
-> ⚠ **Chạy lại `setup.sh` trên máy đang hoạt động sẽ đặt lại mật khẩu 5 tài khoản này về mặc định** và xoá ma trận `access_rules` rồi seed lại (mất chỉnh tay). Mật khẩu CSDL thì được giữ nguyên.
+Tài khoản mẫu (giamdoc@, truong.dndt@, cv.tranhtung@, troly@ — mật khẩu `demo123`) chỉ được tạo khi chạy `python -m app.seed_accounts --demo` — **không chạy trên máy vận hành thật**. Máy nào đã lỡ tạo trước 22/09 thì rà và khoá:
+
+```bash
+sudo -u hds .venv/bin/python -m app.ra_soat_tai_khoan            # xem trước
+sudo -u hds .venv/bin/python -m app.ra_soat_tai_khoan --thuc-hien  # khoá tài khoản mẫu chưa ai dùng, bắt đổi mật khẩu mặc định
+```
+
+> ⚠ **Chạy lại `setup.sh` trên máy đang hoạt động** vẫn xoá ma trận `access_rules` rồi seed lại (mất chỉnh tay) và ghi đè nginx. Mật khẩu CSDL và mật khẩu tài khoản web thì được giữ nguyên.
 
 ---
 
@@ -763,8 +766,10 @@ gunzip -c /var/backups/hds-ai-tailieu-20260826-101500.sql.gz | docker exec -i hd
 
 | Việc | Cách |
 |---|---|
-| Tạo tài khoản | Form **Thêm người dùng**. Mật khẩu khởi tạo luôn là **`hds12345`** |
-| Gán phòng ban | Tick **Thuộc phòng ban** — **chỉ làm được lúc tạo** |
+| Tạo tài khoản | Form **Thêm người dùng**. Để trống ô mật khẩu → máy chủ sinh **mật khẩu tạm ngẫu nhiên**, hiện **đúng một lần** dưới thẻ tài khoản; chép và gửi riêng cho người đó. Lần đăng nhập đầu web bắt họ đổi (≥ 8 ký tự, có chữ và số) |
+| Sửa họ tên / vai / phòng ban / hồ sơ khách | Nút **Sửa** trên thẻ tài khoản (22/09/2026 — trước đó phải SQL) |
+| Đặt lại mật khẩu cho người quên | Nút **Đặt lại mật khẩu** → mật khẩu tạm mới hiện một lần, người dùng bị bắt đổi ở lần đăng nhập kế |
+| Khoá / mở tài khoản (nghỉ việc, nghi lộ) | Nút **Khoá** / **Mở khoá**. Khoá = chặn đăng nhập + thu khoá API, giữ nguyên dữ liệu và nhật ký. Không tự khoá mình, không khoá admin cuối cùng |
 | Cấp/thu quyền duyệt | Bấm nút **Có quyền duyệt / Không có quyền duyệt** trên thẻ tài khoản |
 | Cấp/thu quyền xem công nợ | Nút **Xem được công nợ / Không xem công nợ** |
 | Cấp/thu khoá API cho khách | Nút **Cấp khoá API / Thu hồi khoá API** (chỉ tài khoản khách) |
@@ -772,18 +777,47 @@ gunzip -c /var/backups/hds-ai-tailieu-20260826-101500.sql.gz | docker exec -i hd
 
 Tài khoản khách (`client_*`) **bắt buộc** gắn với một khách hàng. Bản ghi khách được tạo tự động từ tên thư mục khách trong kho, hoặc bằng SQL.
 
+### 8.1b Tài khoản khách: gắn hồ sơ khách và mở từng chức năng (20/09/2026)
+
+**Quản trị → Người dùng & Phòng ban → Thêm người dùng.** Chọn vai `client_*`
+thì ô **Khách hàng liên kết** trở thành bắt buộc — đó là thứ quyết định tài
+khoản nhìn thấy hồ sơ của ai. Máy chủ từ chối tạo tài khoản khách không gắn
+hồ sơ, và cũng từ chối gắn hồ sơ khách cho tài khoản nội bộ.
+
+**Nhìn tài khoản nào của khách nào ở đâu:**
+
+| Chỗ | Hiện gì |
+|---|---|
+| Danh sách người dùng | Dòng tên khách + mã khách ngay dưới email |
+| Chính người khách khi đăng nhập | Tên hồ sơ khách in ở góc phải trên, thay cho tên vai |
+| Nhật ký hệ thống | Dòng *Khách: …* dưới email người thao tác |
+
+**Ô tick "Chức năng được dùng"** có 5 mục: hỏi đáp, đính kèm tệp, xem và tải
+tài liệu của mình, kiểm tra pháp lý & rà soát rủi ro, soạn tài liệu. Không tick
+gì thì theo mặc định của vai: **khách chỉ hỏi đáp**, nhân viên nội bộ mở hết.
+Tài khoản đã tạo thì bấm thẳng vào các nhãn chức năng trong danh sách để bật
+tắt, không phải tạo lại.
+
+**Hạn mức câu hỏi mỗi tháng** đặt ở cùng biểu mẫu (0 = không giới hạn); danh
+sách hiện *N câu hỏi/tháng · đã dùng M*.
+
+> **Mở chức năng KHÔNG nới quyền dữ liệu.** Bật hết cho một tài khoản khách thì
+> họ vẫn chỉ thấy hồ sơ của chính mình: `rag.can_open_doc` chặn theo mã khách,
+> và khoá dòng RLS chặn ở tầng CSDL. Hai lớp đó độc lập với ô tick.
+
+---
+
 ### 8.2 Chỉ làm được bằng SQL
 
 Mở psql: `docker exec -it hds-postgres psql -U hds -d hdsai`
 
-```sql
--- Khoá / mở tài khoản (không có nút trên web)
-UPDATE users SET active=false WHERE email='nguoi.nghi@hdslaw.vn';
-UPDATE users SET active=true  WHERE email='nguoi.nghi@hdslaw.vn';
+Khoá/mở tài khoản, đổi phòng ban, đặt lại mật khẩu **đã lên web** (mục 8.1) —
+SQL bên dưới chỉ là đường lui khi không vào được web (ví dụ admin duy nhất bị
+khoá nhầm):
 
--- Đổi phòng ban sau khi đã tạo tài khoản
-DELETE FROM user_departments WHERE user_id=7;
-INSERT INTO user_departments (user_id, department_id, is_head) VALUES (7, 2, false);
+```sql
+-- Mở lại tài khoản admin khi không còn admin nào vào được web
+UPDATE users SET active=true WHERE email='admin@hdslaw.vn';
 
 -- Thêm phòng ban mới
 INSERT INTO departments (code, name) VALUES ('m-a', 'Mua bán - Sáp nhập');
@@ -796,14 +830,11 @@ UPDATE access_rules SET can_open=true
  WHERE role_level='tro_ly' AND doc_type='mau_hd';    -- hiệu lực NGAY, không cần restart
 ```
 
-**Đặt lại mật khẩu quên** (không có chức năng trên web):
+**Đặt lại mật khẩu quên**: nút **Đặt lại mật khẩu** trên web. Chỉ khi quên
+mật khẩu của **admin duy nhất** mới cần dòng lệnh:
 
 ```bash
-cd hds-ai
-.venv/bin/python -c "from app import auth; print(auth.hash_password('MatKhauMoi123'))"
-# chép chuỗi hash rồi:
-docker exec -i hds-postgres psql -U hds -d hdsai -c \
-  "UPDATE users SET password_hash='<hash vừa in>' WHERE email='nguoi.quen@hdslaw.vn';"
+cd /opt/hds-ai/hds-ai && sudo -u hds .venv/bin/python -m app.seed_accounts --reset-admin
 ```
 
 ### 8.3 Ma trận quyền mặc định
@@ -1131,7 +1162,7 @@ PUBLIC_RATE_MAX=30                     # câu hỏi/giờ/IP ở kênh công kha
 - [ ] Truy cập SSH máy chủ + quyền sudo
 - [ ] Bản chép `hds-ai/.env` cất nơi an toàn (`credentials/service-account.json`
       chỉ cần nếu còn giữ đường lui về Drive)
-- [ ] Tài khoản admin trên web (đã đổi mật khẩu khỏi `admin123`)
+- [ ] Tài khoản admin trên web (đã đổi khỏi mật khẩu tạm; `python -m app.ra_soat_tai_khoan` không còn dòng nào cần sửa)
 - [ ] Biết thư mục kho nằm ở đâu (`DATA_LIB`) và ai quản trị ổ mạng Samba
 - [ ] Tài khoản quản lý tên miền (bản ghi A)
 - [ ] Biết bản sao lưu nằm ở đâu và **đã thử phục hồi ít nhất một lần**

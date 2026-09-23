@@ -150,6 +150,10 @@ if [ -f "$BACKEND_ENV" ]; then
     c_ok "JWT_SECRET hiện tại đủ mạnh — giữ nguyên."
   fi
   grep -qE '^CORS_ORIGINS=' "$BACKEND_ENV" || printf 'CORS_ORIGINS=\n' >> "$BACKEND_ENV"
+  # Đọc giấy tờ cho web ĐKKD (deploy/DOC_GIAY_TO_DKKD.md) — thêm dòng trống để
+  # IT thấy mà điền, không tự bật.
+  grep -qE '^VISION_MODEL=' "$BACKEND_ENV" || printf '\n# Model nhìn ảnh cho web ĐKKD (ollama pull qwen2.5vl:7b). Xem deploy/DOC_GIAY_TO_DKKD.md\nVISION_MODEL=qwen2.5vl:7b\nVISION_KEEP_ALIVE=0\n' >> "$BACKEND_ENV"
+  grep -qE '^DKKD_ALLOWED_ORIGINS=' "$BACKEND_ENV" || printf 'DKKD_ALLOWED_ORIGINS=\n' >> "$BACKEND_ENV"
 else
   DB_PW="$(gen_hex)"; APP_PW="$(gen_hex)"; JWT="$(gen_jwt)"
   cat > "$BACKEND_ENV" <<EOF
@@ -184,6 +188,14 @@ TOKEN_HOURS=12
 
 # Cùng một máy chủ (nginx proxy /api) nên không cần CORS.
 CORS_ORIGINS=
+
+# Đọc giấy tờ (CCCD/hộ chiếu/ĐKDN) cho web Đăng ký kinh doanh — xem
+# deploy/DOC_GIAY_TO_DKKD.md. Cần GPU + "ollama pull qwen2.5vl:7b".
+# Model chỉ nạp khi dùng (KEEP_ALIVE=0: dỡ khỏi VRAM ngay sau mỗi lượt đọc).
+# Điền origin của web ĐKKD thì endpoint /dkkd/extract mới mở.
+VISION_MODEL=qwen2.5vl:7b
+VISION_KEEP_ALIVE=0
+DKKD_ALLOWED_ORIGINS=
 EOF
   chown "$SERVICE_USER":"$SERVICE_USER" "$BACKEND_ENV"
   chmod 600 "$BACKEND_ENV"
@@ -258,7 +270,7 @@ run_as "cd '$BACKEND_DIR' && .venv/bin/python -m app.seed_departments" >/dev/nul
   || c_warn "seed_departments báo lỗi (có thể đã nạp trước đó) — bỏ qua"
 
 SEED_OUT="$(run_as "cd '$BACKEND_DIR' && .venv/bin/python -m app.seed_accounts" 2>&1 || true)"
-echo "$SEED_OUT" | grep -q hdslaw.vn && c_ok "Đã tạo tài khoản đăng nhập demo" \
+echo "$SEED_OUT" | grep -q hdslaw.vn && c_ok "Đã tạo tài khoản quản trị (mật khẩu tạm in ở cuối)" \
   || c_warn "seed_accounts: $(echo "$SEED_OUT" | tail -1)"
 
 # ---------- 6. systemd cho backend ----------
@@ -398,7 +410,7 @@ echo
 printf '\033[32m════════════════════════════════════════════════════════════\033[0m\n'
 c_ok "HOÀN TẤT. Mở giao diện tại: $URL"
 echo
-echo "  Tài khoản đăng nhập (đổi mật khẩu ngay sau lần đầu):"
+echo "  Tài khoản quản trị (mật khẩu tạm — CHỈ in lần này; web bắt đổi ngay lần đăng nhập đầu):"
 echo "$SEED_OUT" | grep hdslaw.vn | sed 's/^/    /' || echo "    (xem: cd $BACKEND_DIR && .venv/bin/python -m app.seed_accounts)"
 echo
 echo "  Lệnh thường dùng:"

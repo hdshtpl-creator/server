@@ -25,10 +25,12 @@ Phần dành cho IT nằm ở [HUONG_DAN_IT.md](HUONG_DAN_IT.md).
 ## 1. ĐĂNG NHẬP LẦN ĐẦU
 
 1. Mở địa chỉ web công ty cấp (ví dụ `https://app.hdslaw.vn`, hoặc `http://<IP máy chủ>` nếu dùng trong mạng nội bộ).
-2. Nhập **email công ty** và mật khẩu. Tài khoản mới do quản trị tạo có mật khẩu khởi tạo **`hds12345`**.
-3. **Đổi mật khẩu ngay**: bấm tên bạn ở góc phải trên → **Đổi mật khẩu**. Mật khẩu mới tối thiểu 6 ký tự.
+2. Nhập **email công ty** và **mật khẩu tạm** quản trị viên đã gửi riêng cho bạn (mỗi người một mật khẩu khác nhau, không có mật khẩu chung).
+3. Ngay sau khi đăng nhập, hệ thống **bắt bạn đặt mật khẩu mới** trước khi cho làm việc: nhập mật khẩu tạm, rồi mật khẩu mới **tối thiểu 8 ký tự, có cả chữ và số**. Muốn đổi lại sau này: bấm tên bạn ở góc phải trên → **Đổi mật khẩu**.
 
-Quên mật khẩu thì báo quản trị viên — hệ thống **không có** chức năng "quên mật khẩu" tự phục vụ, quản trị phải đặt lại giúp bạn.
+Quên mật khẩu thì báo quản trị viên — hệ thống **không có** chức năng "quên mật khẩu" tự phục vụ. Quản trị bấm **Đặt lại mật khẩu** trên tài khoản của bạn, gửi bạn mật khẩu tạm mới, và bạn lại phải đặt mật khẩu riêng ở lần đăng nhập kế tiếp.
+
+Gõ sai mật khẩu quá 10 lần trong 5 phút thì phải đợi vài phút mới thử lại được.
 
 Phiên đăng nhập kéo dài 12 giờ, sau đó phải đăng nhập lại.
 
@@ -298,7 +300,7 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 | Màn hình | Việc gì |
 |---|---|
 | **Tra cứu tài liệu** | Tìm trong toàn kho; tài liệu ngoài quyền bị che tên. |
-| **Duyệt nhãn tài liệu** | **Hàng chờ quan trọng nhất.** Gán loại + mức truy cập + khách sở hữu rồi **Duyệt và nạp vào AI**. Có nút **Xem & sửa nội dung trích xuất** để sửa tay chỗ OCR đọc sai *trước khi* duyệt. |
+| **Duyệt nhãn tài liệu** | **Hàng chờ quan trọng nhất.** Mỗi thẻ ghi rõ **tệp nằm ở đâu trong kho** (ngăn / thư mục / tên tệp), cỡ tệp, số đoạn, ngày nạp. Gán loại + mức truy cập + khách sở hữu rồi **Duyệt và nạp vào AI**. Có **bộ lọc** (ngăn, loại, nguồn, trạng thái đọc, thứ tự), **Duyệt nhanh** cả lô đã chọn, và nút **Đối chiếu bản gốc ↔ AI đọc** mở khung hai cột để soát/sửa nội dung *trước khi* duyệt. |
 | **Kho tài liệu đã học** | Toàn bộ tài liệu đang dùng + thẻ **Quét kho tài liệu trên máy chủ** (quét lần cuối, mới học / cập nhật / **chưa học được**). |
 | **Mẫu phương pháp** | Dạy AI quy trình xử lý chuẩn theo loại vụ việc. |
 | **Bộ mẫu hồ sơ** | Nhóm các file Word (.docx) mẫu đi cùng nhau. Tạo bộ → tải file mẫu vào bộ (đặt chỗ trống dạng `{{TÊN_Ô}}` trong Word để điền chính xác) → nút **Điền bộ** để điền cả bộ từ một tờ khai (mục 5.1). Bộ nằm NGOÀI kho tri thức: không học, không duyệt nhãn. |
@@ -306,6 +308,20 @@ Hiện với admin, Ban QT và người được cấp **quyền duyệt**. Chia
 > **Duyệt nhãn là việc bảo mật, không phải thủ tục.** Gán nhầm khách sở hữu = lộ dữ liệu chéo giữa hai khách hàng. Với hồ sơ khách, kiểm tra kỹ trước khi bấm duyệt.
 >
 > **PDF luôn phải người duyệt**, kể cả khi hệ thống đang bật tự duyệt — vì OCR sai một con số là sai một căn cứ pháp lý.
+
+**Duyệt nhãn — cách làm nhanh mà vẫn an toàn (20/09/2026):**
+
+1. **Lọc ra đúng lô của mình**: chọn *ngăn* trong kho (ví dụ `9. HỒ SƠ KHÁCH HÀNG`), hoặc gõ tên
+   tài liệu / một đoạn đường dẫn vào ô tìm. Mỗi mục lọc có sẵn số lượng trong ngoặc.
+2. **Chọn thứ tự**: *Cần soát trước* (đọc lỗi nhiều lên đầu) khi muốn bắt lỗi OCR;
+   *Dễ duyệt trước* (đọc sạch lên đầu) khi muốn làm vơi hàng chờ.
+3. **Cái đã rõ**: tích chọn nhiều thẻ rồi bấm **Duyệt nhanh N tài liệu đã chọn**. Tài liệu để mức
+   *Hồ sơ khách hàng* mà chưa chọn khách sở hữu **bị giữ lại**, kèm lý do ngay trên thẻ — không
+   bao giờ bị duyệt lẫn trong lô.
+4. **Cái đáng ngờ** (thẻ đỏ *Đọc lỗi %* hoặc *Học không ổn*): bấm **Đối chiếu bản gốc ↔ AI đọc**.
+   Bên trái là trang gốc, bên phải là đúng thứ bot đọc được; sửa tay chỗ sai, chọn lý do sửa, **Lưu**,
+   rồi bấm **Duyệt** ngay trong khung đó. Nút **Theo đoạn RAG** cho thấy tài liệu bị cắt thành từng
+   đoạn ra sao và đoạn nào toàn chữ rác.
 
 ---
 
