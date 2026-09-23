@@ -55,11 +55,13 @@ bash scripts/10_init_db.sh          # nạp schema + phòng + ma trận quyền 
 bash scripts/50_seed_demo.sh        # vài tài liệu mẫu
 ```
 
-`10_init_db.sh` sẽ IN RA bảng tài khoản demo. Ghi lại. Mặc định:
+`10_init_db.sh` sẽ IN RA tài khoản admin kèm **mật khẩu tạm ngẫu nhiên** (từ
+22/09/2026 không còn `admin123`). Bốn tài khoản demo bên dưới chỉ có khi chạy
+thêm `python -m app.seed_accounts --demo` trên máy thử nghiệm:
 
 | Email | Mật khẩu | Vai |
 |---|---|---|
-| admin@hdslaw.vn | admin123 | admin (kỹ thuật) |
+| admin@hdslaw.vn | (in ra khi seed) | admin (kỹ thuật) |
 | giamdoc@hdslaw.vn | demo123 | ban_qt (thấy tất cả) |
 | truong.dndt@hdslaw.vn | demo123 | trưởng phòng DN-ĐT |
 | cv.tranhtung@hdslaw.vn | demo123 | chuyên viên Tranh tụng |
