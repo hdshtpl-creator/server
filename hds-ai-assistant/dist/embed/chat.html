@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hỏi luật sư HDS</title>
+<meta name="robots" content="noindex" />
+<!--
+  Khung chat NHÚNG cho website Công ty Luật HDS (kế hoạch ngày 4–5).
+  Trang tĩnh, không React: nhúng vào bất kỳ website nào bằng <iframe> hoặc
+  script hds-chat.js cùng thư mục. Chỉ gọi hai API công khai:
+    POST /api/chat/public  — hỏi đáp, chỉ tài liệu Công khai, 30 câu/giờ/IP
+    POST /api/leads        — để lại thông tin liên hệ
+  Không có đăng nhập, không có tính năng nội bộ nào ở đây.
+-->
+<style>
+  :root { --navy:#1f3864; --gold:#f9a825; --soft:#f4f6fb; --ink:#1e293b; --mute:#64748b; --line:#e2e8f0; --ok:#15803d; --err:#b91c1c; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:#fff; font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; color:var(--ink); }
+  .wrap { display:flex; flex-direction:column; height:100%; }
+  header { background:var(--navy); color:#fff; padding:12px 14px; display:flex; align-items:center; gap:10px; }
+  header .logo { width:34px; height:34px; border-radius:8px; background:var(--gold); color:var(--navy); font-weight:800; display:flex; align-items:center; justify-content:center; font-size:12px; }
+  header h1 { font-size:15px; margin:0; font-weight:700; }
+  header p { margin:0; font-size:11px; opacity:.8; }
+  #log { flex:1; overflow-y:auto; padding:14px; background:var(--soft); }
+  .msg { max-width:88%; margin:0 0 10px; padding:10px 12px; border-radius:14px; white-space:pre-wrap; word-break:break-word; }
+  .msg.user { margin-left:auto; background:var(--navy); color:#fff; border-bottom-right-radius:4px; }
+  .msg.bot { background:#fff; border:1px solid var(--line); border-bottom-left-radius:4px; }
+  .msg.bot .src { margin-top:8px; padding-top:6px; border-top:1px dashed var(--line); font-size:11px; color:var(--mute); }
+  .msg.sys { background:transparent; color:var(--mute); font-size:12px; text-align:center; max-width:100%; }
+  .typing { color:var(--mute); font-size:12px; font-style:italic; }
+  form.ask { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--line); background:#fff; }
+  form.ask textarea { flex:1; resize:none; border:1px solid var(--line); border-radius:12px; padding:9px 11px; font:inherit; min-height:42px; max-height:120px; outline:none; }
+  form.ask textarea:focus { border-color:var(--navy); }
+  button.primary { background:var(--navy); color:var(--gold); border:0; border-radius:12px; padding:0 16px; font-weight:700; cursor:pointer; }
+  button.primary:disabled { opacity:.5; cursor:default; }
+  .actions { display:flex; gap:8px; padding:6px 12px 10px; background:#fff; font-size:12px; }
+  .actions button { background:#fff; border:1px solid var(--navy); color:var(--navy); border-radius:10px; padding:5px 10px; cursor:pointer; font-weight:600; }
+  .lead { background:#fff; border-top:1px solid var(--line); padding:12px; display:none; }
+  .lead.open { display:block; }
+  .lead h2 { font-size:13px; margin:0 0 6px; color:var(--navy); }
+  .lead .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
+  .lead input, .lead textarea { width:100%; border:1px solid var(--line); border-radius:10px; padding:8px 10px; font:inherit; }
+  .lead textarea { resize:vertical; min-height:56px; }
+  .lead .hp { position:absolute; left:-9999px; width:1px; height:1px; opacity:0; }
+  .note { font-size:11px; color:var(--mute); margin:6px 0 0; }
+  .ok { color:var(--ok); font-weight:600; } .err { color:var(--err); }
+  footer { font-size:10px; color:var(--mute); text-align:center; padding:4px 8px 8px; background:#fff; }
+  @media (max-width:420px) { .lead .row { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">HDS</div>
+    <div>
+      <h1>Hỏi luật sư HDS</h1>
+      <p>Trợ lý AI trả lời sơ bộ theo văn bản pháp luật công khai · không thay thế tư vấn của luật sư</p>
+    </div>
+  </header>
+  <div id="log" aria-live="polite">
+    <div class="msg bot">Xin chào! Bạn cần hỏi về vấn đề pháp lý nào? Ví dụ: <em>thời hiệu khởi kiện tranh chấp hợp đồng là bao lâu?</em></div>
+  </div>
+  <form class="ask" id="askForm">
+    <textarea id="q" rows="1" maxlength="2000" placeholder="Nhập câu hỏi của bạn…" aria-label="Câu hỏi"></textarea>
+    <button class="primary" id="send" type="submit">Gửi</button>
+  </form>
+  <div class="actions">
+    <button type="button" id="openLead">Để lại thông tin để luật sư liên hệ</button>
+  </div>
+  <div class="lead" id="lead">
+    <h2>Để lại thông tin liên hệ</h2>
+    <form id="leadForm" autocomplete="on">
+      <div class="row">
+        <input id="name" name="name" placeholder="Họ tên *" required maxlength="120" />
+        <input id="phone" name="phone" placeholder="Số điện thoại" inputmode="tel" maxlength="16" />
+      </div>
+      <div class="row">
+        <input id="email" name="email" placeholder="Email" type="email" maxlength="200" />
+        <input class="hp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" />
+      </div>
+      <textarea id="need" name="need" placeholder="Bạn cần tư vấn về việc gì?" maxlength="2000"></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+        <button class="primary" type="submit" id="leadSend" style="height:36px">Gửi thông tin</button>
+        <button type="button" id="closeLead" style="background:none;border:0;color:var(--mute);cursor:pointer">Đóng</button>
+        <span id="leadMsg" class="note"></span>
+      </div>
+      <p class="note">Thông tin chỉ dùng để HDS liên hệ lại với bạn.</p>
+    </form>
+  </div>
+  <footer>Công ty Luật TNHH HDS · Câu trả lời của AI mang tính tham khảo, vui lòng liên hệ luật sư để được tư vấn chính thức.</footer>
+</div>
+<script>
+(function () {
+  // Gốc API: cùng máy chủ với trang này (nginx chuyển /api → FastAPI). Khi
+  // nhúng vào website khác, hds-chat.js truyền ?api=https://app.hdslaw.vn
+  var params = new URLSearchParams(location.search);
+  var API = (params.get('api') || location.origin).replace(/\/+$/, '') + '/api';
+  var log = document.getElementById('log');
+  var form = document.getElementById('askForm');
+  var q = document.getElementById('q');
+  var send = document.getElementById('send');
+  var convId = null;
+  var asked = 0;
+
+  function add(cls, text) {
+    var d = document.createElement('div');
+    d.className = 'msg ' + cls;
+    d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+    return d;
+  }
+  function stripCite(t) {
+    // Người dân không có bảng nguồn; số [Nguồn n] chỉ gây rối → gộp thành danh
+    // sách tên văn bản ở cuối.
+    return (t || '').replace(/\s*\[Nguồn\s*\d+(?:,\s*\d+)*\]/g, '');
+  }
+  async function ask(text) {
+    add('user', text);
+    var typing = add('bot typing', 'Đang tra cứu văn bản pháp luật… (10–60 giây)');
+    send.disabled = true;
+    try {
+      var r = await fetch(API + '/chat/public', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: text, conversation_id: convId })
+      });
+      var body = null;
+      try { body = await r.json(); } catch (e) {}
+      typing.remove();
+      if (!r.ok) {
+        var msg = (body && body.detail) ? String(body.detail) : 'Hệ thống đang bận, vui lòng thử lại sau.';
+        add('sys', msg);
+        return;
+      }
+      convId = body.conversation_id || convId;
+      var el = add('bot', stripCite(body.answer || body.text || 'Xin lỗi, tôi chưa có câu trả lời.'));
+      var names = [];
+      (body.sources || []).forEach(function (s) {
+        var n = s.title || s.document_title || s.name;
+        if (n && names.indexOf(n) < 0) names.push(n);
+      });
+      if (names.length) {
+        var src = document.createElement('div');
+        src.className = 'src';
+        src.textContent = 'Văn bản tham khảo: ' + names.slice(0, 4).join(' · ');
+        el.appendChild(src);
+      }
+      asked += 1;
+      if (asked === 2) add('sys', 'Bạn muốn luật sư HDS tư vấn cụ thể cho trường hợp của mình? Bấm "Để lại thông tin" bên dưới.');
+    } catch (e) {
+      typing.remove();
+      add('sys', 'Không kết nối được máy chủ. Vui lòng thử lại.');
+    } finally {
+      send.disabled = false;
+      q.focus();
+    }
+  }
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var text = q.value.trim();
+    if (!text || send.disabled) return;
+    q.value = '';
+    ask(text);
+  });
+  q.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+  });
+
+  // ---- Form liên hệ ----
+  var lead = document.getElementById('lead');
+  document.getElementById('openLead').onclick = function () { lead.classList.add('open'); document.getElementById('name').focus(); };
+  document.getElementById('closeLead').onclick = function () { lead.classList.remove('open'); };
+  document.getElementById('leadForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    var f = e.target, msg = document.getElementById('leadMsg'), btn = document.getElementById('leadSend');
+    msg.className = 'note'; msg.textContent = 'Đang gửi…'; btn.disabled = true;
+    try {
+      var r = await fetch(API + '/leads', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: f.name.value, phone: f.phone.value, email: f.email.value,
+          need: f.need.value, website: f.website.value, conversation_id: convId
+        })
+      });
+      var body = null; try { body = await r.json(); } catch (e2) {}
+      if (r.ok) {
+        msg.className = 'note ok';
+        msg.textContent = (body && body.message) || 'Đã nhận thông tin, HDS sẽ liên hệ lại.';
+        f.reset();
+        setTimeout(function () { lead.classList.remove('open'); msg.textContent = ''; }, 4000);
+      } else {
+        msg.className = 'note err';
+        msg.textContent = (body && body.detail) ? String(body.detail) : 'Gửi không thành công (' + r.status + ')';
+      }
+    } catch (e3) {
+      msg.className = 'note err'; msg.textContent = 'Không kết nối được máy chủ.';
+    } finally { btn.disabled = false; }
+  });
+})();
+</script>
+</body>
+</html>

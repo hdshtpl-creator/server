@@ -231,6 +231,21 @@ export const INTERNAL_ROLES: UserRole[] = [
 export const isClientRole = (role?: string): boolean =>
   Boolean(role && role.startsWith('client_'));
 
+/** Tài khoản có được dùng chức năng này không (20/09/2026).
+ *
+ * Máy chủ đã gộp sẵn mặc định của vai với phần quản trị tick và trả về trong
+ * `features` của GET /auth/me. Chưa có trường đó (phiên cũ, chế độ giả lập)
+ * thì giữ hành vi trước đây: nội bộ mở hết, khách chỉ hỏi đáp. Đây CHỈ là
+ * lớp ẩn/hiện cho đỡ rối mắt — backend vẫn chặn lại ở từng cửa. */
+export const coTinhNang = (
+  user: { role?: string; features?: Record<string, boolean> } | null | undefined,
+  ma: string
+): boolean => {
+  if (!user) return false;
+  if (user.features && ma in user.features) return Boolean(user.features[ma]);
+  return !isClientRole(user.role) || ma === 'chat';
+};
+
 /** Ai được mở khu Quản trị (khớp require_reviewer / require(admin) ở api.py). */
 export const canAccessAdmin = (user?: { role?: string; can_review?: boolean } | null): boolean =>
   Boolean(user && (user.role === 'admin' || user.role === 'ban_qt' || user.can_review));

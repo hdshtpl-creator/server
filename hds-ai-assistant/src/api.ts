@@ -7,6 +7,8 @@ import type {
   ChatResponse,
   Stats,
   PendingReviewDoc,
+  ReviewBoLoc,
+  ReviewChunk,
   PendingLearnMessage,
   MethodTemplate,
   User,
@@ -148,6 +150,12 @@ export const listTemplateFiles = ApiJs.listTemplateFiles as () => Promise<{
 export const previewDocument = ApiJs.previewDocument as (
   docId: number
 ) => Promise<void>;
+
+/** Bản gốc dưới dạng blob URL để nhúng trong khung đối chiếu hai cột.
+ *  Người gọi phải URL.revokeObjectURL khi đóng khung. */
+export const previewDocumentBlob = ApiJs.previewDocumentBlob as (
+  docId: number
+) => Promise<{ url: string; mime: string }>;
 
 export const downloadTemplateFill = ApiJs.downloadTemplateFill as (
   token: string,
@@ -306,7 +314,41 @@ export const deleteNote = ApiJs.deleteNote as (
 
 export const getStats = ApiJs.getStats as () => Promise<Stats>;
 
-export const getPendingReviews = ApiJs.getPendingReviews as () => Promise<PendingReviewDoc[]>;
+export const getPendingReviews = ApiJs.getPendingReviews as (params?: {
+  limit?: number;
+  offset?: number;
+  q?: string;
+  ngan?: string;
+  doc_type?: string;
+  nguon?: string;
+  trang_thai?: string;
+  khach?: number | null;
+  sap_xep?: string;
+}) => Promise<PendingReviewDoc[]>;
+
+/** Số liệu thanh bộ lọc hàng chờ duyệt. */
+export const getReviewFilters = ApiJs.getReviewFilters as () => Promise<ReviewBoLoc>;
+
+/** Các đoạn RAG đúng như bot đọc — cột phải khung đối chiếu. */
+export const getReviewChunks = ApiJs.getReviewChunks as (
+  id: number,
+  limit?: number
+) => Promise<{ document_id: number; tong: number; items: ReviewChunk[] }>;
+
+/** Duyệt nhanh nhiều tài liệu bằng nhãn máy đã đoán. */
+export const approveReviewBatch = ApiJs.approveReviewBatch as (
+  items: Array<{
+    id: number;
+    doc_type: string;
+    access_level: string;
+    client_id?: number | string | null;
+  }>
+) => Promise<{
+  ok?: boolean;
+  da_duyet: number;
+  ids: number[];
+  bo_qua: Array<{ id: number; ly_do: string }>;
+}>;
 
 export const approveReview = ApiJs.approveReview as (
   id: number,
@@ -390,7 +432,11 @@ export const createUser = ApiJs.createUser as (data: {
   department_ids?: number[];
   head_of?: number[];
   monthly_quota?: number;
-}) => Promise<User & { ok?: boolean; user_id?: number }>;
+  /** Chức năng mở cho tài khoản; null = theo mặc định của vai. */
+  features?: Record<string, boolean> | null;
+  /** Để trống = máy chủ tự sinh mật khẩu tạm. */
+  password?: string | null;
+}) => Promise<User & { ok?: boolean; user_id?: number; mat_khau_tam?: string }>;
 
 export const updateUserReviewPermission = ApiJs.updateUserReviewPermission as (
   uid: number,
@@ -409,6 +455,32 @@ export const issueApiKey = ApiJs.issueApiKey as (
 export const revokeApiKey = ApiJs.revokeApiKey as (
   uid: number
 ) => Promise<{ ok?: boolean; user_id?: number }>;
+
+/** PATCH /users/{uid} — sửa tài khoản đã tạo; trường không gửi = giữ nguyên (22/09/2026). */
+export const updateUser = ApiJs.updateUser as (
+  uid: number,
+  data: {
+    full_name?: string;
+    role?: string;
+    client_id?: number | string | null;
+    department_ids?: number[];
+    head_of?: number[];
+    active?: boolean;
+  }
+) => Promise<{
+  ok?: boolean;
+  user_id?: number;
+  role?: string;
+  active?: boolean;
+  client_id?: number | null;
+  full_name?: string;
+}>;
+
+/** POST /users/{uid}/reset-password — mật khẩu tạm trả về đúng một lần. */
+export const resetUserPassword = ApiJs.resetUserPassword as (
+  uid: number,
+  new_password?: string | null
+) => Promise<{ ok?: boolean; user_id?: number; mat_khau_tam: string }>;
 
 export const getDocuments = ApiJs.getDocuments as (params?: {
   q?: string;
@@ -669,3 +741,10 @@ export const raSoatHopDong = ApiJs.raSoatHopDong as (params: {
 export const exportRaSoat = ApiJs.exportRaSoat as (
   ket_qua: import('./types').RaSoatKetQua, tieu_de?: string, filename?: string
 ) => Promise<void>;
+
+// ============ Bật/tắt chức năng cho tài khoản (20/09/2026) ============
+export const getTinhNang = ApiJs.getTinhNang as () => Promise<import('./types').TinhNangResponse>;
+export const updateUserFeatures = ApiJs.updateUserFeatures as (
+  uid: number,
+  data: { features?: Record<string, boolean> | null; monthly_quota?: number | null }
+) => Promise<{ ok: boolean; features: Record<string, boolean>; features_tick: Record<string, boolean> | null }>;

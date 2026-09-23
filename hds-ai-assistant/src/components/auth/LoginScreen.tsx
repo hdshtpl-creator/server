@@ -13,17 +13,11 @@ import {
 } from 'lucide-react';
 
 /**
- * Tài khoản mẫu tạo bởi `python -m app.seed_accounts` của backend hds-ai.
- * Chỉ điền sẵn email — mật khẩu do người dùng tự nhập, không nhúng vào mã nguồn.
+ * Màn hình đăng nhập chính thức (22/09/2026). Trước đó có dãy nút "Điền nhanh
+ * email tài khoản mẫu" liệt kê 5 tài khoản demo — tiện lúc thử nghiệm nhưng
+ * đưa vào vận hành thì nó bày sẵn danh sách email cho người ngoài dò mật
+ * khẩu. Đã bỏ hẳn; tài khoản thật do quản trị tạo ở Quản trị → Người dùng.
  */
-const DEMO_ACCOUNTS = [
-  { email: 'admin@hdslaw.vn', label: 'Quản trị hệ thống', accent: 'border-red-500/30 text-red-300' },
-  { email: 'giamdoc@hdslaw.vn', label: 'Giám đốc (Ban QT)', accent: 'border-purple-500/30 text-purple-300' },
-  { email: 'truong.dndt@hdslaw.vn', label: 'Trưởng phòng DN-ĐT', accent: 'border-amber-500/30 text-amber-300' },
-  { email: 'cv.tranhtung@hdslaw.vn', label: 'Chuyên viên Tranh tụng', accent: 'border-blue-500/30 text-blue-300' },
-  { email: 'troly@hdslaw.vn', label: 'Trợ lý pháp chế', accent: 'border-emerald-500/30 text-emerald-300' },
-];
-
 export const LoginScreen: React.FC = () => {
   const { login, showToast, isMockMode } = useApp();
 
@@ -166,34 +160,12 @@ export const LoginScreen: React.FC = () => {
             </button>
           </form>
 
-          {/* Điền nhanh email tài khoản mẫu */}
-          <div className="pt-4 border-t border-slate-700 space-y-2">
-            <p className="text-[11px] font-semibold text-slate-400 text-center">
-              Điền nhanh email tài khoản mẫu
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
-              {DEMO_ACCOUNTS.map((acc) => (
-                <button
-                  key={acc.email}
-                  type="button"
-                  onClick={() => setEmail(acc.email)}
-                  className={`p-2 rounded-lg bg-slate-900/60 hover:bg-slate-700 border text-left transition-colors ${acc.accent}`}
-                >
-                  <span className="font-bold block">{acc.label}</span>
-                  <span className="text-[10px] text-slate-400 font-mono block truncate">
-                    {acc.email}
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-start gap-2 text-[10px] text-slate-400 bg-slate-900/50 border border-slate-700 rounded-lg p-2.5">
+          <div className="pt-4 border-t border-slate-700">
+            <div className="flex items-start gap-2 text-[11px] text-slate-400 bg-slate-900/50 border border-slate-700 rounded-lg p-2.5">
               <Info className="w-3.5 h-3.5 shrink-0 mt-px text-hds-gold" />
               <span>
-                Mật khẩu do backend cấp khi chạy{' '}
-                <code className="font-mono text-slate-300">python -m app.seed_accounts</code>. Hãy
-                đổi mật khẩu ngay sau lần đăng nhập đầu tiên.
+                Tài khoản do quản trị viên của HDS cấp. Quên mật khẩu hoặc chưa có tài khoản:
+                liên hệ quản trị viên để được cấp lại — hệ thống không có tự phục vụ.
               </span>
             </div>
           </div>

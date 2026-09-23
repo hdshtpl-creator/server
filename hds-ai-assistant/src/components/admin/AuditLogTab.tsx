@@ -103,6 +103,11 @@ export const AuditLogTab: React.FC = () => {
                     <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
                       {row.user_name || (row.user_id == null ? 'Hệ thống' : `#${row.user_id}`)}
                       {row.user_email && <span className="block text-[10px] text-slate-400">{row.user_email}</span>}
+                      {row.client_name && (
+                        <span className="block text-[10px] text-hds-navy dark:text-blue-300 font-semibold">
+                          Khách: {row.client_name}
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-slate-800 dark:text-slate-100 break-words">{row.tom_tat}</td>
                   </tr>

@@ -467,8 +467,47 @@ export async function getStats() {
 
 // ==================== 3. DUYỆT NHÃN TÀI LIỆU ====================
 
-export async function getPendingReviews() {
-  return request('/review/pending', { method: 'GET' });
+// Hàng chờ duyệt nhãn CÓ BỘ LỌC. Hàng chờ thật hàng nghìn tài liệu — không
+// lọc được thì người duyệt chỉ nhìn thấy 50 cái đầu bảng.
+export async function getPendingReviews(params = {}) {
+  const qs = new URLSearchParams();
+  const { limit, offset, q, ngan, doc_type, nguon, trang_thai, khach, sap_xep } = params || {};
+  if (limit != null) qs.set('limit', String(limit));
+  if (offset) qs.set('offset', String(offset));
+  if (q) qs.set('q', q);
+  if (ngan) qs.set('ngan', ngan);
+  if (doc_type) qs.set('doc_type', doc_type);
+  if (nguon) qs.set('nguon', nguon);
+  if (trang_thai) qs.set('trang_thai', trang_thai);
+  if (khach) qs.set('khach', String(khach));
+  if (sap_xep) qs.set('sap_xep', sap_xep);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return request(`/review/pending${suffix}`, { method: 'GET' });
+}
+
+/** Số liệu thanh bộ lọc: tổng hàng chờ, các ngăn, loại, nguồn, trạng thái đọc. */
+export async function getReviewFilters() {
+  return request('/review/pending/bo-loc', { method: 'GET' });
+}
+
+/** Các ĐOẠN đúng như bot đọc — cột phải của khung đối chiếu. */
+export async function getReviewChunks(id, limit = 300) {
+  return request(`/review/${id}/chunks?limit=${Number(limit) || 300}`, { method: 'GET' });
+}
+
+/** DUYỆT NHANH nhiều tài liệu bằng nhãn máy đã đoán (đã soát trên danh sách). */
+export async function approveReviewBatch(items) {
+  return request('/review/duyet-nhanh', {
+    method: 'POST',
+    body: JSON.stringify({
+      items: (items || []).map((it) => ({
+        id: toIntOrNull(it.id),
+        doc_type: it.doc_type || 'other',
+        access_level: it.access_level || 'internal',
+        client_id: toIntOrNull(it.client_id),
+      })),
+    }),
+  });
 }
 
 // POST /review/{id}/approve — client_id là khoá ngoại kiểu int
@@ -771,6 +810,23 @@ export async function getUsers() {
 }
 
 // POST /users — client_id kiểu int; vai client_* bắt buộc có client_id (CHECK constraint)
+// GET /tinh-nang — danh mục chức năng bật/tắt được cho một tài khoản.
+export async function getTinhNang() {
+  return request('/tinh-nang', { method: 'GET' });
+}
+
+// PATCH /users/{id}/tinh-nang — bật/tắt chức năng + đặt hạn mức câu hỏi.
+// features = null nghĩa là trả tài khoản về mặc định của vai.
+export async function updateUserFeatures(uid, { features, monthly_quota } = {}) {
+  return request(`/users/${toIntOrNull(uid)}/tinh-nang`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      features: features ?? null,
+      monthly_quota: monthly_quota ?? null,
+    }),
+  });
+}
+
 export async function createUser({
   email,
   full_name,
@@ -780,6 +836,8 @@ export async function createUser({
   department_ids,
   head_of,
   monthly_quota,
+  features,
+  password,
 }) {
   const clientId = toIntOrNull(client_id);
   if (String(role || '').startsWith('client_') && clientId === null) {
@@ -796,6 +854,10 @@ export async function createUser({
       department_ids: Array.isArray(department_ids) ? department_ids : [],
       head_of: Array.isArray(head_of) ? head_of : [],
       monthly_quota: Number(monthly_quota) || 0,
+      // null = để máy chủ áp mặc định của vai (khách chỉ hỏi đáp).
+      features: features && Object.keys(features).length ? features : null,
+      // null = máy chủ sinh mật khẩu tạm ngẫu nhiên, trả về một lần (mat_khau_tam).
+      password: password || null,
     }),
   });
   return normalizeUser(created);
@@ -825,6 +887,31 @@ export async function issueApiKey(uid) {
 // DELETE /users/{uid}/api-key — thu hồi khoá, chặn ngay mọi lời gọi bằng khoá cũ
 export async function revokeApiKey(uid) {
   return request(`/users/${uid}/api-key`, { method: 'DELETE' });
+}
+
+// PATCH /users/{uid} — sửa họ tên, vai, hồ sơ khách, phòng ban, khoá/mở tài
+// khoản (22/09/2026). Trường không gửi = giữ nguyên.
+export async function updateUser(uid, data = {}) {
+  const body = {};
+  if (data.full_name !== undefined) body.full_name = data.full_name;
+  if (data.role !== undefined) body.role = data.role;
+  if (data.client_id !== undefined) body.client_id = toIntOrNull(data.client_id);
+  if (data.department_ids !== undefined) body.department_ids = data.department_ids;
+  if (data.head_of !== undefined) body.head_of = data.head_of;
+  if (data.active !== undefined) body.active = Boolean(data.active);
+  return request(`/users/${toIntOrNull(uid)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+// POST /users/{uid}/reset-password — quản trị cấp mật khẩu tạm cho người quên.
+// new_password = null → máy chủ tự sinh. Mật khẩu trả về ĐÚNG MỘT LẦN.
+export async function resetUserPassword(uid, new_password = null) {
+  return request(`/users/${toIntOrNull(uid)}/reset-password`, {
+    method: 'POST',
+    body: JSON.stringify({ new_password: new_password || null }),
+  });
 }
 
 // GET /alerts — vụ việc quá hạn / sắp đến hạn / treo lâu, lọc theo phòng ban
@@ -1474,6 +1561,28 @@ export async function previewDocument(docId) {
   }
 }
 
+// GET /files/{id}/preview — bản gốc dưới dạng blob URL để NHÚNG NGAY trong
+// khung đối chiếu hai cột (không mở tab mới). Người gọi phải gọi
+// URL.revokeObjectURL khi đóng khung, không thì blob nằm lại trong bộ nhớ tab.
+export async function previewDocumentBlob(docId) {
+  if (useMockBackend) {
+    const blob = new Blob(
+      [`Bản demo — bản gốc của tài liệu #${docId} sẽ hiện ở đây khi chạy với máy chủ thật.`],
+      { type: 'text/plain' }
+    );
+    return { url: URL.createObjectURL(blob), mime: 'text/plain' };
+  }
+  const res = await fetch(`${apiBaseUrl}/files/${docId}/preview`, {
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(parseErrorBody(text, res.status));
+  }
+  const blob = await res.blob();
+  return { url: URL.createObjectURL(blob), mime: blob.type || '' };
+}
+
 // DELETE /temp-files/{id} — gỡ file 'dùng xong bỏ' THẬT trên máy chủ.
 // File 'dung xong bo' con han cua mot hoi thoai — de tab Kiem tra phap ly
 // mo lai phien cu dung lai dung cac chip dinh kem con dung duoc.
@@ -1870,7 +1979,7 @@ export async function deleteHoSoDaLuu(ma) {
 // ==================== CHẾ ĐỘ GIẢ LẬP (MOCK) ====================
 // Dữ liệu mẫu bám sát seed thật của backend:
 //   - 4 bộ phận trong app/seed_departments.py
-//   - tài khoản trong app/seed_accounts.py
+//   - tài khoản mẫu của app/seed_accounts.py --demo (máy thật chỉ có admin)
 //   - enum doc_type / access_level / matters.status trong sql/schema.sql
 
 let mockState = {
@@ -1970,6 +2079,11 @@ let mockState = {
       source_kind: 'chat',
       preview:
         'Bên Chuyển Nhượng đồng ý chuyển nhượng 500.000 cổ phần phổ thông với giá trị tương đương 15.000.000.000 VNĐ...',
+      // Nạp từ hội thoại → KHÔNG nằm trong cây kho, không có tệp gốc để đối chiếu.
+      trong_kho: false, duong_dan: null, thu_muc: null, ngan: '(ngoài kho)',
+      ten_tep: null, duoi: null, co_tep: false, kich_thuoc: null,
+      so_doan: 6, ty_le_rac: 0.02, created_at: '2026-09-18 09:12',
+      nguoi_nap: 'Chuyên viên Doanh nghiệp', phong: 'Doanh nghiệp - Đầu tư',
     },
     {
       id: 102,
@@ -1979,9 +2093,17 @@ let mockState = {
       client_id: null,
       client_name: null,
       confidence: null, // cố ý để trống — kiểm tra giao diện khi AI chưa chấm điểm
-      source_kind: 'drive',
+      source_kind: 'local',
       preview:
         'Dựa trên Luật Đất đai 2024 và Giấy chứng nhận QSDĐ cấp năm 2018, diện tích tranh chấp thuộc quyền thừa kế hợp pháp...',
+      trong_kho: true,
+      duong_dan: '7. Ý KIẾN PHÁP LÝ/2026/Tranh chấp đất đai Q2 - dự thảo.docx',
+      thu_muc: '7. Ý KIẾN PHÁP LÝ/2026', ngan: '7. Ý KIẾN PHÁP LÝ',
+      ten_tep: 'Tranh chấp đất đai Q2 - dự thảo.docx', duoi: '.docx',
+      co_tep: true, kich_thuoc: 184320, so_doan: 11, ty_le_rac: 0.31,
+      extraction_status: 'warning',
+      extraction_warning: 'Trang 3-5 là ảnh scan, chữ đọc ra rời rạc.',
+      created_at: '2026-09-17 15:40', nguoi_nap: 'Bộ quét kho', phong: null,
     },
     {
       id: 103,
@@ -1991,9 +2113,34 @@ let mockState = {
       client_id: null,
       client_name: null,
       confidence: 0.95,
-      source_kind: 'manual',
+      source_kind: 'local',
       preview:
         'Các bước hoà giải tranh chấp lao động cá nhân theo Bộ luật Lao động 2019 trước khi gửi đơn ra Toà án nhân dân...',
+      trong_kho: true,
+      duong_dan: '6. QUY TRÌNH NỘI BỘ/Tranh tụng/Hoà giải lao động ngoài toà.docx',
+      thu_muc: '6. QUY TRÌNH NỘI BỘ/Tranh tụng', ngan: '6. QUY TRÌNH NỘI BỘ',
+      ten_tep: 'Hoà giải lao động ngoài toà.docx', duoi: '.docx',
+      co_tep: true, kich_thuoc: 96500, so_doan: 8, ty_le_rac: 0.01,
+      created_at: '2026-09-16 08:05', nguoi_nap: 'Bộ quét kho', phong: 'Tranh tụng',
+    },
+    {
+      id: 104,
+      title: '4. Hồ sơ yêu cầu bảo hiểm nhân thọ (dành cho khách hàng mua bảo hiểm cá nhân)',
+      doc_type: 'ho_so_kh',
+      access_level: 'client',
+      client_id: null, // cố ý: mức "khách hàng" mà chưa có chủ sở hữu → duyệt nhanh phải BỎ QUA
+      client_name: null,
+      confidence: null,
+      source_kind: 'local',
+      preview:
+        'Người yêu cầu bảo hiểm kê khai tình trạng sức khoẻ, nghề nghiệp và người thụ hưởng theo mẫu của doanh nghiệp bảo hiểm...',
+      trong_kho: true,
+      duong_dan: '9. HỒ SƠ KHÁCH HÀNG/[BH-07] Nguyễn Văn An/4. Hồ sơ yêu cầu bảo hiểm nhân thọ.pdf',
+      thu_muc: '9. HỒ SƠ KHÁCH HÀNG/[BH-07] Nguyễn Văn An',
+      ngan: '9. HỒ SƠ KHÁCH HÀNG',
+      ten_tep: '4. Hồ sơ yêu cầu bảo hiểm nhân thọ.pdf', duoi: '.pdf',
+      co_tep: true, kich_thuoc: 2411520, so_doan: 19, ty_le_rac: 0.24,
+      created_at: '2026-09-19 11:48', nguoi_nap: 'Bộ quét kho', phong: null,
     },
   ],
   pendingLearns: [
@@ -2450,9 +2597,14 @@ async function handleMockRequest(endpoint, options, headers) {
   }
 
   if (endpoint === '/auth/change-password' && method === 'POST') {
-    if (!body.new_password || body.new_password.length < 6) {
-      throw new Error('Mật khẩu mới tối thiểu 6 ký tự');
-    }
+    // Khớp chính sách máy chủ thật (app/auth.py kiem_tra_mat_khau_moi).
+    const pw = String(body.new_password || '');
+    if (pw.length < 8) throw new Error('Mật khẩu tối thiểu 8 ký tự');
+    if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) throw new Error('Mật khẩu phải có cả chữ và số');
+    // Đổi xong là hết "mật khẩu tạm" — máy chủ thật tắt cờ must_change_password.
+    const meId = headers['X-User-Id'] || currentUserId || '1';
+    const meUser = mockState.users.find((u) => String(u.id) === String(meId));
+    if (meUser) meUser.must_change_password = false;
     return { ok: true, message: 'Cập nhật mật khẩu thành công.' };
   }
 
@@ -2630,7 +2782,114 @@ Với câu hỏi "${question}":
   if (endpoint === '/stats') return { ...mockState.stats };
 
   // ---------- Duyệt nhãn ----------
-  if (endpoint === '/review/pending') return [...mockState.pendingReviews];
+  if (endpoint.startsWith('/review/pending/bo-loc')) {
+    const ds = mockState.pendingReviews;
+    const dem = (lay) => {
+      const m = new Map();
+      ds.forEach((d) => { const k = lay(d); m.set(k, (m.get(k) || 0) + 1); });
+      return [...m.entries()].sort((a, b) => b[1] - a[1]);
+    };
+    return {
+      tong: ds.length,
+      ngan: dem((d) => d.ngan || '(ngoài kho)').map(([ten, so]) => ({ ten, so })),
+      loai: dem((d) => d.doc_type || 'other').map(([ma, so]) => ({ ma, so })),
+      nguon: dem((d) => d.source_kind || '?').map(([ma, so]) => ({ ma, so })),
+      nguong_doc_loi: 0.2,
+      trang_thai: {
+        doc_loi: ds.filter((d) => (d.ty_le_rac ?? 0) >= 0.2).length,
+        canh_bao: ds.filter((d) => d.extraction_status === 'warning').length,
+        da_sua: ds.filter((d) => d.extraction_status === 'edited').length,
+        chua_cham: ds.filter((d) => d.ty_le_rac == null).length,
+        sach: ds.filter((d) => d.ty_le_rac != null && d.ty_le_rac < 0.2
+          && d.extraction_status !== 'warning').length,
+      },
+    };
+  }
+
+  if (endpoint.startsWith('/review/pending')) {
+    const p = new URLSearchParams(endpoint.split('?')[1] || '');
+    const q = (p.get('q') || '').toLowerCase();
+    const ngan = p.get('ngan');
+    const loai = p.get('doc_type');
+    const nguon = p.get('nguon');
+    const tt = p.get('trang_thai');
+    const sap = p.get('sap_xep') || 'can_soat';
+    let ds = mockState.pendingReviews.filter((d) => {
+      if (q && !`${d.title} ${d.duong_dan || ''}`.toLowerCase().includes(q)) return false;
+      if (ngan && (d.ngan || '(ngoài kho)') !== ngan) return false;
+      if (loai && (d.doc_type || 'other') !== loai) return false;
+      if (nguon && d.source_kind !== nguon) return false;
+      if (tt === 'doc_loi' && !((d.ty_le_rac ?? 0) >= 0.2)) return false;
+      if (tt === 'canh_bao' && d.extraction_status !== 'warning') return false;
+      if (tt === 'da_sua' && d.extraction_status !== 'edited') return false;
+      if (tt === 'chua_cham' && d.ty_le_rac != null) return false;
+      if (tt === 'sach' && !(d.ty_le_rac != null && d.ty_le_rac < 0.2
+        && d.extraction_status !== 'warning')) return false;
+      return true;
+    });
+    const rac = (d) => (d.ty_le_rac == null ? -1 : d.ty_le_rac);
+    ds = [...ds].sort((a, b) => {
+      if (sap === 'de_duyet') return rac(a) - rac(b);
+      if (sap === 'ten') return String(a.title).localeCompare(String(b.title), 'vi');
+      if (sap === 'moi_nhat') return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+      if (sap === 'cu_nhat') return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+      if (sap === 'duong_dan') return String(a.duong_dan || '').localeCompare(String(b.duong_dan || ''), 'vi');
+      return rac(b) - rac(a);
+    });
+    const offset = Number(p.get('offset') || 0);
+    const limit = Number(p.get('limit') || 50);
+    return ds.slice(offset, offset + limit);
+  }
+
+  const mockChunks = endpoint.match(/^\/review\/(\d+)\/chunks/);
+  if (mockChunks) {
+    const doc = mockState.pendingReviews.find((d) => String(d.id) === mockChunks[1]);
+    const goc = (doc?.preview || 'Nội dung demo của tài liệu chờ duyệt.').repeat(3);
+    const items = [0, 1, 2].map((i) => ({
+      chunk_index: i,
+      content: `[Tài liệu: ${doc?.title || 'demo'}]\n${goc}`,
+      so_ky_tu: goc.length + 20,
+      ty_le_rac: i === 1 ? (doc?.ty_le_rac ?? 0.05) : 0.02,
+      section_title: i === 0 ? 'Phần mở đầu' : null,
+      page_number: i + 1,
+    }));
+    return { document_id: Number(mockChunks[1]), tong: items.length, items };
+  }
+
+  const mockContent = endpoint.match(/^\/review\/(\d+)\/content$/);
+  if (mockContent && method === 'GET') {
+    const doc = mockState.pendingReviews.find((d) => String(d.id) === mockContent[1]);
+    return {
+      document_id: Number(mockContent[1]), title: doc?.title || 'Tài liệu demo',
+      doc_type: doc?.doc_type || 'other', extraction_status: doc?.extraction_status || 'ready',
+      extraction_warning: doc?.extraction_warning || null, approved: false,
+      label_verified: false, client_name: doc?.client_name || null,
+      chunk_count: doc?.so_doan || 3,
+      content: (doc?.preview || 'Nội dung demo.').repeat(6),
+    };
+  }
+  if (mockContent && method === 'PUT') {
+    return { ok: true, document_id: Number(mockContent[1]), chunks: 4, van_ban: null };
+  }
+
+  if (endpoint === '/review/duyet-nhanh' && method === 'POST') {
+    const items = body.items || [];
+    const bo_qua = [];
+    const ids = [];
+    items.forEach((it) => {
+      if (it.access_level === 'client' && !it.client_id) {
+        bo_qua.push({ id: it.id, ly_do: 'Mức "Hồ sơ khách hàng" chưa chọn khách hàng sở hữu' });
+        return;
+      }
+      ids.push(it.id);
+    });
+    mockState.pendingReviews = mockState.pendingReviews.filter(
+      (d) => !ids.some((id) => String(id) === String(d.id))
+    );
+    mockState.stats.cho_duyet_nhan = Math.max(0, mockState.stats.cho_duyet_nhan - ids.length);
+    mockState.stats.da_duyet_nhan += ids.length;
+    return { ok: true, da_duyet: ids.length, ids, bo_qua };
+  }
 
   if (/^\/review\/[^/]+\/approve$/.test(endpoint) && method === 'POST') {
     const id = endpoint.split('/')[2];
@@ -2779,6 +3038,30 @@ Với câu hỏi "${question}":
 
   if (endpoint === '/departments') return [...mockState.departments];
 
+  // ---------- Chức năng bật/tắt cho tài khoản (20/09/2026) ----------
+  if (endpoint === '/tinh-nang') {
+    return {
+      items: [
+        { ma: 'chat', ten: 'Hỏi đáp với trợ lý', mo_ta: 'Đặt câu hỏi và nhận câu trả lời kèm trích dẫn nguồn.' },
+        { ma: 'dinh_kem', ten: 'Đính kèm tệp trong khung trò chuyện', mo_ta: 'Tải hợp đồng, giấy tờ lên để hỏi về chính tệp đó.' },
+        { ma: 'tai_lieu', ten: 'Xem và tải tài liệu của mình', mo_ta: 'Mở bản gốc tài liệu thuộc hồ sơ của mình.' },
+        { ma: 'kiem_tra', ten: 'Kiểm tra pháp lý & rà soát rủi ro', mo_ta: 'Tải hợp đồng lên, đối chiếu điều khoản chuẩn và luật.' },
+        { ma: 'soan_thao', ten: 'Soạn tài liệu', mo_ta: 'Tự tạo bản nháp, điền mẫu và tải về .docx.' },
+      ],
+      mac_dinh_khach: { chat: true, dinh_kem: false, tai_lieu: false, kiem_tra: false, soan_thao: false },
+      mac_dinh_noi_bo: { chat: true, dinh_kem: true, tai_lieu: true, kiem_tra: true, soan_thao: true },
+    };
+  }
+  const tnMatch = endpoint.match(/^\/users\/(\d+)\/tinh-nang$/);
+  if (tnMatch && method === 'PATCH') {
+    const u = mockState.users.find((x) => String(x.id) === tnMatch[1]);
+    if (u) {
+      u.features = { ...(u.features || {}), ...(body.features || {}) };
+      if (body.monthly_quota != null) u.monthly_quota = body.monthly_quota;
+    }
+    return { ok: true, features: u?.features || {}, features_tick: body.features || null };
+  }
+
   // ---------- Người dùng (POST phải xét TRƯỚC GET) ----------
   if (endpoint === '/users' && method === 'POST') {
     const newUser = {
@@ -2792,12 +3075,59 @@ Với câu hỏi "${question}":
       department_ids: body.department_ids || [],
       head_of: body.head_of || [],
       monthly_quota: body.monthly_quota || 0,
+      client_name:
+        mockState.clients.find((c) => c.id === body.client_id)?.name || null,
+      features: {
+        ...(String(body.role || '').startsWith('client_')
+          ? { chat: true, dinh_kem: false, tai_lieu: false, kiem_tra: false, soan_thao: false }
+          : { chat: true, dinh_kem: true, tai_lieu: true, kiem_tra: true, soan_thao: true }),
+        ...(body.features || {}),
+      },
     };
     mockState.users.push(newUser);
-    return newUser;
+    // Máy chủ thật sinh mật khẩu tạm và chỉ trả về đúng lần này.
+    return { ...newUser, ok: true, user_id: newUser.id, mat_khau_tam: 'GiaLap2026x' };
   }
 
-  if (endpoint === '/users') return [...mockState.users];
+  // ---------- Sửa / khoá / đặt lại mật khẩu (22/09/2026) ----------
+  const patchMatch = endpoint.match(/^\/users\/(\d+)$/);
+  if (patchMatch && method === 'PATCH') {
+    const u = mockState.users.find((x) => String(x.id) === patchMatch[1]);
+    if (!u) throw new Error('Không thấy người dùng (404)');
+    if (String(u.id) === String(me.id) && body.active === false) {
+      throw new Error('Không tự khoá tài khoản của chính mình (400)');
+    }
+    if (body.full_name !== undefined) u.full_name = body.full_name;
+    if (body.role !== undefined) u.role = body.role;
+    if (body.client_id !== undefined) u.client_id = body.client_id;
+    if (body.department_ids !== undefined) u.department_ids = body.department_ids;
+    if (body.head_of !== undefined) u.head_of = body.head_of;
+    if (body.active !== undefined) u.active = body.active;
+    if (!u.role.startsWith('client_')) u.client_id = null;
+    return { ok: true, user_id: u.id, role: u.role, active: u.active, client_id: u.client_id };
+  }
+  const resetMatch = endpoint.match(/^\/users\/(\d+)\/reset-password$/);
+  if (resetMatch && method === 'POST') {
+    const u = mockState.users.find((x) => String(x.id) === resetMatch[1]);
+    if (!u) throw new Error('Không thấy người dùng (404)');
+    u.must_change_password = true;
+    return { ok: true, user_id: u.id, mat_khau_tam: body.new_password || 'GiaLap2026y' };
+  }
+
+  if (endpoint === '/users') {
+    return mockState.users.map((u) => ({
+      ...u,
+      client_name:
+        u.client_name ||
+        mockState.clients.find((c) => c.id === u.client_id)?.name ||
+        null,
+      features:
+        u.features ||
+        (String(u.role || '').startsWith('client_')
+          ? { chat: true, dinh_kem: false, tai_lieu: false, kiem_tra: false, soan_thao: false }
+          : { chat: true, dinh_kem: true, tai_lieu: true, kiem_tra: true, soan_thao: true }),
+    }));
+  }
 
   if (endpoint.includes('/review-permission')) {
     const targetId = endpoint.split('/')[2];

@@ -112,6 +112,30 @@ export interface User {
   has_api_key?: boolean;
   /** Ngày cấp khoá API gần nhất. */
   api_key_at?: string | null;
+  /** Tên và mã hồ sơ khách mà tài khoản này thuộc về (vai client_*). */
+  client_name?: string | null;
+  client_code?: string | null;
+  /** Chức năng ĐANG có hiệu lực (đã gộp mặc định của vai với phần tick). */
+  features?: Record<string, boolean>;
+  /** Phần admin tick tay; null = đang theo mặc định của vai. */
+  features_tick?: Record<string, boolean> | null;
+  /** Đang dùng mật khẩu tạm (vừa tạo / vừa được đặt lại) — phải đổi trước khi làm việc. */
+  must_change_password?: boolean;
+  /** Mốc đăng nhập gần nhất (YYYY-MM-DD HH:MM); null = chưa đăng nhập lần nào. */
+  last_login_at?: string | null;
+  created_at?: string | null;
+}
+
+/** Một chức năng bật/tắt được cho tài khoản (GET /tinh-nang). */
+export interface TinhNang {
+  ma: string;
+  ten: string;
+  mo_ta: string;
+}
+export interface TinhNangResponse {
+  items: TinhNang[];
+  mac_dinh_khach: Record<string, boolean>;
+  mac_dinh_noi_bo: Record<string, boolean>;
 }
 
 export interface Stats {
@@ -605,6 +629,53 @@ export interface PendingReviewDoc {
   ngay_ban_hanh?: string | null;
   ngay_hieu_luc?: string | null;
   trang_thai_hieu_luc?: string | null;
+  /* Tỉ lệ token đọc lỗi (0-1); null = chưa chấm. */
+  ty_le_rac?: number | null;
+  extraction_status?: string | null;
+  extraction_warning?: string | null;
+  /* VỊ TRÍ trong cây thư mục kho — ngăn chứa tệp là căn cứ gán nhãn, tiêu đề
+     không nói lên điều đó. duong_dan là đường dẫn tương đối trong kho. */
+  duong_dan?: string | null;
+  thu_muc?: string | null;
+  ngan?: string | null;
+  ten_tep?: string | null;
+  duoi?: string | null;
+  trong_kho?: boolean;
+  /** Tệp gốc còn trên máy chủ không — không có thì nút Xem bản gốc vô nghĩa. */
+  co_tep?: boolean;
+  kich_thuoc?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  person_folder?: string | null;
+  so_doan?: number | null;
+  nguoi_nap?: string | null;
+  phong?: string | null;
+}
+
+/** Số liệu cho thanh bộ lọc hàng chờ duyệt (GET /review/pending/bo-loc). */
+export interface ReviewBoLoc {
+  tong: number;
+  ngan: Array<{ ten: string; so: number }>;
+  loai: Array<{ ma: string; so: number }>;
+  nguon: Array<{ ma: string; so: number }>;
+  nguong_doc_loi: number;
+  trang_thai: {
+    doc_loi: number;
+    canh_bao: number;
+    da_sua: number;
+    chua_cham: number;
+    sach: number;
+  };
+}
+
+/** Một đoạn RAG đúng như bot sẽ đọc (GET /review/{id}/chunks). */
+export interface ReviewChunk {
+  chunk_index: number;
+  content: string;
+  so_ky_tu: number;
+  ty_le_rac: number;
+  section_title?: string | null;
+  page_number?: number | null;
 }
 
 export interface PendingLearnMessage {
@@ -1164,6 +1235,8 @@ export interface AuditEntry {
   entity_id?: number | null;
   detail: Record<string, unknown>;
   created_at: string;
+  /** Tài khoản khách: tên hồ sơ khách mà người này đại diện. */
+  client_name?: string | null;
   tom_tat: string;
 }
 export interface AuditResponse {

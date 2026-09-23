@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { ChangePasswordModal } from './auth/ChangePasswordModal';
-import { ROLE_META, canAccessAdmin, isClientRole } from '../constants';
+import { ROLE_META, canAccessAdmin, coTinhNang } from '../constants';
 import { BUILD_ID } from '../banMoi';
 import {
   MessageSquare,
@@ -83,7 +83,7 @@ export const Header: React.FC = () => {
 
   const role = ROLE_META[currentUser?.role as keyof typeof ROLE_META];
   const showAdminTab = canAccessAdmin(currentUser);
-  const showDraftsTab = !isClientRole(currentUser?.role);
+  const showDraftsTab = coTinhNang(currentUser, 'soan_thao');
 
   const tabClass = (active: boolean) =>
     `flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
@@ -223,8 +223,11 @@ export const Header: React.FC = () => {
                   <span className="text-xs font-semibold truncate w-full text-left">
                     {currentUser?.full_name || 'Người dùng'}
                   </span>
-                  <span className="text-[10px] text-blue-200">
-                    {role?.label || currentUser?.role}
+                  <span className="text-[10px] text-blue-200 truncate w-full text-left">
+                    {/* Tài khoản khách: hiện TÊN HỒ SƠ KHÁCH thay cho tên vai
+                        — người dùng (và người ngồi cạnh) thấy ngay đang mở
+                        cổng của khách nào. */}
+                    {currentUser?.client_name || role?.label || currentUser?.role}
                   </span>
                 </span>
                 <ChevronDown className="w-3.5 h-3.5 text-blue-200" />

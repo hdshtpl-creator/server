@@ -6,15 +6,27 @@ import { Lock, KeyRound, AlertCircle, CheckCircle2, X, Loader2 } from 'lucide-re
 interface ChangePasswordModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /**
+   * Bắt buộc đổi (đang dùng mật khẩu tạm do quản trị cấp): không có nút đóng,
+   * bấm ra ngoài không tắt; đổi xong mới nạp lại hồ sơ để tắt cờ.
+   */
+  forced?: boolean;
 }
 
-const MIN_LENGTH = 6; // khớp kiểm tra ở backend: app/api.py change_password
+// Khớp chính sách ở backend: app/auth.py kiem_tra_mat_khau_moi (≥ 8 ký tự,
+// có cả chữ và số). Máy chủ vẫn kiểm lần nữa — đây chỉ để báo sớm.
+const MIN_LENGTH = 8;
+const coChuVaSo = (pw: string) => /[A-Za-z]/.test(pw) && /\d/.test(pw);
 
 const inputClass =
   'w-full pl-9 pr-3 py-2 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl focus:ring-2 focus:ring-hds-blue focus:outline-none text-xs transition-colors';
 
-export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen, onClose }) => {
-  const { showToast } = useApp();
+export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
+  isOpen,
+  onClose,
+  forced = false,
+}) => {
+  const { showToast, refreshMe } = useApp();
 
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -24,11 +36,17 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
 
   if (!isOpen) return null;
 
-  const handleClose = () => {
+  const resetFields = () => {
     setOldPassword('');
     setNewPassword('');
     setConfirmPassword('');
     setErrorMsg('');
+  };
+
+  // Huỷ / bấm ra ngoài / nút X — bị chặn khi bắt buộc đổi.
+  const handleClose = () => {
+    if (forced) return;
+    resetFields();
     onClose();
   };
 
@@ -41,6 +59,10 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
     }
     if (newPassword.length < MIN_LENGTH) {
       setErrorMsg(`Mật khẩu mới phải có ít nhất ${MIN_LENGTH} ký tự.`);
+      return;
+    }
+    if (!coChuVaSo(newPassword)) {
+      setErrorMsg('Mật khẩu mới phải có cả chữ và số.');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -61,7 +83,12 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
         new_password: newPassword,
       });
       showToast(res?.message || 'Đổi mật khẩu thành công.', 'success');
-      handleClose();
+      if (forced) {
+        // Máy chủ đã tắt cờ must_change_password — nạp lại hồ sơ để hộp tự ẩn.
+        await refreshMe().catch(() => {});
+      }
+      resetFields();
+      onClose();
     } catch (err: any) {
       setErrorMsg(err?.message || 'Không đổi được mật khẩu. Vui lòng kiểm tra lại.');
     } finally {
@@ -89,23 +116,33 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
             </span>
             <div>
               <h3 id="password-modal-title" className="font-bold text-base">
-                Đổi mật khẩu
+                {forced ? 'Đổi mật khẩu tạm trước khi bắt đầu' : 'Đổi mật khẩu'}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Cập nhật mật khẩu tài khoản cá nhân
+                {forced
+                  ? 'Bạn đang dùng mật khẩu do quản trị viên cấp'
+                  : 'Cập nhật mật khẩu tài khoản cá nhân'}
               </p>
             </div>
           </div>
-          <button
-            onClick={handleClose}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
-            aria-label="Đóng"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!forced && (
+            <button
+              onClick={handleClose}
+              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
+              aria-label="Đóng"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4 text-xs">
+          {forced && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl text-amber-900 dark:text-amber-200 leading-relaxed">
+              Mật khẩu tạm là thứ quản trị viên cũng biết. Hãy đặt mật khẩu riêng của bạn
+              (tối thiểu {MIN_LENGTH} ký tự, có cả chữ và số) rồi mới tiếp tục làm việc.
+            </div>
+          )}
           {errorMsg && (
             <div
               role="alert"
@@ -129,10 +166,11 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
                 id="old-password"
                 type="password"
                 required
+                autoFocus
                 autoComplete="current-password"
                 value={oldPassword}
                 onChange={(e) => setOldPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder={forced ? 'Mật khẩu tạm quản trị đã cấp' : '••••••••'}
                 className={inputClass}
               />
             </div>
@@ -184,13 +222,15 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
           </div>
 
           <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={handleClose}
-              className="px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-xl font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
-            >
-              Huỷ
-            </button>
+            {!forced && (
+              <button
+                type="button"
+                onClick={handleClose}
+                className="px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-xl font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+              >
+                Huỷ
+              </button>
+            )}
             <button
               type="submit"
               disabled={isLoading}

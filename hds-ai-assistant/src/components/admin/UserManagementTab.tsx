@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
-import type { User, UserRole, Department, Client } from '../../types';
+import type { User, UserRole, Department, Client, TinhNang } from '../../types';
 import { ROLE_META } from '../../constants';
 import { SuDungCard } from './SuDungCard';
+import { UserEditPanel } from './UserEditPanel';
 import {
   Users,
   UserPlus,
@@ -21,6 +22,10 @@ import {
   KeyRound,
   Copy,
   AlertTriangle,
+  Pencil,
+  Lock,
+  Unlock,
+  Clock,
 } from 'lucide-react';
 
 const ROLE_OPTIONS: UserRole[] = [
@@ -37,8 +42,20 @@ const ROLE_OPTIONS: UserRole[] = [
 const inputClass =
   'w-full px-3 py-2 border border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-xl focus:ring-2 focus:ring-hds-blue focus:outline-none transition-colors';
 
+/**
+ * Bí mật vừa cấp (khoá API hoặc mật khẩu tạm) — chỉ tồn tại trong phiên này.
+ * Máy chủ lưu bản băm nên không có đường xem lại; quản trị phải chép ngay.
+ */
+interface SecretOnce {
+  uid: number;
+  kind: 'api_key' | 'password';
+  value: string;
+  /** Email/tên người nhận để quản trị biết gửi cho ai. */
+  who: string;
+}
+
 export const UserManagementTab: React.FC = () => {
-  const { showToast, reloadUsers } = useApp();
+  const { showToast, reloadUsers, currentUser } = useApp();
   const [userList, setUserList] = useState<User[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -53,10 +70,25 @@ export const UserManagementTab: React.FC = () => {
   const [selectedDeptIds, setSelectedDeptIds] = useState<number[]>([]);
   const [selectedHeadOfIds, setSelectedHeadOfIds] = useState<number[]>([]);
   const [monthlyQuota, setMonthlyQuota] = useState<number>(0);
+  // Mật khẩu khởi tạo: để trống = máy chủ tự sinh mật khẩu tạm (22/09/2026,
+  // thay cho "hds12345" cố định ai cũng biết).
+  const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Khoá API vừa cấp — chỉ tồn tại trong phiên này, không lấy lại được
-  const [newKey, setNewKey] = useState<{ uid: number; key: string } | null>(null);
+  // Tài khoản đang mở bảng sửa (họ tên / vai / phòng ban) và tài khoản đang
+  // chờ máy chủ trả lời cho thao tác khoá / đặt lại mật khẩu.
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [actionBusyId, setActionBusyId] = useState<number | null>(null);
+
+  // Chức năng mở cho tài khoản sắp tạo. Rỗng = theo mặc định của vai (khách
+  // chỉ hỏi đáp). Danh mục lấy từ máy chủ để giao diện không tự bịa ra tên.
+  const [tinhNang, setTinhNang] = useState<TinhNang[]>([]);
+  const [macDinhKhach, setMacDinhKhach] = useState<Record<string, boolean>>({});
+  const [featureTick, setFeatureTick] = useState<Record<string, boolean>>({});
+  const [featureBusyId, setFeatureBusyId] = useState<number | null>(null);
+
+  // Khoá API / mật khẩu tạm vừa cấp — chỉ tồn tại trong phiên này
+  const [secret, setSecret] = useState<SecretOnce | null>(null);
   const [keyBusyId, setKeyBusyId] = useState<number | null>(null);
 
   const isClientRoleSelected = role.startsWith('client_');
@@ -64,14 +96,19 @@ export const UserManagementTab: React.FC = () => {
   const fetchAll = async () => {
     setIsLoading(true);
     try {
-      const [uData, dData, cData] = await Promise.all([
+      const [uData, dData, cData, tnData] = await Promise.all([
         api.getUsers(),
         api.getDepartments().catch(() => [] as Department[]),
         api.getClients().catch(() => [] as Client[]),
+        api.getTinhNang().catch(() => null),
       ]);
       setUserList(uData);
       setDepartments(dData);
       setClients(cData);
+      if (tnData) {
+        setTinhNang(tnData.items || []);
+        setMacDinhKhach(tnData.mac_dinh_khach || {});
+      }
     } catch (err: any) {
       showToast(err?.message || 'Lỗi khi tải danh sách người dùng', 'error');
     } finally {
@@ -97,6 +134,32 @@ export const UserManagementTab: React.FC = () => {
     setSelectedDeptIds([]);
     setSelectedHeadOfIds([]);
     setMonthlyQuota(0);
+    setPassword('');
+  };
+
+  /** Bật/tắt một chức năng cho tài khoản đã tạo. Gửi TRỌN bộ tick hiện tại
+   *  chứ không gửi mỗi ô vừa đổi: máy chủ lưu nguyên dict, gửi thiếu là mất
+   *  những ô đã bật trước đó. */
+  const toggleFeature = async (u: User, ma: string, bat: boolean) => {
+    const hienTai = { ...(u.features || {}), [ma]: bat };
+    setFeatureBusyId(u.id);
+    setUserList((prev) =>
+      prev.map((x) => (x.id === u.id ? { ...x, features: hienTai } : x))
+    );
+    try {
+      const res = await api.updateUserFeatures(u.id, { features: hienTai });
+      setUserList((prev) =>
+        prev.map((x) => (x.id === u.id ? { ...x, features: res.features } : x))
+      );
+    } catch (err: any) {
+      // Trả ô tick về trạng thái cũ khi máy chủ từ chối
+      setUserList((prev) =>
+        prev.map((x) => (x.id === u.id ? { ...x, features: u.features } : x))
+      );
+      showToast(err?.message || 'Không đổi được chức năng.', 'error');
+    } finally {
+      setFeatureBusyId(null);
+    }
   };
 
   const handleCreateUser = async (e: React.FormEvent) => {
@@ -113,7 +176,7 @@ export const UserManagementTab: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      await api.createUser({
+      const res = await api.createUser({
         email: email.trim(),
         full_name: fullName.trim(),
         role,
@@ -122,13 +185,22 @@ export const UserManagementTab: React.FC = () => {
         department_ids: selectedDeptIds,
         head_of: selectedHeadOfIds,
         monthly_quota: monthlyQuota,
+        features: Object.keys(featureTick).length ? featureTick : null,
+        password: password.trim() || null,
       });
 
-      showToast(
-        `Đã tạo tài khoản ${fullName.trim()}. Mật khẩu khởi tạo mặc định là "hds12345" — hãy yêu cầu người dùng đổi ngay.`,
-        'success'
-      );
+      showToast(`Đã tạo tài khoản ${fullName.trim()}.`, 'success');
+      // Mật khẩu tạm chỉ về đúng lần này — hiện hộp chép ngay dưới thẻ tài khoản.
+      if (res?.user_id && res.mat_khau_tam) {
+        setSecret({
+          uid: res.user_id,
+          kind: 'password',
+          value: res.mat_khau_tam,
+          who: `${fullName.trim()} <${email.trim().toLowerCase()}>`,
+        });
+      }
       resetForm();
+      setFeatureTick({});
       // POST /users chỉ trả {ok, user_id} nên phải tải lại danh sách
       await fetchAll();
       reloadUsers().catch(() => {});
@@ -155,15 +227,15 @@ export const UserManagementTab: React.FC = () => {
     }
   };
 
-  const handleIssueApiKey = async (uid: number) => {
-    setKeyBusyId(uid);
+  const handleIssueApiKey = async (u: User) => {
+    setKeyBusyId(u.id);
     try {
-      const res = await api.issueApiKey(uid);
+      const res = await api.issueApiKey(u.id);
       // Chỉ giữ trong state của phiên này. Backend lưu bản băm nên không có
       // đường nào xem lại — người dùng phải copy ngay.
-      setNewKey({ uid, key: res.api_key });
+      setSecret({ uid: u.id, kind: 'api_key', value: res.api_key, who: u.email || u.full_name });
       setUserList((prev) =>
-        prev.map((u) => (u.id === uid ? { ...u, has_api_key: true } : u))
+        prev.map((x) => (x.id === u.id ? { ...x, has_api_key: true } : x))
       );
     } catch (err: any) {
       showToast(err?.message || 'Không cấp được khoá API', 'error');
@@ -179,12 +251,60 @@ export const UserManagementTab: React.FC = () => {
       setUserList((prev) =>
         prev.map((u) => (u.id === uid ? { ...u, has_api_key: false } : u))
       );
-      if (newKey?.uid === uid) setNewKey(null);
+      if (secret?.uid === uid && secret.kind === 'api_key') setSecret(null);
       showToast(`Đã thu hồi khoá API của tài khoản #${uid}.`, 'success');
     } catch (err: any) {
       showToast(err?.message || 'Không thu hồi được khoá API', 'error');
     } finally {
       setKeyBusyId(null);
+    }
+  };
+
+  /** Khoá / mở tài khoản. Khoá là chặn đăng nhập ngay và thu khoá API;
+   *  dữ liệu, lịch sử, nhật ký giữ nguyên nên không có nút xoá. */
+  const handleToggleActive = async (u: User) => {
+    const khoa = u.active !== false;
+    if (khoa) {
+      const ok = window.confirm(
+        `Khoá tài khoản ${u.full_name} (${u.email})?\n\nNgười này sẽ không đăng nhập được nữa cho tới khi mở lại. Phiên đang mở (nếu có) cũng bị chặn ở lượt gọi kế tiếp.`
+      );
+      if (!ok) return;
+    }
+    setActionBusyId(u.id);
+    try {
+      await api.updateUser(u.id, { active: !khoa });
+      setUserList((prev) =>
+        prev.map((x) =>
+          x.id === u.id ? { ...x, active: !khoa, has_api_key: khoa ? false : x.has_api_key } : x
+        )
+      );
+      showToast(`Đã ${khoa ? 'khoá' : 'mở lại'} tài khoản ${u.full_name}.`, 'success');
+      reloadUsers().catch(() => {});
+    } catch (err: any) {
+      showToast(err?.message || 'Không đổi được trạng thái tài khoản.', 'error');
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  /** Đặt lại mật khẩu cho người quên: máy chủ sinh mật khẩu tạm, trả về một
+   *  lần; người dùng bị bắt đổi ngay lần đăng nhập kế tiếp. */
+  const handleResetPassword = async (u: User) => {
+    const ok = window.confirm(
+      `Đặt lại mật khẩu cho ${u.full_name} (${u.email})?\n\nMật khẩu hiện tại sẽ mất hiệu lực ngay. Mật khẩu tạm mới chỉ hiện MỘT LẦN — hãy chép và gửi cho đúng người.`
+    );
+    if (!ok) return;
+    setActionBusyId(u.id);
+    try {
+      const res = await api.resetUserPassword(u.id);
+      setSecret({ uid: u.id, kind: 'password', value: res.mat_khau_tam, who: `${u.full_name} <${u.email}>` });
+      setUserList((prev) =>
+        prev.map((x) => (x.id === u.id ? { ...x, must_change_password: true } : x))
+      );
+    } catch (err: any) {
+      showToast(err?.message || 'Không đặt lại được mật khẩu.', 'error');
+    } finally {
+      setActionBusyId(null);
     }
   };
 
@@ -223,10 +343,11 @@ export const UserManagementTab: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
         <div>
           <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-            Người dùng, phòng ban và quyền duyệt
+            Tài khoản, phòng ban và phân quyền
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Phân 5 vai nội bộ và 3 gói khách hàng, gắn phòng ban và cấp quyền kiểm duyệt
+            Tạo tài khoản cho nhân viên và khách, gán vai và phòng ban, cấp quyền duyệt / xem
+            công nợ, bật tắt chức năng, khoá tài khoản và đặt lại mật khẩu
           </p>
         </div>
         <button
@@ -387,6 +508,51 @@ export const UserManagementTab: React.FC = () => {
               </>
             )}
 
+            {/* Chức năng mở cho tài khoản (20/09/2026).
+                Không tick gì = theo mặc định của vai: khách chỉ hỏi đáp,
+                nhân viên nội bộ mở hết. */}
+            {tinhNang.length > 0 && (
+              <div>
+                <span className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Chức năng được dùng
+                </span>
+                <div className="space-y-2 bg-slate-50 dark:bg-slate-800/60 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                  {tinhNang.map((tn) => {
+                    const macDinh = isClientRoleSelected
+                      ? Boolean(macDinhKhach[tn.ma])
+                      : true;
+                    const dangBat = tn.ma in featureTick ? featureTick[tn.ma] : macDinh;
+                    return (
+                      <label
+                        key={tn.ma}
+                        className="flex items-start gap-2 cursor-pointer text-[11px] text-slate-700 dark:text-slate-300"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={dangBat}
+                          onChange={(e) =>
+                            setFeatureTick((prev) => ({ ...prev, [tn.ma]: e.target.checked }))
+                          }
+                          className="rounded accent-[#1f3864] mt-0.5"
+                        />
+                        <span>
+                          <span className="font-semibold">{tn.ten}</span>
+                          <span className="block text-[10px] text-slate-500 dark:text-slate-400">
+                            {tn.mo_ta}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                  {isClientRoleSelected
+                    ? 'Tài khoản khách mặc định chỉ được hỏi đáp. Tick thêm để mở từng chức năng.'
+                    : 'Nhân viên nội bộ mặc định mở hết; bỏ tick để khoá bớt.'}
+                </p>
+              </div>
+            )}
+
             {/* Hạn mức — chỉ có ý nghĩa với tài khoản khách */}
             {isClientRoleSelected && (
               <div>
@@ -425,12 +591,28 @@ export const UserManagementTab: React.FC = () => {
               />
             </label>
 
+            <div>
+              <label htmlFor="new-user-password" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Mật khẩu khởi tạo{' '}
+                <span className="font-normal text-slate-400">(không bắt buộc)</span>
+              </label>
+              <input
+                id="new-user-password"
+                type="text"
+                autoComplete="off"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Để trống: hệ thống tự sinh mật khẩu tạm"
+                className={`${inputClass} font-mono`}
+              />
+            </div>
+
             <div className="flex items-start gap-2 text-[10px] text-slate-500 dark:text-slate-400 bg-hds-soft dark:bg-slate-800/60 border border-blue-100 dark:border-slate-700 rounded-lg p-2.5">
               <Info className="w-3.5 h-3.5 shrink-0 mt-px text-hds-blue" />
               <span>
-                Backend đặt mật khẩu khởi tạo là{' '}
-                <code className="font-mono font-semibold">hds12345</code>. Hãy nhắc người dùng đổi
-                mật khẩu ngay lần đăng nhập đầu tiên.
+                Mật khẩu tạm hiện <b>đúng một lần</b> sau khi tạo — chép và gửi riêng cho người
+                dùng. Lần đăng nhập đầu, hệ thống bắt họ đặt mật khẩu mới (tối thiểu 8 ký tự, có
+                chữ và số) rồi mới cho làm việc.
               </span>
             </div>
 
@@ -492,6 +674,19 @@ export const UserManagementTab: React.FC = () => {
                           Đã khoá
                         </span>
                       )}
+                      {u.active !== false && u.must_change_password && (
+                        <span
+                          className="text-[10px] font-semibold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800"
+                          title="Đang dùng mật khẩu tạm do quản trị cấp — sẽ bị bắt đổi khi đăng nhập"
+                        >
+                          Chưa đổi mật khẩu tạm
+                        </span>
+                      )}
+                      {currentUser?.id === u.id && (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border bg-hds-soft text-hds-navy border-blue-200 dark:bg-slate-800 dark:text-blue-300 dark:border-slate-700">
+                          Bạn
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
@@ -512,8 +707,14 @@ export const UserManagementTab: React.FC = () => {
                       {u.client_id != null && (
                         <span className="flex items-center gap-1 text-slate-700 dark:text-slate-300 font-medium">
                           <Building2 className="w-3.5 h-3.5 text-hds-blue shrink-0" />
-                          {clients.find((c) => c.id === u.client_id)?.name ||
+                          {u.client_name ||
+                            clients.find((c) => c.id === u.client_id)?.name ||
                             `Khách #${u.client_id}`}
+                          {u.client_code && (
+                            <span className="font-mono text-[10px] text-slate-400">
+                              ({u.client_code})
+                            </span>
+                          )}
                         </span>
                       )}
                       {u.has_api_key && (
@@ -526,13 +727,110 @@ export const UserManagementTab: React.FC = () => {
                       {typeof u.monthly_quota === 'number' && u.monthly_quota > 0 && (
                         <span className="text-[11px] font-mono bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 px-1.5 py-0.5 rounded border border-blue-100 dark:border-slate-700">
                           {u.monthly_quota} câu hỏi/tháng
+                          {typeof u.used_this_month === 'number' && (
+                            <span className="text-slate-400"> · đã dùng {u.used_this_month}</span>
+                          )}
+                        </span>
+                      )}
+                      {'last_login_at' in u && (
+                        <span
+                          className="flex items-center gap-1 text-[11px]"
+                          title="Mốc đăng nhập gần nhất"
+                        >
+                          <Clock className="w-3 h-3 shrink-0" />
+                          {u.last_login_at
+                            ? `Đăng nhập gần nhất ${u.last_login_at}`
+                            : 'Chưa đăng nhập lần nào'}
                         </span>
                       )}
                     </div>
+
+                    {/* Chức năng đang mở cho tài khoản này — bấm để bật/tắt
+                        ngay, không phải vào màn hình khác. */}
+                    {tinhNang.length > 0 && u.features && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 mr-0.5">
+                          Chức năng
+                        </span>
+                        {tinhNang.map((tn) => {
+                          const bat = Boolean(u.features?.[tn.ma]);
+                          return (
+                            <button
+                              key={tn.ma}
+                              type="button"
+                              disabled={featureBusyId === u.id}
+                              onClick={() => toggleFeature(u, tn.ma, !bat)}
+                              title={`${tn.ten} — ${tn.mo_ta}`}
+                              className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold transition-colors disabled:opacity-50 ${
+                                bat
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                                  : 'bg-slate-100 text-slate-500 border-slate-300 line-through dark:bg-slate-800 dark:text-slate-500 dark:border-slate-700'
+                              }`}
+                            >
+                              {tn.ten}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Bật/tắt các quyền đặc biệt */}
                   <div className="flex flex-col gap-2 shrink-0">
+                    {/* Sửa / đặt lại mật khẩu / khoá — hiện thường trực, không
+                        giấu sau rê chuột (bài học 18/09). */}
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEditingId(editingId === u.id ? null : u.id)}
+                        className={`px-2.5 py-1.5 rounded-xl font-bold text-[11px] border inline-flex items-center gap-1 transition-colors ${
+                          editingId === u.id
+                            ? 'bg-hds-navy text-white border-hds-navy'
+                            : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
+                        }`}
+                        title="Sửa họ tên, vai, phòng ban, hồ sơ khách"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        Sửa
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actionBusyId === u.id}
+                        onClick={() => handleResetPassword(u)}
+                        className="px-2.5 py-1.5 rounded-xl font-bold text-[11px] border bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+                        title="Cấp mật khẩu tạm mới cho người quên mật khẩu"
+                      >
+                        <KeyRound className="w-3.5 h-3.5" />
+                        Đặt lại mật khẩu
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actionBusyId === u.id || currentUser?.id === u.id}
+                        onClick={() => handleToggleActive(u)}
+                        className={`px-2.5 py-1.5 rounded-xl font-bold text-[11px] border inline-flex items-center gap-1 transition-colors disabled:opacity-50 ${
+                          u.active === false
+                            ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-100'
+                            : 'bg-white dark:bg-slate-800 text-hds-red dark:text-red-400 border-red-200 dark:border-red-900 hover:bg-red-50 dark:hover:bg-red-950/40'
+                        }`}
+                        title={
+                          currentUser?.id === u.id
+                            ? 'Không tự khoá tài khoản của chính mình'
+                            : u.active === false
+                              ? 'Cho phép đăng nhập trở lại'
+                              : 'Chặn đăng nhập, giữ nguyên dữ liệu và nhật ký'
+                        }
+                      >
+                        {actionBusyId === u.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : u.active === false ? (
+                          <Unlock className="w-3.5 h-3.5" />
+                        ) : (
+                          <Lock className="w-3.5 h-3.5" />
+                        )}
+                        {u.active === false ? 'Mở khoá' : 'Khoá'}
+                      </button>
+                    </div>
+
                     <button
                       onClick={() => handleToggleReviewPermission(u.id, u.can_review)}
                       className={`px-3 py-1.5 rounded-xl font-bold text-xs border flex items-center gap-1.5 justify-between transition-colors ${
@@ -560,7 +858,7 @@ export const UserManagementTab: React.FC = () => {
                     {u.role.startsWith('client_') && (
                       <button
                         onClick={() =>
-                          u.has_api_key ? handleRevokeApiKey(u.id) : handleIssueApiKey(u.id)
+                          u.has_api_key ? handleRevokeApiKey(u.id) : handleIssueApiKey(u)
                         }
                         disabled={keyBusyId === u.id}
                         className={`px-3 py-1.5 rounded-xl font-bold text-xs border flex items-center gap-1.5 justify-between transition-colors disabled:opacity-50 ${
@@ -614,22 +912,46 @@ export const UserManagementTab: React.FC = () => {
                   </div>
                  </div>
 
-                  {/* Khoá vừa cấp — hiện đúng một lần, backend chỉ giữ bản băm */}
-                  {newKey?.uid === u.id && (
+                  {/* Bảng sửa tài khoản — mở/đóng bằng nút Sửa */}
+                  {editingId === u.id && (
+                    <UserEditPanel
+                      user={u}
+                      departments={departments}
+                      clients={clients}
+                      isSelf={currentUser?.id === u.id}
+                      showToast={showToast}
+                      onCancel={() => setEditingId(null)}
+                      onSaved={async () => {
+                        setEditingId(null);
+                        await fetchAll();
+                        reloadUsers().catch(() => {});
+                      }}
+                    />
+                  )}
+
+                  {/* Khoá API / mật khẩu tạm vừa cấp — hiện đúng một lần, backend chỉ giữ bản băm */}
+                  {secret?.uid === u.id && (
                     <div className="mt-3 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl space-y-2">
                       <p className="text-[11px] font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
                         <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                        Sao chép ngay — khoá này không hiển thị lại lần nào nữa
+                        {secret.kind === 'password'
+                          ? `Mật khẩu tạm của ${secret.who} — chép ngay, không hiển thị lại lần nào nữa`
+                          : 'Sao chép ngay — khoá này không hiển thị lại lần nào nữa'}
                       </p>
-                      <code className="block bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-900 rounded-lg p-2.5 font-mono text-[11px] text-slate-900 dark:text-slate-100 break-all select-all">
-                        {newKey.key}
+                      <code className="block bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-900 rounded-lg p-2.5 font-mono text-[13px] tracking-wide text-slate-900 dark:text-slate-100 break-all select-all">
+                        {secret.value}
                       </code>
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           onClick={() => {
                             navigator.clipboard
-                              ?.writeText(newKey.key)
-                              .then(() => showToast('Đã sao chép khoá API.', 'success'))
+                              ?.writeText(secret.value)
+                              .then(() =>
+                                showToast(
+                                  secret.kind === 'password' ? 'Đã sao chép mật khẩu tạm.' : 'Đã sao chép khoá API.',
+                                  'success'
+                                )
+                              )
                               .catch(() => showToast('Không sao chép được, hãy chọn và copy tay.', 'error'));
                           }}
                           className="px-2.5 py-1 bg-hds-navy hover:bg-hds-navy-light text-white text-[11px] font-bold rounded-lg inline-flex items-center gap-1 transition-colors"
@@ -638,17 +960,26 @@ export const UserManagementTab: React.FC = () => {
                           Sao chép
                         </button>
                         <button
-                          onClick={() => setNewKey(null)}
+                          onClick={() => setSecret(null)}
                           className="px-2.5 py-1 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-300 dark:border-slate-700 text-[11px] font-semibold rounded-lg transition-colors"
                         >
                           Tôi đã lưu, ẩn đi
                         </button>
                       </div>
                       <p className="text-[10px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                        Khách gửi khoá này ở header{' '}
-                        <code className="font-mono font-semibold">X-API-Key</code> khi gọi{' '}
-                        <code className="font-mono font-semibold">POST /chat/portal</code>. Phạm vi
-                        dữ liệu giống hệt khi đăng nhập web.
+                        {secret.kind === 'password' ? (
+                          <>
+                            Gửi riêng cho đúng người (không gửi vào nhóm chung). Lần đăng nhập
+                            đầu, hệ thống bắt họ đặt mật khẩu mới rồi mới cho làm việc.
+                          </>
+                        ) : (
+                          <>
+                            Khách gửi khoá này ở header{' '}
+                            <code className="font-mono font-semibold">X-API-Key</code> khi gọi{' '}
+                            <code className="font-mono font-semibold">POST /chat/portal</code>. Phạm
+                            vi dữ liệu giống hệt khi đăng nhập web.
+                          </>
+                        )}
                       </p>
                     </div>
                   )}
