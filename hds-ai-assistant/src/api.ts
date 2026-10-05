@@ -55,6 +55,12 @@ export const onMockFallback = ApiJs.onMockFallback as (
   listener: ((baseUrl: string) => void) | null
 ) => void;
 
+/** Báo khi máy chủ trả 403 "đang dùng mật khẩu tạm" (F-04) — AppContext nạp
+ *  lại /auth/me để hộp bắt đổi mật khẩu hiện ra. */
+export const onMustChangePassword = ApiJs.onMustChangePassword as (
+  listener: (() => void) | null
+) => void;
+
 /** Ép về số nguyên hợp lệ, ngược lại null. */
 export const toIntOrNull = ApiJs.toIntOrNull as (value: unknown) => number | null;
 
@@ -88,8 +94,9 @@ export const chatStream = ApiJs.chatStream as (
     use_method?: boolean;
     model?: string;
     source_document_ids?: number[];
-    /** Tab "Kiểm tra pháp lý": 'legal_review' — chỉ vai nội bộ. */
-    mode?: 'legal_review' | 'template_check' | null;
+    /** Tab "Kiểm tra pháp lý": 'legal_review', 'template_check' và ba công cụ
+     *  'du_bao_tranh_tung' / 'chuan_bi_phien_toa' / 'dich_ban_dia_hoa'. */
+    mode?: import('./types').ChatStreamMode | null;
     /** Điền chủ thể vào file mẫu này (kệ HỢP ĐỒNG MẪU / THƯ MẪU). */
     template_doc_id?: number | null;
     /** "Tạo bộ file": AI tự lên danh sách văn bản cần soạn từ hồ sơ đính kèm. */
@@ -277,6 +284,25 @@ export const chatPortal = ApiJs.chatPortal as (params: {
   conversation_id?: number | null;
 }) => Promise<ChatResponse>;
 
+/** Nút model ngoài (ChatGPT) nào dùng được lúc này — giữ đệm 60 giây. */
+export const getAiNgoaiCauHinh = ApiJs.getAiNgoaiCauHinh as (
+  force?: boolean
+) => Promise<import('./types').AiNgoaiCauHinh>;
+
+/** Model ngoài soát một câu trả lời (SSE → done.ket_qua). */
+export const aiSoat = ApiJs.aiSoat as (
+  messageId: number,
+  opts?: { lamLai?: boolean; signal?: AbortSignal },
+  onEvent?: (evt: import('./types').AiNgoaiEvent) => void
+) => Promise<{ type: 'done'; ket_qua: import('./types').AiSoatKetQua }>;
+
+/** Model ngoài trả lời lại câu hỏi của lượt này (SSE → done.ket_qua). */
+export const cauTraLoiKhac = ApiJs.cauTraLoiKhac as (
+  messageId: number,
+  opts?: { lamLai?: boolean; signal?: AbortSignal },
+  onEvent?: (evt: import('./types').AiNgoaiEvent) => void
+) => Promise<{ type: 'done'; ket_qua: import('./types').AiKhacKetQua }>;
+
 export const getChatHistory = ApiJs.getChatHistory as (
   conversationId?: number | null,
   limit?: number
@@ -400,6 +426,12 @@ export const saveReviewContent = ApiJs.saveReviewContent as (
     trang_thai_hieu_luc: string | null;
   };
 }>;
+
+/** Gợi ý lý do sửa nội dung trích xuất (POST /review/{id}/goi-y-ly-do). */
+export const goiYLyDoSua = ApiJs.goiYLyDoSua as (
+  id: number,
+  content: string
+) => Promise<import('./types').GoiYLyDoSua>;
 
 export const getPendingLearns = ApiJs.getPendingLearns as () => Promise<PendingLearnMessage[]>;
 
@@ -528,6 +560,11 @@ export const updateClientProfile = ApiJs.updateClientProfile as (
 ) => Promise<{ ok?: boolean; client_id?: number }>;
 
 export const getDepartments = ApiJs.getDepartments as () => Promise<Department[]>;
+
+export const updateClientDepartment = ApiJs.updateClientDepartment as (
+  clientId: number,
+  departmentId: number | null
+) => Promise<import('./types').ClientDepartmentResult>;
 
 export const getMatterAlerts = ApiJs.getMatterAlerts as (
   limit?: number
@@ -741,6 +778,25 @@ export const raSoatHopDong = ApiJs.raSoatHopDong as (params: {
 export const exportRaSoat = ApiJs.exportRaSoat as (
   ket_qua: import('./types').RaSoatKetQua, tieu_de?: string, filename?: string
 ) => Promise<void>;
+
+// ============ Lịch chạy tự động (01/10/2026) ============
+export const getLichChay = ApiJs.getLichChay as () => Promise<import('./types').LichChay[]>;
+export const datLichChay = ApiJs.datLichChay as (ma: string, bat: boolean) => Promise<import('./types').LichChay>;
+export const caiLichChay = ApiJs.caiLichChay as (ma: string) => Promise<import('./types').LichChay>;
+
+// ============ Khoá API tích hợp cho hệ thống ngoài (28/09/2026) ============
+export const getKhoaTichHopQuyen = ApiJs.getKhoaTichHopQuyen as () => Promise<import('./types').QuyenTichHopResponse>;
+export const getKhoaTichHop = ApiJs.getKhoaTichHop as () => Promise<import('./types').KhoaTichHop[]>;
+export const taoKhoaTichHop = ApiJs.taoKhoaTichHop as (data: {
+  ten: string; nguon: string; quyen: string[]; user_id?: number | null; ghi_chu?: string | null;
+}) => Promise<import('./types').KhoaTichHopMoi>;
+export const suaKhoaTichHop = ApiJs.suaKhoaTichHop as (
+  id: number,
+  data: { quyen?: string[]; ten?: string }
+) => Promise<{ ok: boolean; id: number; ten: string; quyen: string[]; user_id: number | null }>;
+export const thuHoiKhoaTichHop = ApiJs.thuHoiKhoaTichHop as (
+  id: number
+) => Promise<{ ok: boolean; id: number; ten: string }>;
 
 // ============ Bật/tắt chức năng cho tài khoản (20/09/2026) ============
 export const getTinhNang = ApiJs.getTinhNang as () => Promise<import('./types').TinhNangResponse>;

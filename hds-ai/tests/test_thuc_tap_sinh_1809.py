@@ -71,17 +71,18 @@ class QuyenMoTaiLieuTrongChatTests(unittest.TestCase):
          "access_level": "internal", "department_id": None, "client_id": None},
         {"chunk_id": 3, "document_id": 12, "title": "Tờ trình 285", "doc_type": "ho_so_kh",
          "access_level": "client", "department_id": None, "client_id": 172},
-        # Đoạn không mang access_level (nguồn khác) — giữ nguyên, không đoán.
+        # Đoạn CỦA KHO không mang access_level — từ 05/10/2026 CHẶN (fail-closed):
+        # đoạn liền kề từng thiếu cột này và lọt qua chốt (mẫu HĐ HDS với trợ lý).
         {"chunk_id": 4, "document_id": 13, "title": "Ghi chú", "doc_type": "other"},
     ]
 
     def test_tro_ly_bi_khoa_ho_so_ns_va_ho_so_khach(self):
         ok, khoa = rag.loc_theo_quyen_mo(self.CHUNKS, "tro_ly", [1], False,
                                          dept_codes=["htpl-tvtx"], rules=self.RULES)
-        self.assertEqual([c["chunk_id"] for c in ok], [1, 4])
-        self.assertEqual([c["chunk_id"] for c in khoa], [2, 3])
+        self.assertEqual([c["chunk_id"] for c in ok], [1])
+        self.assertEqual([c["chunk_id"] for c in khoa], [2, 3, 4])
         ten = rag._ten_khoa(khoa)
-        self.assertEqual(len(ten), 2)
+        self.assertEqual(len(ten), 3)
         # Tên bị CHE, không lộ "Ngân — CCCD".
         self.assertFalse(any("CCCD" in t or "Ngân" in t for t in ten))
 

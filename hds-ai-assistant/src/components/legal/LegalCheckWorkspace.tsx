@@ -4,6 +4,7 @@ import * as api from '../../api';
 import type {
   BoMau,
   ChatMessage,
+  ChatStreamMode,
   ConversationSummary,
   RaSoatKetQua,
   RaSoatLoai,
@@ -33,7 +34,46 @@ import {
   Plus,
   Trash2,
   ShieldAlert,
+  Gavel,
+  Swords,
+  Languages,
 } from 'lucide-react';
+
+/** Ba công cụ tranh tụng / dịch (03/10/2026) — mỗi nút là một lượt /chat/stream
+ *  với `mode` riêng, giống hệt nút "Phân tích pháp lý" nhưng đổi chế độ. Ô nhập
+ *  trống thì gửi câu mặc định; phải có hồ sơ đính kèm hoặc chữ trong ô nhập. */
+const CONG_CU_PHAP_LY: Array<{
+  mode: Extract<ChatStreamMode, 'du_bao_tranh_tung' | 'chuan_bi_phien_toa' | 'dich_ban_dia_hoa'>;
+  label: string;
+  title: string;
+  cauMacDinh: string;
+  icon: React.ComponentType<{ className?: string }>;
+}> = [
+  {
+    mode: 'du_bao_tranh_tung',
+    label: 'Dự báo tranh tụng',
+    title: 'Dựa trên các bản án tương tự trong kho; mang tính tham khảo định hướng',
+    cauMacDinh:
+      'Dự báo kết quả tranh tụng cho vụ việc trong hồ sơ đính kèm: khả năng thắng, rủi ro chính, các bản án tương tự trong kho.',
+    icon: Gavel,
+  },
+  {
+    mode: 'chuan_bi_phien_toa',
+    label: 'Chuẩn bị phiên toà',
+    title: 'AI đóng vai luật sư đối phương để tìm điểm yếu của hồ sơ',
+    cauMacDinh:
+      'Chuẩn bị phiên toà cho hồ sơ đính kèm: luận cứ chính, câu hỏi phía đối phương có thể đặt ra và cách trả lời, chứng cứ còn yếu.',
+    icon: Swords,
+  },
+  {
+    mode: 'dich_ban_dia_hoa',
+    label: 'Dịch & bản địa hoá',
+    title: 'Dịch kèm bảng thuật ngữ và điểm lệch với pháp luật Việt Nam',
+    cauMacDinh:
+      'Dịch hợp đồng đính kèm sang tiếng Việt theo từng điều và chỉ ra điểm cần điều chỉnh cho phù hợp pháp luật Việt Nam.',
+    icon: Languages,
+  },
+];
 
 /** Rà soát rủi ro theo danh mục điều khoản chuẩn (kế hoạch ngày 7–8). */
 const RA_SOAT_BADGE: Record<string, { label: string; cls: string }> = {
@@ -417,6 +457,8 @@ export const LegalCheckWorkspace: React.FC = () => {
       sources: m.evidence ?? m.sources,
       grounding_status: m.grounding_status,
       answer_mode: m.answer_mode,
+      ai_soat: m.ai_soat ?? null,
+      ai_khac: m.ai_khac ?? null,
     }));
 
   /** Mở lại một phiên cũ: nạp toàn bộ tin nhắn + các file đính kèm CÒN HẠN.
@@ -542,6 +584,8 @@ export const LegalCheckWorkspace: React.FC = () => {
     templateDocId?: number,
     makeFiles?: boolean,
     checkTemplate?: boolean,
+    /** Chế độ của ba công cụ tranh tụng / dịch — đè lên cách chọn mode mặc định. */
+    modeOverride?: ChatStreamMode,
   ) => {
     if (sessionCache.busy || uploading) return;
     // Lượt này thuộc về người đang đăng nhập BÂY GIỜ: đổi người giữa chừng là
@@ -574,15 +618,18 @@ export const LegalCheckWorkspace: React.FC = () => {
         {
           question,
           conversation_id: conv,
-          use_temp: attachments.length > 0,
+          // Chỉ file ĐÃ ĐỌC XONG mới có nội dung trên máy chủ.
+          use_temp: attachments.some((a) => a.status !== 'uploading'),
           // Điền mẫu / tạo bộ file là luồng trả lời trực tiếp; các câu hỏi
           // thường đi chế độ rà soát pháp lý (prompt riêng + ưu tiên kệ luật).
           // Đối chiếu với mẫu: mode riêng + mẫu đã chọn, KHÔNG đi luồng điền mẫu.
-          mode: checkTemplate
-            ? 'template_check'
-            : templateDocId || makeFiles
-              ? undefined
-              : 'legal_review',
+          mode: modeOverride
+            ? modeOverride
+            : checkTemplate
+              ? 'template_check'
+              : templateDocId || makeFiles
+                ? undefined
+                : 'legal_review',
           template_doc_id: templateDocId ?? undefined,
           make_files: makeFiles || undefined,
           // Bộ mẫu đang chọn: máy chủ chỉ dùng khi lượt là lệnh tạo file.
@@ -742,6 +789,20 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
     void send(q, selectedTemplate?.id, true);
   };
 
+  /** Ba công cụ tranh tụng / dịch: cần hồ sơ đính kèm (đã đọc xong) hoặc mô
+   *  tả vụ việc trong ô nhập. Ô nhập có chữ thì chữ đó là câu hỏi. */
+  const handleCongCu = (cc: (typeof CONG_CU_PHAP_LY)[number]) => {
+    if (busy || uploading) return;
+    const extra = input.trim();
+    const coDinhKem = attachments.some((a) => a.status !== 'uploading');
+    if (!extra && !coDinhKem) {
+      showToast('Đính kèm hồ sơ hoặc mô tả vụ việc trước đã.', 'info');
+      return;
+    }
+    setTemplateOpen(false);
+    void send(extra || cc.cauMacDinh, undefined, false, false, cc.mode);
+  };
+
   // Nhi (29/08/2026): "kiểm tra biểu mẫu của nhân viên khi up lên có đúng mẫu
   // quy định của công ty không". Cần cả file đính kèm lẫn mẫu đã chọn.
   const handleCheckTemplate = () => {
@@ -868,6 +929,7 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
               <li>3. Chọn mẫu ở nút "Chọn file mẫu" rồi bấm "Tạo file mẫu" — AI thay chủ thể vào đúng file gốc.</li>
               <li>4. Hoặc bấm "Tạo bộ file" — AI tự lên danh sách văn bản (nghiệm thu, đề nghị thanh toán các đợt…) và soạn từng file từ hồ sơ.</li>
               <li>5. Chọn "Bộ mẫu" (nhóm .docx tải lên ở Quản trị → Bộ mẫu hồ sơ) rồi "Điền bộ này" — AI điền thông tin khách vào từng file của bộ.</li>
+              <li>6. Vụ tranh chấp / hợp đồng nước ngoài: "Dự báo tranh tụng", "Chuẩn bị phiên toà" hoặc "Dịch &amp; bản địa hoá" — đính kèm hồ sơ hoặc mô tả vụ việc trước.</li>
             </ul>
             <p className="text-[11px] italic">
               File đính kèm chỉ dùng trong hội thoại này, tự xoá sau 6 giờ, không vào kho tri thức.
@@ -1059,6 +1121,22 @@ _(Người dùng đã dừng câu trả lời giữa chừng.)_`
               <ShieldAlert className="w-3.5 h-3.5" />
               Rà soát rủi ro
             </button>
+            {CONG_CU_PHAP_LY.map((cc) => {
+              const Icon = cc.icon;
+              return (
+                <button
+                  key={cc.mode}
+                  type="button"
+                  onClick={() => handleCongCu(cc)}
+                  disabled={busy || uploading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-hds-navy dark:text-blue-300 text-xs font-bold hover:border-hds-gold hover:bg-hds-soft dark:hover:bg-slate-800 disabled:opacity-50 transition-colors"
+                  title={cc.title}
+                >
+                  <Icon className="w-3.5 h-3.5 text-hds-gold" />
+                  {cc.label}
+                </button>
+              );
+            })}
             {selectedTemplate && (
               <button
                 type="button"

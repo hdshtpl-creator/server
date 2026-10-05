@@ -17,6 +17,20 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- TÌM TỪ KHOÁ DƯỚI RLS (04/10/2026): toán tử tsvector @@ tsquery (hàm
+-- ts_match_vq) mặc định KHÔNG leakproof, nên với tài khoản ứng dụng (có RLS)
+-- Postgres không được dùng nó làm điều kiện chỉ mục — mọi lượt tìm từ khoá
+-- QUÉT TUẦN TỰ 2 triệu đoạn (3–15 giây, đọc ~8 GB, đẩy chỉ mục vector ra khỏi
+-- bộ nhớ đệm). Hàm chỉ trả đúng/sai, không có hiệu ứng phụ: đánh dấu leakproof
+-- để chỉ mục GIN idx_chunks_fts được dùng. Cần superuser (tài khoản hds của
+-- container là superuser); không có quyền thì bỏ qua, không làm hỏng lượt cập nhật.
+DO $$
+BEGIN
+  ALTER FUNCTION ts_match_vq(tsvector, tsquery) LEAKPROOF;
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE 'Bo qua LEAKPROOF ts_match_vq: can superuser';
+END $$;
+
 CREATE TABLE IF NOT EXISTS departments (
   id    SERIAL PRIMARY KEY,
   code  TEXT UNIQUE NOT NULL,
@@ -359,6 +373,14 @@ CREATE TABLE IF NOT EXISTS messages (
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS answer_mode TEXT;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS grounding_status TEXT;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS evidence JSONB;
+-- 04/10/2026 — ChatGPT làm việc song song (app/ai_ngoai.py):
+--   tham_so : tham số của lượt hỏi (chế độ, đính kèm, tài liệu ghim) để "Xem
+--             câu trả lời khác" hỏi lại ĐÚNG như lượt gốc;
+--   ai_soat : kết quả model ngoài soát câu trả lời (kết luận, ghi chú, chi phí);
+--   ai_khac : câu trả lời khác của model ngoài + nguồn của nó.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS tham_so JSONB;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS ai_soat JSONB;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS ai_khac JSONB;
 CREATE INDEX IF NOT EXISTS idx_msg_review ON messages(review_status) WHERE review_status='pending';
 CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_msg_conv_desc ON messages(conversation_id, id DESC);
@@ -950,3 +972,154 @@ GRANT USAGE, SELECT ON SEQUENCE leads_id_seq TO hds_app;
 -- Nhớ md5 của tệp lúc hỏng: lượt sau tệp còn nguyên md5 thì bỏ qua, chỉ thử
 -- lại khi NỘI DUNG đổi (người sửa/quét lại) hoặc khi chạy tay --thu-lai-loi.
 ALTER TABLE ingest_failures ADD COLUMN IF NOT EXISTS checksum TEXT;
+
+-- ============================================================
+-- BẬT/TẮT TỪNG CHỨC NĂNG CHO MỘT TÀI KHOẢN (20/09/2026)
+-- ------------------------------------------------------------
+-- Yêu cầu chủ dự án: tài khoản khách phải gắn với hồ sơ khách VÀ tick được
+-- từng chức năng (hỏi đáp, đính kèm tệp, tải tài liệu, kiểm tra pháp lý,
+-- soạn thảo) kèm hạn mức câu hỏi.
+--
+-- NULL = theo mặc định của vai (khách: chỉ hỏi đáp; nội bộ: mở hết) — tài
+-- khoản đã có từ trước không đổi hành vi sau khi nâng cấp. Xem
+-- app/quyen_tinh_nang.py; đây là lớp THỨ HAI, không thay cho khoá dòng RLS:
+-- bật hết chức năng thì khách vẫn chỉ thấy hồ sơ của chính mình.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS features JSONB;
+
+-- ============================================================
+-- ĐƯA VÀO VẬN HÀNH CHÍNH THỨC: MẬT KHẨU TẠM + MỐC ĐĂNG NHẬP (22/09/2026)
+-- ------------------------------------------------------------
+-- must_change_password: tài khoản vừa tạo / vừa được quản trị đặt lại mật
+-- khẩu đang dùng mật khẩu tạm mà quản trị viên cũng biết. Giao diện bắt đổi
+-- trước khi cho làm việc; đổi xong (POST /auth/change-password) thì cờ tắt.
+-- last_login_at: để rà tài khoản chưa từng đăng nhập / lâu không dùng
+-- (app/ra_soat_tai_khoan.py) trước khi quyết định khoá.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+
+-- ============================================================
+-- KHOÁ API TÍCH HỢP CÓ QUYỀN + TÀI LIỆU NHẬN TỪ HỆ THỐNG NGOÀI (28/09/2026)
+-- ------------------------------------------------------------
+-- Bối cảnh: CRM của công ty sẽ là nơi DUY NHẤT lưu/sửa hồ sơ khách và hợp
+-- đồng; kho của trợ lý AI chỉ giữ bản sao để trả lời, nhận qua API
+-- (app/tich_hop.py, deploy/API_TICH_HOP.md). Sau này bên thứ ba gắn chatbot
+-- cũng đi cửa này với khoá chỉ có quyền 'chat'.
+--
+-- khoa_tich_hop: khoá `hdsi_…` gắn với MỘT HỆ THỐNG (không phải người dùng),
+-- mang danh sách quyền admin tick lúc cấp. CSDL chỉ giữ bản băm SHA-256;
+-- key_dau (12 ký tự đầu) để nhận diện khoá trong danh sách. `nguon` là tên
+-- không gian mã ngoài ('crm'): thu hồi rồi cấp khoá mới cùng nguồn thì dữ
+-- liệu đã gửi vẫn nhận ra. user_id: tài khoản KHÁCH đại diện khi khoá có
+-- quyền 'chat' (phạm vi dữ liệu = của khách đó, đúng lằn ranh RLS).
+CREATE TABLE IF NOT EXISTS khoa_tich_hop (
+  id            SERIAL PRIMARY KEY,
+  ten           TEXT NOT NULL,
+  nguon         TEXT NOT NULL,
+  key_hash      TEXT UNIQUE NOT NULL,
+  key_dau       TEXT NOT NULL,
+  quyen         JSONB NOT NULL DEFAULT '[]'::jsonb,
+  user_id       INT REFERENCES users(id),
+  ghi_chu       TEXT,
+  created_by    INT REFERENCES users(id),
+  created_at    TIMESTAMPTZ DEFAULT now(),
+  last_used_at  TIMESTAMPTZ,
+  so_lan_goi    BIGINT NOT NULL DEFAULT 0,
+  revoked_at    TIMESTAMPTZ,
+  revoked_by    INT REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_khoa_tich_hop_nguon ON khoa_tich_hop(nguon);
+
+-- tich_hop_tai_lieu: ánh xạ (nguồn, mã ngoài của CRM) ↔ tệp trong kho.
+-- khoa_kho = documents.drive_file_id dạng 'local:<đường dẫn>' — cố ý KHÔNG
+-- lưu documents.id vì id đổi mỗi lần học lại (learn_one DELETE + INSERT).
+-- trang_thai chỉ là mốc của hàng đợi (da_nhan/dang_hoc/loi/da_go); "đã học
+-- hay chờ duyệt" luôn suy từ documents lúc đọc để không lệch với việc người
+-- duyệt tay trên web.
+CREATE TABLE IF NOT EXISTS tich_hop_tai_lieu (
+  nguon         TEXT NOT NULL,
+  ma_ngoai      TEXT NOT NULL,
+  khoa_kho      TEXT NOT NULL,
+  checksum      TEXT,
+  client_id     INT REFERENCES clients(id),
+  ten_file      TEXT,
+  trang_thai    TEXT NOT NULL DEFAULT 'da_nhan',
+  loi           TEXT,
+  meta          JSONB,
+  khoa_id       INT REFERENCES khoa_tich_hop(id),
+  created_at    TIMESTAMPTZ DEFAULT now(),
+  updated_at    TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (nguon, ma_ngoai)
+);
+CREATE INDEX IF NOT EXISTS idx_tich_hop_tai_lieu_kho ON tich_hop_tai_lieu(khoa_kho);
+CREATE INDEX IF NOT EXISTS idx_tich_hop_tai_lieu_khach ON tich_hop_tai_lieu(nguon, client_id);
+
+-- Mã của khách bên hệ thống ngoài (id khách trong CRM) để CRM tra lại khách
+-- theo id của họ; mã HDS vẫn là clients.code (số trong tên thư mục).
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS ma_ngoai TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS nguon_ngoai TEXT;
+CREATE INDEX IF NOT EXISTS idx_clients_ma_ngoai ON clients(nguon_ngoai, ma_ngoai)
+  WHERE ma_ngoai IS NOT NULL;
+
+GRANT SELECT, INSERT, UPDATE ON khoa_tich_hop, tich_hop_tai_lieu TO hds_app;
+GRANT USAGE, SELECT ON SEQUENCE khoa_tich_hop_id_seq TO hds_app;
+
+-- ============================================================
+-- MÁY CHỦ LÀ NƠI GIỮ BẢN GỐC DUY NHẤT — CRM CHỈ LÀ ĐẦU CẦU (29/09/2026)
+-- ------------------------------------------------------------
+-- Chủ dự án chốt 29/09: CRM không giữ tệp, chỉ gọi API; toàn bộ dữ liệu gốc
+-- (hồ sơ khách + hồ sơ nhân viên) nằm trên máy chủ. Hệ quả:
+--  · CRM tải về được MỌI tệp của một khách / nhân viên, kể cả tệp cũ không
+--    do CRM gửi (gắn mã ngoài cho tệp cũ bằng /tep/gan-ma);
+--  · bản cũ không được mất khi CRM gửi bản sửa / đổi tên / gỡ — chép sang
+--    data/_phien_ban/<nguồn>/<mã ngoài>/ và ghi một dòng ở bảng dưới;
+--  · nhân viên có bộ API riêng như khách (ngăn "8. HỒ SƠ NHÂN SỰ/<tên>").
+CREATE TABLE IF NOT EXISTS tich_hop_phien_ban (
+  id            SERIAL PRIMARY KEY,
+  nguon         TEXT NOT NULL,
+  ma_ngoai      TEXT NOT NULL,
+  so            INT NOT NULL,
+  ten_file      TEXT,
+  checksum      TEXT,
+  kich_thuoc    BIGINT,
+  duong_dan_luu TEXT NOT NULL,
+  ly_do         TEXT,                       -- thay_ban | doi_ten | go
+  created_at    TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (nguon, ma_ngoai, so)
+);
+GRANT SELECT, INSERT ON tich_hop_phien_ban TO hds_app;
+GRANT USAGE, SELECT ON SEQUENCE tich_hop_phien_ban_id_seq TO hds_app;
+
+-- Ánh xạ tài liệu giờ thuộc KHÁCH hoặc NHÂN VIÊN.
+ALTER TABLE tich_hop_tai_lieu ADD COLUMN IF NOT EXISTS loai TEXT NOT NULL DEFAULT 'khach';
+ALTER TABLE tich_hop_tai_lieu ADD COLUMN IF NOT EXISTS employee_id INT REFERENCES employees(id);
+CREATE INDEX IF NOT EXISTS idx_tich_hop_tai_lieu_nv ON tich_hop_tai_lieu(nguon, employee_id);
+
+-- Nhân viên: thư mục hồ sơ trong ngăn nhân sự + mã bên hệ thống ngoài.
+-- thu_muc = TÊN thư mục con dưới "8. HỒ SƠ NHÂN SỰ" (vd "Ngân"): kho đang có
+-- thư mục theo tên người, chưa có mã nhân viên, nên phải ghi rõ gắn với nhau.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS thu_muc TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS ma_ngoai TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS nguon_ngoai TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_thu_muc ON employees(thu_muc)
+  WHERE thu_muc IS NOT NULL;
+
+-- ============================================================
+-- API TÍCH HỢP ĐỔI SANG TIẾNG ANH (29/09/2026)
+-- ------------------------------------------------------------
+-- Đường dẫn /tich-hop/v1 → /integration/v1, tên trường JSON tiếng Anh, mã
+-- quyền tiếng Anh. Đổi mã quyền của các khoá ĐÃ cấp (khoá thử của chủ dự án);
+-- chạy lại vô hại vì chỉ đụng dòng còn mã cũ. Mã nguồn vẫn hiểu mã cũ
+-- (tich_hop.QUYEN_CU) phòng khi CSDL chưa chạy tới đây.
+UPDATE khoa_tich_hop k
+   SET quyen = (SELECT coalesce(jsonb_agg(DISTINCT CASE x
+                   WHEN 'khach:doc' THEN 'clients:read'
+                   WHEN 'khach:ghi' THEN 'clients:write'
+                   WHEN 'nhan_vien:doc' THEN 'employees:read'
+                   WHEN 'nhan_vien:ghi' THEN 'employees:write'
+                   WHEN 'tai_lieu:doc' THEN 'documents:read'
+                   WHEN 'tai_lieu:ghi' THEN 'documents:write'
+                   WHEN 'tai_lieu:xoa' THEN 'documents:delete'
+                   ELSE x END), '[]'::jsonb)
+                  FROM jsonb_array_elements_text(k.quyen) AS t(x))
+ WHERE k.quyen ?| array['khach:doc','khach:ghi','nhan_vien:doc','nhan_vien:ghi',
+                        'tai_lieu:doc','tai_lieu:ghi','tai_lieu:xoa'];

@@ -87,7 +87,7 @@ EOF
     echo "✓ Đã gỡ lịch quét kho."
     ;;
   --install-cron)
-    # Lịch 15 phút bằng crontab của user chạy backend — dùng khi không có root.
+    # Lịch 3 phút bằng crontab của user chạy backend — dùng khi không có root.
     command -v crontab >/dev/null || { echo "Máy không có crontab — dùng --install-timer (cần root)."; exit 1; }
     command -v flock   >/dev/null || { echo "Thiếu lệnh flock (gói util-linux) — không cài được."; exit 1; }
     if systemctl list-unit-files 2>/dev/null | grep -q '^hds-ai-quet-kho.timer'; then
@@ -120,7 +120,7 @@ EOF
     exec 9>"/tmp/hds-ai-quet-kho.lock"
     flock -n 9 || exit 0
     # Bộ quét thật đang chạy chỗ khác (cmdline kết thúc đúng ở app.local_learn;
-    # --dry-run không tính) → nhường, 15 phút nữa cron gọi lại.
+    # --dry-run không tính) → nhường, 3 phút nữa cron gọi lại.
     pgrep -f 'python -m app\.local_learn$' >/dev/null 2>&1 && exit 0
     LOG="$BACKEND_DIR/data/quet_kho.log"
     HIST="$BACKEND_DIR/data/quet_kho_lich_su.log"

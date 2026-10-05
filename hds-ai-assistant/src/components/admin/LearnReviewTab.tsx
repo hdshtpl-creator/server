@@ -14,6 +14,20 @@ import {
   Globe,
 } from 'lucide-react';
 
+/** Lý do chọn nhanh — bấm là điền vào ô lý do, người duyệt vẫn gõ thêm được.
+ *  Kế hoạch nghiệm thu: mọi bản hiệu chỉnh phải có lý do (luật thay đổi, rủi
+ *  ro, yêu cầu khách hàng…) để sau này truy được vì sao AI trả lời khác đi. */
+const LY_DO_NHANH = [
+  'Luật thay đổi',
+  'Rủi ro',
+  'Yêu cầu khách hàng',
+  'Sửa nội dung sai',
+  'Khác',
+] as const;
+
+const THIEU_LY_DO =
+  'Cần ghi lý do hiệu chỉnh trước khi lưu (luật thay đổi / rủi ro / yêu cầu khách hàng / …).';
+
 interface ItemState {
   edited_content: string;
   edit_reason: string;
@@ -74,14 +88,29 @@ export const LearnReviewTab: React.FC = () => {
     setItemStates((prev) => ({ ...prev, [msgId]: { ...EMPTY, ...prev[msgId], ...patch } }));
   };
 
-  const handleAction = async (msgId: number, action: 'approve' | 'edit' | 'reject') => {
+  const handleAction = async (
+    msgId: number,
+    requested: 'approve' | 'edit' | 'reject',
+    originalAnswer: string
+  ) => {
     const key = String(msgId);
     const state = itemStates[key];
     if (!state) return;
 
-    if (action === 'edit' && !state.edited_content.trim()) {
-      showToast('Nội dung hiệu chỉnh không được để trống.', 'error');
-      return;
+    // "Đạt — nạp học" sau khi đã sửa nội dung: gửi như một bản hiệu chỉnh.
+    // Gửi 'approve' thì máy chủ nạp câu GỐC và bản sửa trên màn hình mất trắng.
+    const isEdited = state.edited_content !== originalAnswer;
+    const action = requested === 'approve' && isEdited ? 'edit' : requested;
+
+    if (action === 'edit') {
+      if (!state.edited_content.trim()) {
+        showToast('Nội dung hiệu chỉnh không được để trống.', 'error');
+        return;
+      }
+      if (!state.edit_reason.trim()) {
+        showToast(THIEU_LY_DO, 'error');
+        return;
+      }
     }
 
     patchState(key, { isSubmitting: true });
@@ -90,7 +119,7 @@ export const LearnReviewTab: React.FC = () => {
       await api.reviewLearnMessage(msgId, {
         action,
         edited_content: action === 'edit' ? state.edited_content : undefined,
-        edit_reason: action === 'edit' ? state.edit_reason : undefined,
+        edit_reason: action === 'edit' ? state.edit_reason.trim() : undefined,
         access_level: state.access_level,
       });
 
@@ -105,6 +134,8 @@ export const LearnReviewTab: React.FC = () => {
       setMessages((prev) => prev.filter((m) => m.message_id !== msgId));
     } catch (err: any) {
       patchState(key, { isSubmitting: false });
+      // 422 của máy chủ ("Cần ghi lý do hiệu chỉnh …", "Nội dung hiệu chỉnh
+      // không được để trống.") đi nguyên văn qua err.message.
       showToast(err?.message || 'Lỗi khi xử lý hội thoại', 'error');
     }
   };
@@ -162,6 +193,7 @@ export const LearnReviewTab: React.FC = () => {
               isSubmitting: false,
             };
             const isEdited = state.edited_content !== msg.answer;
+            const thieuLyDo = isEdited && !state.edit_reason.trim();
 
             return (
               <div
@@ -235,14 +267,52 @@ export const LearnReviewTab: React.FC = () => {
                   />
                 </div>
 
-                <input
-                  type="text"
-                  placeholder="Lý do hiệu chỉnh (không bắt buộc)…"
-                  value={state.edit_reason}
-                  onChange={(e) => patchState(key, { edit_reason: e.target.value })}
-                  aria-label="Lý do hiệu chỉnh"
-                  className="w-full px-3 py-2 border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 rounded-lg text-xs placeholder-slate-400 focus:ring-2 focus:ring-hds-blue focus:outline-none transition-colors"
-                />
+                {/* Lý do hiệu chỉnh — BẮT BUỘC khi lưu bản sửa (kể cả bấm
+                    "Đạt — nạp học" sau khi đã sửa). Máy chủ cũng chặn 422. */}
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                      Lý do hiệu chỉnh{isEdited ? ' *' : ''}:
+                    </span>
+                    {LY_DO_NHANH.map((lyDo) => {
+                      const active = state.edit_reason.trim() === lyDo;
+                      return (
+                        <button
+                          key={lyDo}
+                          type="button"
+                          onClick={() => patchState(key, { edit_reason: lyDo })}
+                          disabled={state.isSubmitting}
+                          aria-pressed={active}
+                          className={`px-2.5 py-1 rounded-full border text-[11px] font-semibold transition-colors disabled:opacity-50 ${
+                            active
+                              ? 'bg-hds-navy text-hds-gold border-hds-navy'
+                              : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          {lyDo}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Lý do hiệu chỉnh — bấm một lý do ở trên hoặc gõ cụ thể (vd: Nghị định mới thay thế…)"
+                    value={state.edit_reason}
+                    onChange={(e) => patchState(key, { edit_reason: e.target.value })}
+                    aria-label="Lý do hiệu chỉnh"
+                    aria-invalid={thieuLyDo || undefined}
+                    className={`w-full px-3 py-2 border dark:bg-slate-800 dark:text-slate-100 rounded-lg text-xs placeholder-slate-400 focus:ring-2 focus:ring-hds-blue focus:outline-none transition-colors ${
+                      thieuLyDo
+                        ? 'border-amber-400 dark:border-amber-700'
+                        : 'border-slate-200 dark:border-slate-700'
+                    }`}
+                  />
+                  {thieuLyDo && (
+                    <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                      Đã sửa nội dung — cần ghi lý do trước khi lưu hoặc nạp học.
+                    </p>
+                  )}
+                </div>
 
                 {/* Phạm vi bản ghi sẽ nạp — trước đây luôn là 'nội bộ' vì màn
                     hình không hỏi, nên câu trả lời hay mấy cũng không dùng được
@@ -276,7 +346,7 @@ export const LearnReviewTab: React.FC = () => {
                 {/* Ba hành động */}
                 <div className="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
                   <button
-                    onClick={() => handleAction(msg.message_id, 'reject')}
+                    onClick={() => handleAction(msg.message_id, 'reject', msg.answer)}
                     disabled={state.isSubmitting}
                     className="px-4 py-2 bg-red-50 dark:bg-red-950/50 hover:bg-red-100 dark:hover:bg-red-950 text-hds-red dark:text-red-300 border border-red-200 dark:border-red-900 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -285,7 +355,7 @@ export const LearnReviewTab: React.FC = () => {
                   </button>
 
                   <button
-                    onClick={() => handleAction(msg.message_id, 'edit')}
+                    onClick={() => handleAction(msg.message_id, 'edit', msg.answer)}
                     disabled={state.isSubmitting}
                     className="px-4 py-2 bg-hds-soft dark:bg-slate-800 hover:bg-blue-100 dark:hover:bg-slate-700 text-hds-navy dark:text-blue-300 border border-blue-200 dark:border-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -294,8 +364,13 @@ export const LearnReviewTab: React.FC = () => {
                   </button>
 
                   <button
-                    onClick={() => handleAction(msg.message_id, 'approve')}
+                    onClick={() => handleAction(msg.message_id, 'approve', msg.answer)}
                     disabled={state.isSubmitting}
+                    title={
+                      isEdited
+                        ? 'Đã sửa nội dung — sẽ nạp BẢN ĐÃ SỬA kèm lý do hiệu chỉnh'
+                        : 'Nạp nguyên câu trả lời hiện tại vào kho tri thức'
+                    }
                     className="px-5 py-2 bg-hds-green hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-sm flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <CheckCircle2 className="w-4 h-4" />

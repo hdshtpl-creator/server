@@ -83,6 +83,9 @@ export const Header: React.FC = () => {
 
   const role = ROLE_META[currentUser?.role as keyof typeof ROLE_META];
   const showAdminTab = canAccessAdmin(currentUser);
+  // Hai tab, hai chức năng riêng — khớp cổng hiển thị ở App.tsx
+  // (màn 'legal' cần 'kiem_tra', màn 'drafts' cần 'soan_thao').
+  const showLegalTab = coTinhNang(currentUser, 'kiem_tra');
   const showDraftsTab = coTinhNang(currentUser, 'soan_thao');
 
   const tabClass = (active: boolean) =>
@@ -138,7 +141,7 @@ export const Header: React.FC = () => {
               <span className="hidden sm:inline">Hội thoại AI</span>
             </button>
 
-            {showDraftsTab && (
+            {showLegalTab && (
               <button
                 id="nav-legal-btn"
                 onClick={() => setActiveView('legal')}

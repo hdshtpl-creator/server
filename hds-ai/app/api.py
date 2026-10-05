@@ -23,11 +23,13 @@ Xác thực: đăng nhập JWT.
   POST /auth/login {email,password} -> access_token
   Mọi request gửi kèm header: Authorization: Bearer <token>
 """
+import asyncio
 import json
 import os
 import re
 import threading
 import time
+import unicodedata
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -40,16 +42,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app import company_context, db, kho, rag, auth, settings, van_ban
-from app import ra_soat_rui_ro, so_sanh
+from app import dkkd_extract, lich_chay, quyen_tinh_nang, ra_soat_rui_ro, so_sanh, xem_truoc
+from app import ai_ngoai, models
 from app.admin_ui import ADMIN_HTML
 
-app = FastAPI(title="HDS AI", version="1.0")
+# Trang tài liệu API (/docs, /redoc, /openapi.json) TẮT mặc định: trước 03/10/2026
+# nó mở công khai ra Internet, lộ toàn bộ sơ đồ ~200 đường API (kiểm thử HT-04).
+# Nhà phát triển cần xem thì đặt API_DOCS=1 trong .env (chỉ nên làm ở máy thử).
+_API_DOCS = os.getenv("API_DOCS", "0").strip().lower() in ("1", "true", "yes")
+app = FastAPI(title="HDS AI", version="1.0",
+              docs_url="/docs" if _API_DOCS else None,
+              redoc_url="/redoc" if _API_DOCS else None,
+              openapi_url="/openapi.json" if _API_DOCS else None)
 
 # CORS chỉ cần khi giao diện chạy ở origin KHÁC backend (ví dụ frontend trên
 # Vercel gọi sang API). Khi deploy chung một máy chủ (nginx proxy /api cùng
 # origin) thì để trống CORS_ORIGINS — trình duyệt coi là cùng nguồn, không cần
 # CORS. Nhiều origin ngăn cách bằng dấu phẩy.
+#
+# Web ĐKKD (DKKD_ALLOWED_ORIGINS) gọi /dkkd/extract từ một origin khác nên tự
+# động được cộng vào đây — admin khai một chỗ, không phải nhớ khai hai lần
+# (quên là trình duyệt chặn ngay ở preflight, endpoint không bao giờ được gọi).
 _cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+_cors_origins += [o for o in dkkd_extract.ALLOWED_ORIGINS if o not in _cors_origins]
 if _cors_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -78,7 +93,8 @@ def _user_by_api_key(raw_key: str):
     return get_user(row[0])
 
 
-def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer),
+def current_user(request: Request,
+                 cred: HTTPAuthorizationCredentials = Depends(bearer),
                  x_api_key: str | None = Header(default=None, alias="X-API-Key")):
     """Nhận diện người gọi bằng MỘT trong hai cách:
 
@@ -96,7 +112,24 @@ def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer),
     payload = auth.decode_token(cred.credentials)
     if not payload:
         raise HTTPException(401, "Phiên đăng nhập hết hạn hoặc không hợp lệ")
-    return get_user(int(payload["sub"]))
+    user = get_user(int(payload["sub"]))
+    # Mật khẩu tạm do quản trị cấp: chặn ở MÁY CHỦ, không chỉ ở giao diện.
+    # Trước 03/10/2026 chỉ hộp đổi mật khẩu trên web chặn — gọi thẳng API bằng
+    # token của mật khẩu tạm vẫn hỏi đáp, tải tài liệu bình thường (kiểm thử
+    # TK-08). Chỉ chừa hai cửa cần để đổi mật khẩu.
+    if user.get("must_change_password") and _duong_dan(request) not in _CHO_PHEP_KHI_MK_TAM:
+        raise HTTPException(403, "Bạn đang dùng mật khẩu tạm do quản trị cấp — hãy đổi "
+                                 "mật khẩu trước khi tiếp tục.")
+    return user
+
+
+# Đường dẫn còn mở cho tài khoản đang dùng mật khẩu tạm (nginx bỏ tiền tố /api).
+_CHO_PHEP_KHI_MK_TAM = {"/auth/me", "/auth/change-password"}
+
+
+def _duong_dan(request: Request) -> str:
+    p = (request.url.path or "").rstrip("/") or "/"
+    return p[4:] if p.startswith("/api/") else p
 
 INTERNAL_ROLES = {"admin", "ban_qt", "truong_bph", "chuyen_vien", "tro_ly"}
 CLIENT_ROLES = {"client_free", "client_plus", "client_pro"}
@@ -119,9 +152,12 @@ def get_user(user_id):
                                     (date_trunc('month', now()) + interval '1 month')::date
                             WHERE id=%s AND quota_reset_at <= current_date""",
                         (user_id,))
-            cur.execute("""SELECT id,role,client_id,can_review,full_name,
-                           monthly_quota,used_this_month,can_view_finance
-                           FROM users WHERE id=%s AND active""", (user_id,))
+            cur.execute("""SELECT u.id,u.role,u.client_id,u.can_review,u.full_name,
+                           u.monthly_quota,u.used_this_month,u.can_view_finance,
+                           u.features, c.name, c.code,
+                           coalesce(u.must_change_password, false)
+                           FROM users u LEFT JOIN clients c ON c.id=u.client_id
+                           WHERE u.id=%s AND u.active""", (user_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(401, "Người dùng không tồn tại hoặc bị khóa")
@@ -139,7 +175,23 @@ def get_user(user_id):
             "is_banqt": row[1] in SEE_ALL,
             # Quyền xem công nợ: admin luôn có (là người đi cấp quyền), còn lại
             # phải được cấp từng người. Ban QT KHÔNG tự động có.
-            "can_finance": row[1] == "admin" or bool(row[7])}
+            "can_finance": row[1] == "admin" or bool(row[7]),
+            # Chức năng đã bật cho tài khoản này (20/09/2026). Tính MỘT LẦN ở
+            # đây để mọi chốt phía sau chỉ việc tra dict, không hỏi lại CSDL.
+            "features": quyen_tinh_nang.quyen_hieu_luc(row[1], row[8]),
+            # Tài khoản khách thuộc hồ sơ khách nào — trước 20/09/2026 không
+            # chỗ nào trả ra, nên nhìn màn hình không biết tài khoản của ai.
+            "client_name": row[9], "client_code": row[10],
+            # Đang dùng mật khẩu tạm do quản trị cấp — phải đổi trước khi làm việc.
+            "must_change_password": bool(row[11])}
+
+
+def _can_tinh_nang(user, ten: str):
+    """Chặn khi chức năng chưa được bật cho tài khoản này."""
+    if not quyen_tinh_nang.co_quyen(user, ten):
+        nhan = quyen_tinh_nang.TINH_NANG.get(ten, {}).get("ten", ten)
+        raise HTTPException(403, f"Tài khoản của bạn chưa được mở chức năng: {nhan}. "
+                                 "Liên hệ luật sư phụ trách của HDS.")
 
 
 def require(user, roles):
@@ -232,28 +284,78 @@ class LoginIn(BaseModel):
     password: str
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Băm của một chuỗi ngẫu nhiên, chỉ để verify_password vẫn tốn thời gian như
+# thật khi email không tồn tại — kẻ dò không phân biệt được "sai email" với
+# "sai mật khẩu" qua thời gian phản hồi.
+_DUMMY_HASH = auth.hash_password(auth.new_temp_password())
+
+
+def _chuan_hoa_email(email: str) -> str:
+    """Email là khoá đăng nhập: bỏ khoảng trắng, hạ chữ thường, kiểm tra dạng.
+
+    Trước 22/09/2026 tạo tài khoản lưu nguyên văn và đăng nhập so khớp đúng
+    từng ký tự — quản trị gõ "An.Nguyen@" lúc tạo, nhân viên gõ "an.nguyen@"
+    lúc đăng nhập là "sai email hoặc mật khẩu" mà không ai hiểu vì sao."""
+    e = (email or "").strip().lower()
+    if not _EMAIL_RE.match(e) or len(e) > 254:
+        raise HTTPException(422, "Email không đúng định dạng")
+    return e
+
+
 @app.post("/auth/login")
-def login(body: LoginIn):
+def login(body: LoginIn, request: Request):
+    # Van chống dò mật khẩu theo IP: đưa vào vận hành thật thì trang đăng nhập
+    # là cửa ngoài cùng, không van là một script thử vài nghìn mật khẩu/phút.
+    _login_rate_check(request)
+    email = (body.email or "").strip().lower()
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("""SELECT id, role, password_hash, full_name, active
-                           FROM users WHERE email=%s""", (body.email,))
+            cur.execute("""SELECT id, role, password_hash, full_name, active,
+                                  coalesce(must_change_password, false)
+                             FROM users WHERE lower(email)=%s""", (email,))
             row = cur.fetchone()
     if not row or not row[4]:
+        auth.verify_password(body.password, _DUMMY_HASH)
+        _login_that_bai(request)
         raise HTTPException(401, "Sai email hoặc mật khẩu")
-    uid, role, phash, name, _ = row
+    uid, role, phash, name, _, phai_doi = row
     if not auth.verify_password(body.password, phash):
+        _login_that_bai(request)
         raise HTTPException(401, "Sai email hoặc mật khẩu")
     token = auth.make_token(uid, role)
+    try:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET last_login_at=now() WHERE id=%s", (uid,))
+    except Exception:  # noqa: BLE001 — ghi mốc đăng nhập hỏng không được chặn đăng nhập
+        pass
     return {"access_token": token, "token_type": "bearer",
-            "user": {"id": uid, "role": role, "full_name": name}}
+            "user": {"id": uid, "role": role, "full_name": name,
+                     "must_change_password": bool(phai_doi)}}
 
 
 @app.get("/auth/me")
 def whoami(user=Depends(current_user)):
     return {"id": user["id"], "role": user["role"], "name": user.get("name"),
             "can_review": user["can_review"], "is_banqt": user["is_banqt"],
-            "can_finance": user["can_finance"], "dept_ids": user["dept_ids"]}
+            "can_finance": user["can_finance"], "dept_ids": user["dept_ids"],
+            # Đang dùng mật khẩu tạm (vừa tạo / vừa được đặt lại): giao diện
+            # bắt đổi trước khi cho làm việc. Backend không chặn các API khác
+            # theo cờ này — tài khoản vẫn là của đúng người, chỉ mật khẩu là
+            # thứ quản trị viên cũng biết.
+            "must_change_password": bool(user.get("must_change_password")),
+            # Tài khoản khách cần biết mình đang đại diện hồ sơ khách nào —
+            # giao diện in lên đầu trang để người dùng (và người ngồi cạnh)
+            # thấy ngay đang mở cổng của ai.
+            "client_id": user.get("client_id"),
+            "client_name": user.get("client_name"),
+            "client_code": user.get("client_code"),
+            # Chức năng đã mở: giao diện ẩn/hiện tab theo đây, backend vẫn
+            # chặn lại lần nữa ở từng cửa.
+            "features": user.get("features") or {},
+            "monthly_quota": user.get("monthly_quota"),
+            "used_this_month": user.get("used_this_month")}
 
 
 class ChangePwIn(BaseModel):
@@ -263,15 +365,19 @@ class ChangePwIn(BaseModel):
 
 @app.post("/auth/change-password")
 def change_password(body: ChangePwIn, user=Depends(current_user)):
-    if len(body.new_password) < 6:
-        raise HTTPException(400, "Mật khẩu mới tối thiểu 6 ký tự")
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT password_hash FROM users WHERE id=%s", (user["id"],))
-            phash = cur.fetchone()[0]
+            cur.execute("SELECT password_hash, email FROM users WHERE id=%s", (user["id"],))
+            phash, email = cur.fetchone()
             if not auth.verify_password(body.old_password, phash):
                 raise HTTPException(400, "Mật khẩu cũ không đúng")
-            cur.execute("UPDATE users SET password_hash=%s WHERE id=%s",
+            loi = auth.kiem_tra_mat_khau_moi(body.new_password, cu=body.old_password,
+                                             email=email)
+            if loi:
+                raise HTTPException(400, loi)
+            # Đổi xong là hết "mật khẩu tạm": bỏ cờ bắt đổi.
+            cur.execute("""UPDATE users SET password_hash=%s, must_change_password=false
+                            WHERE id=%s""",
                         (auth.hash_password(body.new_password), user["id"]))
         db.audit(conn, user["id"], "change_password", "users", user["id"], {})
     return {"ok": True}
@@ -299,7 +405,11 @@ class ChatIn(BaseModel):
     bo_mau_file_ids: list[int] | None = None
 
 
-_CHAT_MODES = {None, "", "legal_review", "template_check"}
+# Ba chế độ cuối (03/10/2026) là công cụ hợp đồng mục 14, 18, 17: dự báo kết
+# quả tranh tụng, chuẩn bị phiên toà, dịch & bản địa hoá — khung trả lời riêng
+# trong rag.prepare.
+_CHAT_MODES = {None, "", "legal_review", "template_check",
+               "du_bao_tranh_tung", "chuan_bi_phien_toa", "dich_ban_dia_hoa"}
 
 
 def _chat_bo_mau(body: ChatIn, internal: bool) -> tuple[int | None, list[int] | None]:
@@ -326,7 +436,9 @@ def _chat_bo_mau(body: ChatIn, internal: bool) -> tuple[int | None, list[int] | 
 def _chat_mode(body: ChatIn, internal: bool) -> str | None:
     """Chế độ đặc biệt của khung chat — chỉ nhân viên nội bộ được dùng."""
     if body.mode not in _CHAT_MODES:
-        raise HTTPException(422, "mode chỉ nhận 'legal_review' hoặc 'template_check'")
+        raise HTTPException(422, "mode chỉ nhận 'legal_review', 'template_check', "
+                                 "'du_bao_tranh_tung', 'chuan_bi_phien_toa' hoặc "
+                                 "'dich_ban_dia_hoa'")
     mode = body.mode or None
     return mode if internal else None
 
@@ -383,24 +495,74 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _public_rate_check(request: Request):
-    if PUBLIC_RATE_MAX <= 0:      # đặt 0 để tắt van (môi trường dev/test)
+def _rate_check(hits_store: dict, lock: threading.Lock, ip: str,
+                max_hits: int, window_sec: int, message: str, ghi: bool = True):
+    """Cửa sổ trượt theo IP dùng chung cho mọi van công khai. max_hits <= 0 = tắt.
+
+    ghi=False: chỉ KIỂM (đã đầy thì 429) mà không đếm lượt này — van đăng nhập
+    đếm riêng lượt SAI bằng _login_that_bai, để cả văn phòng chung một IP đăng nhập
+    đúng dồn đầu giờ không bị khoá (kiểm thử 02/10/2026, F-12)."""
+    if max_hits <= 0:
         return
     now = time.monotonic()
-    ip = _client_ip(request)
-    with _public_hits_lock:
-        hits = [t for t in _public_hits.get(ip, []) if now - t < PUBLIC_RATE_WINDOW_SEC]
-        if len(hits) >= PUBLIC_RATE_MAX:
-            raise HTTPException(
-                429, "Bạn đã hỏi quá nhiều trong thời gian ngắn. Vui lòng quay "
-                     "lại sau, hoặc liên hệ trực tiếp luật sư của HDS.")
-        hits.append(now)
-        _public_hits[ip] = hits
+    with lock:
+        hits = [t for t in hits_store.get(ip, []) if now - t < window_sec]
+        if len(hits) >= max_hits:
+            raise HTTPException(429, message)
+        if ghi:
+            hits.append(now)
+        hits_store[ip] = hits
         # Dọn IP nguội để dict không phình vô hạn theo thời gian chạy.
-        if len(_public_hits) > 10_000:
-            for stale in [k for k, v in _public_hits.items()
-                          if not v or now - v[-1] >= PUBLIC_RATE_WINDOW_SEC]:
-                _public_hits.pop(stale, None)
+        if len(hits_store) > 10_000:
+            for stale in [k for k, v in hits_store.items()
+                          if not v or now - v[-1] >= window_sec]:
+                hits_store.pop(stale, None)
+
+
+# Van cho trang đăng nhập (22/09/2026): 10 lượt / 5 phút mỗi IP là dư cho
+# người gõ nhầm vài lần, nhưng chặn đứng script dò mật khẩu. Đặt 0 để tắt.
+LOGIN_RATE_MAX = int(os.getenv("LOGIN_RATE_MAX", "10"))
+LOGIN_RATE_WINDOW_SEC = int(os.getenv("LOGIN_RATE_WINDOW_SEC", "300"))
+_login_hits: dict = {}
+_login_hits_lock = threading.Lock()
+
+
+def _login_that_bai(request: Request):
+    """Ghi một lượt đăng nhập SAI cho IP này (chỉ lượt sai mới bị đếm)."""
+    if LOGIN_RATE_MAX <= 0:
+        return
+    with _login_hits_lock:
+        _login_hits.setdefault(_client_ip(request), []).append(time.monotonic())
+
+
+def _login_rate_check(request: Request):
+    _rate_check(_login_hits, _login_hits_lock, _client_ip(request),
+                LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SEC,
+                "Đăng nhập sai quá nhiều lần. Vui lòng đợi vài phút rồi thử "
+                "lại, hoặc liên hệ quản trị viên để được đặt lại mật khẩu.", ghi=False)
+
+
+def _public_rate_check(request: Request):
+    _rate_check(_public_hits, _public_hits_lock, _client_ip(request),
+                PUBLIC_RATE_MAX, PUBLIC_RATE_WINDOW_SEC,
+                "Bạn đã hỏi quá nhiều trong thời gian ngắn. Vui lòng quay "
+                "lại sau, hoặc liên hệ trực tiếp luật sư của HDS.")
+
+
+# Van riêng cho đọc giấy tờ ĐKKD: mỗi lượt là một lần nạp + chạy model thị giác
+# trên GPU, nặng hơn một câu chat. Một khách điền hồ sơ thường gửi 2–8 ảnh
+# (mỗi thành viên hai mặt CCCD) nên 40 lượt / 15 phút là rộng cho người thật.
+DKKD_RATE_MAX = int(os.getenv("DKKD_RATE_MAX", "40"))
+DKKD_RATE_WINDOW_SEC = int(os.getenv("DKKD_RATE_WINDOW_SEC", "900"))
+_dkkd_hits: dict = {}
+_dkkd_hits_lock = threading.Lock()
+
+
+def _dkkd_rate_check(request: Request):
+    _rate_check(_dkkd_hits, _dkkd_hits_lock, _client_ip(request),
+                DKKD_RATE_MAX, DKKD_RATE_WINDOW_SEC,
+                "Bạn đã gửi quá nhiều ảnh trong thời gian ngắn. Vui lòng đợi "
+                "ít phút rồi thử lại, hoặc nhập tay các trường.")
 
 
 def _clean_question(body: ChatIn, public: bool = False) -> str:
@@ -429,8 +591,16 @@ def chat_public(body: ChatIn, request: Request):
 @app.post("/chat/internal")
 def chat_internal(body: ChatIn, user=Depends(current_user)):
     require(user, INTERNAL_ROLES)
+    # Cùng chốt tick chức năng với /chat/stream — trước 03/10/2026 đường này bỏ
+    # qua, bỏ tick "Hỏi đáp" của một nhân viên vẫn hỏi được qua đây (F-13).
+    _can_tinh_nang(user, "chat")
+    if body.use_temp:
+        _can_tinh_nang(user, "dinh_kem")
     question = _clean_question(body)
     source_ids = _chat_source_ids(body)
+    chat_mode = _chat_mode(body, internal=True)
+    if chat_mode:
+        _can_tinh_nang(user, "kiem_tra")
     bo_mau_id, bo_mau_file_ids = _chat_bo_mau(body, internal=True)
     conv = _resolve_conv(user, body, "internal")
     res = rag.answer(question, "internal", user_id=user["id"], conversation_id=conv,
@@ -438,7 +608,7 @@ def chat_internal(body: ChatIn, user=Depends(current_user)):
                      dept_ids=user["dept_ids"], is_banqt=user["is_banqt"],
                      can_finance=user["can_finance"], model=body.model,
                      source_document_ids=source_ids,
-                     mode=_chat_mode(body, internal=True),
+                     mode=chat_mode,
                      template_doc_id=_chat_template_id(body, internal=True),
                      make_files=_chat_make_files(body, internal=True),
                      bo_mau_id=bo_mau_id, bo_mau_file_ids=bo_mau_file_ids,
@@ -451,7 +621,18 @@ def chat_internal(body: ChatIn, user=Depends(current_user)):
 
 @app.post("/chat/portal")
 def chat_portal(body: ChatIn, user=Depends(current_user)):
+    return _tra_loi_portal(body, user)
+
+
+def _tra_loi_portal(body, user):
+    """Lõi kênh KHÁCH, dùng chung cho hai cửa:
+      · /chat/portal — khách đăng nhập web (JWT) hoặc khoá `hds_` của tài khoản;
+      · /integration/v1/chat — khoá tích hợp `hdsi_` có quyền 'chat' (chatbot bên
+        thứ ba), chạy dưới danh nghĩa tài khoản khách gắn với khoá.
+    Cùng một hàm nên hạn mức, chức năng được mở và lằn ranh dữ liệu (RLS theo
+    client_id) áp y hệt, không có cửa nào rộng hơn cửa nào."""
     require(user, CLIENT_ROLES)
+    _can_tinh_nang(user, "chat")
     question = _clean_question(body)
     source_ids = _chat_source_ids(body)
     # Hạn mức câu hỏi/tháng theo gói
@@ -493,10 +674,16 @@ def chat_stream(body: ChatIn, user=Depends(current_user)):
     và /chat/portal qua rag.prepare — không có bản sao thứ hai để lệch nhau.
     """
     require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    _can_tinh_nang(user, "chat")
     question = _clean_question(body)
     source_ids = _chat_source_ids(body)
     is_client = user["role"] in CLIENT_ROLES
+    if body.use_temp:
+        _can_tinh_nang(user, "dinh_kem")
     chat_mode = _chat_mode(body, internal=not is_client)
+    if chat_mode:
+        # Các chế độ rà soát/tranh tụng/dịch là công cụ của tab Kiểm tra pháp lý.
+        _can_tinh_nang(user, "kiem_tra")
     template_doc_id = _chat_template_id(body, internal=not is_client)
     make_files = _chat_make_files(body, internal=not is_client)
     bo_mau_id, bo_mau_file_ids = _chat_bo_mau(body, internal=not is_client)
@@ -731,7 +918,7 @@ def chat_history(user=Depends(current_user), conversation_id: int | None = None,
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT id, role, content, created_at, sources, evidence,
-                                  answer_mode, grounding_status
+                                  answer_mode, grounding_status, ai_soat, ai_khac
                              FROM messages
                             WHERE conversation_id=%s ORDER BY id DESC LIMIT %s""",
                         (conv, limit))
@@ -739,9 +926,132 @@ def chat_history(user=Depends(current_user), conversation_id: int | None = None,
     msgs = [{"id": r[0], "role": r[1], "content": r[2], "created_at": str(r[3]),
              "sources": _message_evidence(r[5]) if r[5] is not None else _message_evidence(r[4]),
              "evidence": _message_evidence(r[5]),
-             "answer_mode": r[6], "grounding_status": r[7]}
+             "answer_mode": r[6], "grounding_status": r[7],
+             # Kết quả ChatGPT soát / câu trả lời khác đã có — mở lại hội
+             # thoại là thấy lại, không phải gọi (và trả tiền) lần nữa.
+             "ai_soat": _message_evidence(r[8]) or None,
+             "ai_khac": _message_evidence(r[9]) or None}
             for r in reversed(rows)]
     return {"conversation_id": conv, "messages": msgs}
+
+
+# ---------- CHATGPT LÀM VIỆC SONG SONG (app/ai_ngoai.py, 04/10/2026) ----------
+def _sse_nen(sinh, heartbeat_sec: int = 15):
+    """Chạy generator `sinh(on_status, cancel)` ở luồng riêng, đẩy sự kiện ra
+    SSE kèm nhịp tim — cùng lý do với /chat/stream: model ngoài đọc prompt dài
+    có thể im lặng quá 100 giây và Cloudflare cắt kết nối (524)."""
+    import queue as _queue
+
+    q: "_queue.Queue" = _queue.Queue()
+    xong = object()
+    cancel = threading.Event()
+
+    def on_status(label):
+        q.put(("event", {"type": "status", "label": str(label)[:300]}))
+
+    def produce():
+        try:
+            for ev in sinh(on_status, cancel):
+                q.put(("event", ev))
+        except ai_ngoai.LoiAiNgoai as e:
+            q.put(("error", e.thong_bao))
+        except Exception as e:  # noqa: BLE001 — báo lỗi qua dòng, không chết câm
+            q.put(("error", f"{type(e).__name__}: {e}"))
+        finally:
+            q.put((xong, None))
+
+    def events():
+        threading.Thread(target=produce, daemon=True).start()
+        try:
+            while True:
+                try:
+                    kind, payload = q.get(timeout=heartbeat_sec)
+                except _queue.Empty:
+                    yield ": hb\n\n"
+                    continue
+                if kind is xong:
+                    break
+                if kind == "error":
+                    yield _sse({"type": "error", "message": payload})
+                    continue
+                yield _sse(payload)
+        finally:
+            cancel.set()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/ai-ngoai/cau-hinh")
+def ai_ngoai_cau_hinh(user=Depends(current_user)):
+    """Nút nào dùng được (đã bật + có khoá API). Không bao giờ trả khoá.
+    Quản trị nhận thêm trạng thái khoá và số lượt / chi phí tháng này."""
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    if user["role"] in CLIENT_ROLES:
+        return {"soat": "tat", "khac": False}
+    cfg = ai_ngoai.cau_hinh()
+    out = ai_ngoai.trang_thai(cfg)
+    if user["role"] == "admin":
+        out["quan_tri"] = {
+            "co_khoa_openai": bool(models.COMPAT_API_KEY),
+            "co_khoa_claude": bool(models.ANTHROPIC_API_KEY),
+            "dia_chi_api": models.COMPAT_BASE_URL,
+            "su_dung_thang": ai_ngoai.su_dung_thang(),
+            "tran_luot_thang": cfg["tran_luot_thang"],
+            "pham_vi": cfg["scope"],
+        }
+    return out
+
+
+class AiNgoaiIn(BaseModel):
+    lam_lai: bool = False
+
+
+def _chot_ai_ngoai(user):
+    require(user, INTERNAL_ROLES)
+    _can_tinh_nang(user, "chat")
+
+
+@app.post("/messages/{message_id}/ai-soat")
+def ai_soat(message_id: int, body: AiNgoaiIn, user=Depends(current_user)):
+    """Model ngoài (mặc định ChatGPT) SOÁT một câu trả lời — luồng SSE:
+    status… → done {ket_qua}. Kết quả lưu vào messages.ai_soat."""
+    _chot_ai_ngoai(user)
+    try:
+        cfg, tn = ai_ngoai.kiem_truoc_soat(message_id, user)
+    except ai_ngoai.LoiAiNgoai as e:
+        raise HTTPException(e.ma, e.thong_bao)
+
+    def sinh(on_status, cancel):
+        yield {"type": "status",
+               "label": f"{ai_ngoai.ten_hien_thi(cfg['soat_model'])} đang soát…"}
+        yield {"type": "done",
+               "ket_qua": ai_ngoai.soat(cfg, tn, user, lam_lai=body.lam_lai)}
+
+    return _sse_nen(sinh)
+
+
+@app.post("/messages/{message_id}/cau-tra-loi-khac")
+def cau_tra_loi_khac(message_id: int, body: AiNgoaiIn, user=Depends(current_user)):
+    """Model ngoài trả lời LẠI câu hỏi của lượt này (cùng quyền, cùng tham số,
+    dữ liệu lọc theo phạm vi) — luồng SSE: status/meta/delta… → done."""
+    _chot_ai_ngoai(user)
+    try:
+        cfg, tn = ai_ngoai.kiem_truoc_cau_tra_loi_khac(message_id, user,
+                                                         lam_lai=body.lam_lai)
+    except ai_ngoai.LoiAiNgoai as e:
+        raise HTTPException(e.ma, e.thong_bao)
+    tham = tn.get("tham_so") or {}
+    if tham.get("use_temp"):
+        _can_tinh_nang(user, "dinh_kem")
+    if tham.get("mode"):
+        _can_tinh_nang(user, "kiem_tra")
+
+    def sinh(on_status, cancel):
+        yield from ai_ngoai.cau_tra_loi_khac(cfg, tn, user, lam_lai=body.lam_lai,
+                                             on_status=on_status, cancel=cancel)
+
+    return _sse_nen(sinh)
 
 
 @app.get("/chat/search")
@@ -835,10 +1145,21 @@ def conversation_create(user=Depends(current_user), kind: str = "legal"):
     cột này). Mặc định để 'legal' là CÓ CHỦ ĐÍCH: bản giao diện cũ còn nằm
     trong cache trình duyệt gọi endpoint này không kèm tham số và chỉ tab Kiểm
     tra pháp lý dùng nó — mặc định 'chat' sẽ ném phiên kiểm tra hồ sơ của họ
-    sang nhầm cột cho tới khi trình duyệt nạp lại bản mới."""
-    require(user, INTERNAL_ROLES)
+    sang nhầm cột cho tới khi trình duyệt nạp lại bản mới.
+
+    Tài khoản KHÁCH được admin tick "Đính kèm tệp" cũng tạo được hội thoại
+    rỗng (kênh cổng khách, gắn đúng mã khách) để kéo hồ sơ vào trước — trước
+    03/10/2026 chỉ nội bộ, nên tick đính kèm cho khách không dùng được (F-06)."""
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
     if kind not in ("chat", "legal"):
         raise HTTPException(400, "kind chỉ nhận 'chat' hoặc 'legal'")
+    if user["role"] in CLIENT_ROLES:
+        _can_tinh_nang(user, "dinh_kem")
+        from zoneinfo import ZoneInfo
+        stamp = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).strftime("%d/%m %H:%M")
+        conv = rag.start_conversation(user["id"], "portal", user["client_id"],
+                                      title=f"Cuộc trò chuyện {stamp}", kind="chat")
+        return {"conversation_id": conv, "kind": "chat"}
     # Gắn mốc thời gian vào tiêu đề: một người kiểm tra chục hồ sơ một ngày,
     # danh sách hội thoại toàn dòng giống hệt nhau thì không mở lại đúng
     # phiên nào được. Hội thoại thường sẽ được backend đổi tên theo câu hỏi
@@ -862,7 +1183,8 @@ class UploadIn(BaseModel):
 
 @app.post("/upload")
 def upload_in_chat(body: UploadIn, user=Depends(current_user)):
-    require(user, INTERNAL_ROLES)
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    _can_tinh_nang(user, "dinh_kem")
     if body.mode == "temp":
         # File tạm gắn vào cuộc trao đổi và sẽ được đọc lại làm ngữ cảnh —
         # phải chắc cuộc trao đổi là của chính người này.
@@ -917,8 +1239,9 @@ async def upload_extract(conversation_id: int = Form(...),
     kham được .txt/.md/.csv — giao diện hiện tại không dùng nữa.)"""
     import tempfile
 
-    require(user, INTERNAL_ROLES)
-    check_conversation(user, conversation_id, "internal")
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    _can_tinh_nang(user, "dinh_kem")
+    check_conversation(user, conversation_id, _user_channel(user))
     from app.ingest import (ATTACHMENT_EXTENSIONS, ExtractionError,
                             extract_text_with_metadata)
 
@@ -986,8 +1309,8 @@ def conversation_temp_files(conv_id: int, user=Depends(current_user)):
     """File 'dùng xong bỏ' còn hạn của một hội thoại — tab Kiểm tra pháp lý mở
     lại phiên cũ thì dựng lại đúng các chip đính kèm còn dùng được (file quá
     6 giờ đã tự xoá, không dựng lại để người dùng khỏi tưởng bot còn đọc)."""
-    require(user, INTERNAL_ROLES)
-    check_conversation(user, conv_id, "internal")
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    check_conversation(user, conv_id, _user_channel(user))
     return {"items": rag.list_temp_files(conv_id)}
 
 
@@ -996,11 +1319,11 @@ def temp_file_delete(temp_id: int, user=Depends(current_user)):
     """Gỡ một file 'dùng xong bỏ' THẬT SỰ (không chỉ ẩn chip trên giao diện).
 
     Quyền sở hữu đi qua check_conversation — temp_files không có RLS."""
-    require(user, INTERNAL_ROLES)
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
     conv_id = rag.delete_temp_file(temp_id)
     if conv_id is None:
         return {"ok": True, "note": "File đã hết hạn hoặc đã xoá trước đó."}
-    check_conversation(user, conv_id, "internal")
+    check_conversation(user, conv_id, _user_channel(user))
     rag.remove_temp_file(temp_id)
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user["id"], "delete_temp_file", "conversation", conv_id,
@@ -1009,33 +1332,226 @@ def temp_file_delete(temp_id: int, user=Depends(current_user)):
 
 
 # ---------- 3. DUYỆT NHÃN ----------
+# Ngưỡng "đọc lỗi" — CÙNG con số với app/duyet_hang_loat.NGUONG_MAC_DINH: lượt
+# duyệt hàng loạt giữ lại hàng chờ đúng những tài liệu vượt ngưỡng này, nên bộ
+# lọc phải hỏi cùng một câu hỏi, không thì người soát lọc ra một tập khác.
+NGUONG_DOC_LOI = 0.20
+
+# Thứ tự xếp hàng chờ. Khoá là giá trị giao diện gửi lên, giá trị là mệnh đề
+# ORDER BY — WHITELIST, không bao giờ ghép chuỗi người dùng vào SQL.
+_REVIEW_SAP_XEP = {
+    # Mặc định: cái cần MẮT NGƯỜI nhất lên trước (đọc lỗi nhiều, máy ít tự tin).
+    "can_soat": "d.ty_le_rac DESC NULLS LAST, d.confidence ASC NULLS FIRST, d.id",
+    # Ngược lại: cái sạch nhất lên trước, để duyệt nhanh hàng loạt cho vơi hàng.
+    "de_duyet": "d.ty_le_rac ASC NULLS FIRST, d.confidence DESC NULLS LAST, d.id",
+    "moi_nhat": "d.created_at DESC NULLS LAST, d.id DESC",
+    "cu_nhat": "d.created_at ASC NULLS FIRST, d.id",
+    "ten": "d.title ASC NULLS LAST, d.id",
+    "duong_dan": "d.drive_file_id ASC NULLS LAST, d.id",
+}
+
+# Trạng thái đọc (một dòng lọc), khớp với nhãn hiện trên thẻ tài liệu.
+_REVIEW_TRANG_THAI = {
+    "doc_loi": ("d.ty_le_rac >= %s", (NGUONG_DOC_LOI,)),
+    "canh_bao": ("d.extraction_status = 'warning'", ()),
+    "da_sua": ("d.extraction_status = 'edited'", ()),
+    "chua_cham": ("d.ty_le_rac IS NULL", ()),
+    "sach": ("d.ty_le_rac < %s AND coalesce(d.extraction_status,'ready') <> 'warning'",
+             (NGUONG_DOC_LOI,)),
+}
+
+# Ngăn giả cho tài liệu KHÔNG nằm trong cây kho (nạp từ chat, web, tải tay)
+# và cho tệp nằm ngay ở gốc kho (không thuộc ngăn nào).
+NGAN_NGOAI_KHO = "(ngoài kho)"
+NGAN_GOC_KHO = "(gốc kho)"
+
+
+def _like_an_toan(s: str) -> str:
+    """Thoát ký tự đại diện của LIKE: tên thư mục có '%' hay '_' vẫn khớp đúng."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _review_dieu_kien(q: str | None, ngan: str | None, doc_type: str | None,
+                      nguon: str | None, trang_thai: str | None,
+                      khach: int | None) -> tuple[list[str], list]:
+    """Bộ lọc hàng chờ duyệt → (mệnh đề WHERE, tham số). Thuần, test được.
+
+    Mọi giá trị người dùng đi bằng THAM SỐ; chỉ tên cột và toán tử là chuỗi.
+    """
+    where, params = [], []
+    if q and q.strip():
+        # Tìm cả trong ĐƯỜNG DẪN: người duyệt thường nhớ thư mục chứ không nhớ
+        # tên tệp ("mấy cái trong ngăn bản án 2019").
+        kw = f"%{_like_an_toan(q.strip())}%"
+        where.append("(d.title ILIKE %s ESCAPE '\\' OR d.drive_file_id ILIKE %s ESCAPE '\\' "
+                     "OR d.source_path ILIKE %s ESCAPE '\\')")
+        params += [kw, kw, kw]
+    if ngan:
+        # Mẫu 'local:%' đi bằng THAM SỐ chứ không viết thẳng vào câu lệnh: câu
+        # này có tham số khác, mà psycopg coi mọi '%' trong chuỗi SQL là chỗ
+        # chèn — một dấu % viết thẳng là cả câu vỡ ngay lúc chạy.
+        if ngan == NGAN_NGOAI_KHO:
+            where.append("(d.drive_file_id IS NULL OR d.drive_file_id NOT LIKE %s)")
+            params.append("local:%")
+        elif ngan == NGAN_GOC_KHO:
+            where.append("(d.drive_file_id LIKE %s AND d.drive_file_id NOT LIKE %s)")
+            params += ["local:%", "local:%/%"]
+        else:
+            where.append("d.drive_file_id LIKE %s ESCAPE '\\'")
+            params.append(f"local:{_like_an_toan(ngan)}/%")
+    if doc_type:
+        where.append("coalesce(d.doc_type,'other') = %s")
+        params.append(doc_type)
+    if nguon:
+        where.append("d.source_kind = %s")
+        params.append(nguon)
+    if trang_thai:
+        menh_de = _REVIEW_TRANG_THAI.get(trang_thai)
+        if menh_de:
+            where.append(f"({menh_de[0]})")
+            params += list(menh_de[1])
+    if khach:
+        where.append("d.client_id = %s")
+        params.append(khach)
+    return where, params
+
+
+def _tep_goc_info(source_path: str | None) -> tuple[bool, int | None]:
+    """Tệp gốc còn trên đĩa không, và nặng bao nhiêu byte.
+
+    Người duyệt cần biết TRƯỚC khi bấm "Xem bản gốc": tài liệu nạp từ hội
+    thoại hoặc tệp đã bị dọn thì không có gì để đối chiếu.
+    """
+    if not source_path:
+        return False, None
+    try:
+        p = Path(source_path)
+        if not p.is_absolute():
+            p = Path.cwd() / p
+        st = p.stat()
+        return True, st.st_size
+    except (OSError, ValueError):
+        return False, None
+
+
 @app.get("/review/pending")
-def review_pending(user=Depends(current_user), limit: int = 50):
+def review_pending(user=Depends(current_user), limit: int = 50, offset: int = 0,
+                   q: str | None = None, ngan: str | None = None,
+                   doc_type: str | None = None, nguon: str | None = None,
+                   trang_thai: str | None = None, khach: int | None = None,
+                   sap_xep: str = "can_soat"):
+    """Hàng chờ duyệt nhãn, có bộ lọc và ĐỦ thông tin để quyết định.
+
+    Hàng chờ thật có hàng nghìn tài liệu: không lọc được thì người duyệt chỉ
+    thấy 50 cái đầu và không có cách nào tìm đúng lô mình muốn xử lý. Mỗi dòng
+    kèm VỊ TRÍ TRONG CÂY THƯ MỤC (kho.vi_tri_trong_kho) — ngăn chứa tệp chính
+    là căn cứ gán nhãn, mà tiêu đề không nói lên điều đó.
+
+    Vẫn trả về MẢNG (không bọc trong object): trang /admin cũ đọc thẳng mảng
+    này; số liệu tổng và danh sách ngăn nằm ở /review/pending/bo-loc.
+    """
     require_reviewer(user)
+    limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
+    where, params = _review_dieu_kien(q, ngan, doc_type, nguon, trang_thai, khach)
+    thu_tu = _REVIEW_SAP_XEP.get(sap_xep) or _REVIEW_SAP_XEP["can_soat"]
+    dieu_kien = ("" if not where else " AND " + " AND ".join(where))
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("""SELECT d.id,d.title,d.doc_type,d.access_level,d.client_id,d.confidence,
+            cur.execute(f"""SELECT d.id,d.title,d.doc_type,d.access_level,d.client_id,d.confidence,
                            d.source_kind,c.name,d.extraction_status,d.extraction_error,
                            (SELECT left(content,200) FROM chunks WHERE document_id=d.id ORDER BY chunk_index LIMIT 1),
                            d.so_hieu,d.loai_van_ban,d.trich_yeu,d.ngay_ban_hanh,
-                           d.ngay_hieu_luc,d.trang_thai_hieu_luc,d.ty_le_rac
-                           FROM documents d LEFT JOIN clients c ON c.id=d.client_id
-                           WHERE NOT d.label_verified ORDER BY d.confidence NULLS FIRST, d.id LIMIT %s""",
-                        (limit,))
+                           d.ngay_hieu_luc,d.trang_thai_hieu_luc,d.ty_le_rac,
+                           d.drive_file_id,d.source_path,d.created_at,d.updated_at,
+                           d.person_folder,
+                           (SELECT count(*) FROM chunks WHERE document_id=d.id),
+                           u.full_name, dep.name
+                           FROM documents d
+                           LEFT JOIN clients c ON c.id=d.client_id
+                           LEFT JOIN users u ON u.id=d.uploaded_by
+                           LEFT JOIN departments dep ON dep.id=d.department_id
+                           WHERE NOT d.label_verified AND coalesce(d.active, true)
+                           {dieu_kien}
+                           ORDER BY {thu_tu} LIMIT %s OFFSET %s""",
+                        (*params, limit, offset))
             rows = cur.fetchall()
-    return [{"id": r[0], "title": r[1], "doc_type": r[2], "access_level": r[3], "client_id": r[4],
-             "confidence": r[5], "source_kind": r[6], "client_name": r[7],
-             "extraction_status": r[8], "extraction_warning": r[9],
-             "preview": r[10],
-             # Metadata máy bóc sẵn — form duyệt điền trước cho người soát/sửa.
-             "so_hieu": r[11], "loai_van_ban": r[12], "trich_yeu": r[13],
-             "ngay_ban_hanh": str(r[14]) if r[14] else None,
-             "ngay_hieu_luc": str(r[15]) if r[15] else None,
-             "trang_thai_hieu_luc": r[16],
-             # Tỉ lệ token đọc lỗi do app/duyet_hang_loat chấm. Tài liệu còn ở
-             # hàng chờ SAU một lượt duyệt hàng loạt thường là vì con số này
-             # vượt ngưỡng — người soát cần thấy ngay nó tệ cỡ nào.
-             "ty_le_rac": r[17]} for r in rows]
+    ket_qua = []
+    for r in rows:
+        vi_tri = kho.vi_tri_trong_kho(r[18], r[19])
+        co_tep, kich_thuoc = _tep_goc_info(r[19])
+        ket_qua.append({
+            "id": r[0], "title": r[1], "doc_type": r[2], "access_level": r[3],
+            "client_id": r[4], "confidence": r[5], "source_kind": r[6],
+            "client_name": r[7], "extraction_status": r[8], "extraction_warning": r[9],
+            "preview": r[10],
+            # Metadata máy bóc sẵn — form duyệt điền trước cho người soát/sửa.
+            "so_hieu": r[11], "loai_van_ban": r[12], "trich_yeu": r[13],
+            "ngay_ban_hanh": str(r[14]) if r[14] else None,
+            "ngay_hieu_luc": str(r[15]) if r[15] else None,
+            "trang_thai_hieu_luc": r[16],
+            # Tỉ lệ token đọc lỗi do app/duyet_hang_loat chấm. Tài liệu còn ở
+            # hàng chờ SAU một lượt duyệt hàng loạt thường là vì con số này
+            # vượt ngưỡng — người soát cần thấy ngay nó tệ cỡ nào.
+            "ty_le_rac": r[17],
+            # VỊ TRÍ trong cây thư mục kho — căn cứ chính để gán nhãn.
+            "duong_dan": vi_tri["duong_dan"], "thu_muc": vi_tri["thu_muc"],
+            "ngan": vi_tri["ngan"] or (NGAN_GOC_KHO if vi_tri["trong_kho"]
+                                       else NGAN_NGOAI_KHO),
+            "ten_tep": vi_tri["ten_tep"], "duoi": vi_tri["duoi"],
+            "trong_kho": vi_tri["trong_kho"],
+            "co_tep": co_tep, "kich_thuoc": kich_thuoc,
+            "created_at": str(r[20]) if r[20] else None,
+            "updated_at": str(r[21]) if r[21] else None,
+            "person_folder": r[22], "so_doan": r[23],
+            "nguoi_nap": r[24], "phong": r[25],
+        })
+    return ket_qua
+
+
+@app.get("/review/pending/bo-loc")
+def review_pending_bo_loc(user=Depends(current_user)):
+    """Số liệu cho thanh bộ lọc: tổng hàng chờ, các ngăn, loại, nguồn, trạng thái.
+
+    Đếm trên TOÀN hàng chờ (không theo trang) — người duyệt cần biết còn bao
+    nhiêu và nằm ở ngăn nào trước khi chọn lô để xử lý.
+    """
+    require_reviewer(user)
+    co_ban = "FROM documents d WHERE NOT d.label_verified AND coalesce(d.active, true)"
+    # split_part trên phần sau 'local:' → tên NGĂN (thư mục cấp 1) của tệp.
+    # Tệp nằm ngay gốc kho (không có '/') KHÔNG phải là ngăn: trả NULL rồi gắn
+    # nhãn "(gốc kho)" ở Python — đúng bằng cách kho.vi_tri_trong_kho tính, để
+    # bấm vào một ngăn trong bộ lọc là ra đúng những dòng mang tên ngăn đó.
+    ngan_sql = ("CASE WHEN d.drive_file_id LIKE 'local:%/%' "
+                "THEN split_part(substring(d.drive_file_id from 7), '/', 1) "
+                "WHEN d.drive_file_id LIKE 'local:%' THEN NULL ELSE '' END")
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT count(*) {co_ban}")
+            tong = cur.fetchone()[0]
+            cur.execute(f"SELECT {ngan_sql} AS ngan, count(*) {co_ban} "
+                        f"GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 80")
+            ngan = [{"ten": (r[0] if r[0] else
+                             (NGAN_GOC_KHO if r[0] is None else NGAN_NGOAI_KHO)),
+                     "so": r[1]} for r in cur.fetchall()]
+            cur.execute(f"SELECT coalesce(d.doc_type,'other'), count(*) {co_ban} "
+                        f"GROUP BY 1 ORDER BY 2 DESC")
+            loai = [{"ma": r[0], "so": r[1]} for r in cur.fetchall()]
+            cur.execute(f"SELECT d.source_kind, count(*) {co_ban} GROUP BY 1 ORDER BY 2 DESC")
+            nguon = [{"ma": r[0] or "?", "so": r[1]} for r in cur.fetchall()]
+            cur.execute(f"""SELECT
+                  count(*) FILTER (WHERE d.ty_le_rac >= %s),
+                  count(*) FILTER (WHERE d.extraction_status = 'warning'),
+                  count(*) FILTER (WHERE d.extraction_status = 'edited'),
+                  count(*) FILTER (WHERE d.ty_le_rac IS NULL),
+                  count(*) FILTER (WHERE d.ty_le_rac < %s
+                                     AND coalesce(d.extraction_status,'ready') <> 'warning')
+                {co_ban}""", (NGUONG_DOC_LOI, NGUONG_DOC_LOI))
+            tt = cur.fetchone()
+    return {"tong": tong, "ngan": ngan, "loai": loai, "nguon": nguon,
+            "nguong_doc_loi": NGUONG_DOC_LOI,
+            "trang_thai": {"doc_loi": tt[0], "canh_bao": tt[1], "da_sua": tt[2],
+                           "chua_cham": tt[3], "sach": tt[4]}}
 
 
 class LabelIn(BaseModel):
@@ -1080,6 +1596,33 @@ def review_content_get(doc_id: int, user=Depends(current_user)):
             "extraction_status": doc[2], "extraction_warning": doc[3],
             "approved": doc[4], "label_verified": doc[5], "client_name": doc[6],
             "chunk_count": len(parts), "content": content}
+
+
+@app.get("/review/{doc_id}/chunks")
+def review_chunks(doc_id: int, user=Depends(current_user), limit: int = 300):
+    """CÁC ĐOẠN đúng như bot sẽ đọc — cột phải của khung đối chiếu.
+
+    Khác /review/{id}/content ở chỗ không nối liền: người duyệt thấy văn bản
+    bị CẮT ở đâu, đoạn nào rơi vào giữa một điều luật, đoạn nào toàn chữ rác.
+    Mỗi đoạn kèm tỉ lệ token đọc lỗi của CHÍNH đoạn đó (app/chat_luong) — tài
+    liệu 5% rác toàn cục vẫn có thể có một trang scan hỏng hoàn toàn.
+    """
+    require_reviewer(user)
+    limit = max(1, min(int(limit or 300), 1000))
+    from app.chat_luong import ty_le_rac
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM chunks WHERE document_id=%s", (doc_id,))
+            tong = cur.fetchone()[0]
+            cur.execute("""SELECT chunk_index,content,section_title,page_number
+                             FROM chunks WHERE document_id=%s
+                            ORDER BY chunk_index LIMIT %s""", (doc_id, limit))
+            rows = cur.fetchall()
+    return {"document_id": doc_id, "tong": tong,
+            "items": [{"chunk_index": r[0], "content": r[1] or "",
+                       "so_ky_tu": len(r[1] or ""),
+                       "ty_le_rac": round(ty_le_rac(r[1] or ""), 3),
+                       "section_title": r[2], "page_number": r[3]} for r in rows]}
 
 
 # Lý do sửa nội dung tài liệu kho (kế hoạch ngày 3): dữ liệu quý nhất của cơ
@@ -1232,16 +1775,14 @@ def _ngay_hop_le(raw, ten):
     return raw
 
 
-@app.post("/review/{doc_id}/approve")
-def review_approve(doc_id: int, body: LabelIn, user=Depends(current_user)):
-    require_reviewer(user)
-    if body.access_level == "client" and body.client_id is None:
-        raise HTTPException(400, "Tài liệu của khách bắt buộc chọn khách hàng")
-    if (body.trang_thai_hieu_luc
-            and body.trang_thai_hieu_luc not in van_ban.TRANG_THAI_HIEU_LUC):
-        raise HTTPException(422, "Trạng thái hiệu lực không hợp lệ")
-    # Cột nào người duyệt gửi thì mới đổi — form cũ không gửi các trường này
-    # vẫn hoạt động y nguyên.
+def _ghi_nhan_duyet(cur, doc_id: int, body: LabelIn):
+    """Ghi nhãn đã duyệt cho MỘT tài liệu (không mở phiên, không audit).
+
+    Tách khỏi endpoint để duyệt nhanh hàng loạt đi ĐÚNG một đường với duyệt
+    từng cái — hai đường ghi khác nhau là sớm muộn lệch nhau (bản duyệt hàng
+    loạt quên bóc danh tính văn bản luật chẳng hạn).
+    Người gọi chịu trách nhiệm gọi van_ban.cap_nhat_hieu_luc một lần sau cùng.
+    """
     meta_sets, meta_vals = [], []
     for cot, gia_tri in (("so_hieu", body.so_hieu),
                          ("loai_van_ban", body.loai_van_ban),
@@ -1259,44 +1800,156 @@ def review_approve(doc_id: int, body: LabelIn, user=Depends(current_user)):
             meta_sets.append(f"{cot}=%s")
             meta_vals.append(_ngay_hop_le(gia_tri, cot))
     extra_sql = ("," + ",".join(meta_sets)) if meta_sets else ""
+    cur.execute(f"""UPDATE documents SET doc_type=%s,access_level=%s,client_id=%s,
+                   label_verified=true,approved=true,extraction_status='ready',
+                   updated_at=now(){extra_sql}
+                   WHERE id=%s""",
+                (body.doc_type, body.access_level, body.client_id,
+                 *meta_vals, doc_id))
+    # Văn bản luật vừa được duyệt có thể chính là bản thay thế một văn
+    # bản đang trong kho (hoặc ngược lại) — soi lại trạng thái đôi bên.
+    if body.doc_type in ("law", "an_le", "ban_an"):
+        cur.execute("SELECT so_hieu, title FROM documents WHERE id=%s", (doc_id,))
+        row = cur.fetchone()
+        if not (row and row[0]):
+            # Tài liệu nạp với nhãn khác (mặc định 'other') rồi người
+            # duyệt ĐỔI sang văn bản luật: lượt học đã bỏ qua bước bóc
+            # danh tính vì lúc đó doc_type chưa phải luật. Không bóc ở
+            # đây thì nó vĩnh viễn không có số hiệu — vô hình với toàn
+            # bộ cơ chế hiệu lực, mà không ai biết vì sao.
+            cur.execute("""SELECT string_agg(content, E'\n\n' ORDER BY chunk_index)
+                             FROM (SELECT content, chunk_index FROM chunks
+                                    WHERE document_id=%s
+                                    ORDER BY chunk_index LIMIT 4) t""",
+                        (doc_id,))
+            noi_dung = (cur.fetchone() or [None])[0] or ""
+            vb_meta = van_ban.boc_metadata(noi_dung, ten_file=(row[1] if row else None))
+            cot = [(c, vb_meta.get(c)) for c in
+                   ("so_hieu", "loai_van_ban", "trich_yeu",
+                    "ngay_ban_hanh", "ngay_hieu_luc")
+                   if vb_meta.get(c) is not None]
+            if cot:
+                cur.execute(
+                    f"UPDATE documents SET {','.join(f'{c}=%s' for c, _ in cot)} "
+                    "WHERE id=%s", (*[v for _, v in cot], doc_id))
+                van_ban.xu_ly_sau_hoc(cur, body.doc_type, noi_dung, vb_meta)
+        return True          # có đụng tới văn bản luật → cần soi lại hiệu lực
+    return False
+
+
+def _kiem_nhan(body: LabelIn):
+    """Chốt chung cho cả duyệt một tài liệu lẫn duyệt nhanh hàng loạt."""
+    if body.access_level == "client" and body.client_id is None:
+        raise HTTPException(400, "Tài liệu của khách bắt buộc chọn khách hàng")
+    if (body.trang_thai_hieu_luc
+            and body.trang_thai_hieu_luc not in van_ban.TRANG_THAI_HIEU_LUC):
+        raise HTTPException(422, "Trạng thái hiệu lực không hợp lệ")
+
+
+class GoiYLyDoIn(BaseModel):
+    content: str
+
+
+@app.post("/review/{doc_id}/goi-y-ly-do")
+def review_goi_y_ly_do(doc_id: int, body: GoiYLyDoIn, user=Depends(current_user)):
+    """Hợp đồng mục 2 (Diff & Tag): so bản đang sửa với bản đang lưu, GỢI Ý
+    một lý do sửa (luật thay đổi / rủi ro / yêu cầu khách / sửa lỗi OCR / khác)
+    kèm một câu giải thích. Quy tắc tất định trước, không chắc mới hỏi model.
+    KHÔNG lưu gì — người duyệt bấm chọn gợi ý (một click) rồi Lưu như thường."""
+    require_reviewer(user)
+    from app import goi_y_ly_do
+    from app.models import llm_local
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f"""UPDATE documents SET doc_type=%s,access_level=%s,client_id=%s,
-                           label_verified=true,approved=true,extraction_status='ready',
-                           updated_at=now(){extra_sql}
-                           WHERE id=%s""",
-                        (body.doc_type, body.access_level, body.client_id,
-                         *meta_vals, doc_id))
-            # Văn bản luật vừa được duyệt có thể chính là bản thay thế một văn
-            # bản đang trong kho (hoặc ngược lại) — soi lại trạng thái đôi bên.
-            if body.doc_type in ("law", "an_le", "ban_an"):
-                cur.execute("SELECT so_hieu, title FROM documents WHERE id=%s", (doc_id,))
-                row = cur.fetchone()
-                if not (row and row[0]):
-                    # Tài liệu nạp với nhãn khác (mặc định 'other') rồi người
-                    # duyệt ĐỔI sang văn bản luật: lượt học đã bỏ qua bước bóc
-                    # danh tính vì lúc đó doc_type chưa phải luật. Không bóc ở
-                    # đây thì nó vĩnh viễn không có số hiệu — vô hình với toàn
-                    # bộ cơ chế hiệu lực, mà không ai biết vì sao.
-                    cur.execute("""SELECT string_agg(content, E'\n\n' ORDER BY chunk_index)
-                                     FROM (SELECT content, chunk_index FROM chunks
-                                            WHERE document_id=%s
-                                            ORDER BY chunk_index LIMIT 4) t""",
-                                (doc_id,))
-                    noi_dung = (cur.fetchone() or [None])[0] or ""
-                    vb_meta = van_ban.boc_metadata(noi_dung, ten_file=(row[1] if row else None))
-                    cot = [(c, vb_meta.get(c)) for c in
-                           ("so_hieu", "loai_van_ban", "trich_yeu",
-                            "ngay_ban_hanh", "ngay_hieu_luc")
-                           if vb_meta.get(c) is not None]
-                    if cot:
-                        cur.execute(
-                            f"UPDATE documents SET {','.join(f'{c}=%s' for c, _ in cot)} "
-                            "WHERE id=%s", (*[v for _, v in cot], doc_id))
-                        van_ban.xu_ly_sau_hoc(cur, body.doc_type, noi_dung, vb_meta)
+            cur.execute("SELECT doc_type FROM documents WHERE id=%s", (doc_id,))
+            doc = cur.fetchone()
+            if not doc:
+                raise HTTPException(404, "Không thấy tài liệu")
+            cur.execute("SELECT content FROM chunks WHERE document_id=%s ORDER BY chunk_index",
+                        (doc_id,))
+            ban_cu = "\n\n".join(_CTX_HEADER_RE.sub("", r[0] or "", count=1)
+                                 for r in cur.fetchall())
+
+    def hoi(prompt):
+        return llm_local(prompt, temperature=0.0, num_predict=200)[0]
+
+    kq = goi_y_ly_do.goi_y(ban_cu, body.content or "", doc_type=doc[0] or "", llm=hoi)
+    return {"ok": True, **kq}
+
+
+@app.post("/review/{doc_id}/approve")
+def review_approve(doc_id: int, body: LabelIn, user=Depends(current_user)):
+    require_reviewer(user)
+    _kiem_nhan(body)
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            # id không có thật thì báo 404 — trước 03/10/2026 vẫn trả ok (F-16).
+            cur.execute("SELECT 1 FROM documents WHERE id=%s", (doc_id,))
+            if not cur.fetchone():
+                raise HTTPException(404, "Không thấy tài liệu")
+            if _ghi_nhan_duyet(cur, doc_id, body):
                 van_ban.cap_nhat_hieu_luc(cur)
         db.audit(conn, user["id"], "approve_label", "documents", doc_id, body.model_dump())
     return {"ok": True, "document_id": doc_id}
+
+
+class NhanhItem(LabelIn):
+    id: int
+
+
+class NhanhIn(BaseModel):
+    items: list[NhanhItem]
+
+
+# Một lượt duyệt nhanh tối đa bấy nhiêu tài liệu: đủ cho cả một trang danh
+# sách, mà không biến một cú bấm nhầm thành nghìn tài liệu vào kho.
+TOI_DA_DUYET_NHANH = 200
+
+
+@app.post("/review/duyet-nhanh")
+def review_duyet_nhanh(body: NhanhIn, user=Depends(current_user)):
+    """DUYỆT NHANH nhiều tài liệu bằng đúng nhãn máy đã đoán (người duyệt đã
+    soát trên danh sách, không cần mở từng cái).
+
+    Tài liệu nào không hợp lệ (mức "Hồ sơ khách hàng" mà chưa chọn khách, hoặc
+    không còn trong hàng chờ) thì BỎ QUA và báo lại lý do — không để một dòng
+    hỏng chặn cả lô, cũng không âm thầm duyệt sai mức truy cập.
+    """
+    require_reviewer(user)
+    items = body.items or []
+    if not items:
+        raise HTTPException(422, "Chưa chọn tài liệu nào để duyệt")
+    if len(items) > TOI_DA_DUYET_NHANH:
+        raise HTTPException(413, f"Mỗi lượt duyệt nhanh tối đa {TOI_DA_DUYET_NHANH} tài liệu")
+    da_duyet, bo_qua, cham_luat = [], [], False
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            for it in items:
+                if it.access_level == "client" and it.client_id is None:
+                    bo_qua.append({"id": it.id,
+                                   "ly_do": 'Mức "Hồ sơ khách hàng" chưa chọn khách hàng sở hữu'})
+                    continue
+                if (it.trang_thai_hieu_luc
+                        and it.trang_thai_hieu_luc not in van_ban.TRANG_THAI_HIEU_LUC):
+                    bo_qua.append({"id": it.id, "ly_do": "Trạng thái hiệu lực không hợp lệ"})
+                    continue
+                cur.execute("""SELECT 1 FROM documents
+                                WHERE id=%s AND NOT label_verified
+                                  AND coalesce(active, true)""", (it.id,))
+                if not cur.fetchone():
+                    bo_qua.append({"id": it.id, "ly_do": "Không còn trong hàng chờ duyệt"})
+                    continue
+                if _ghi_nhan_duyet(cur, it.id, it):
+                    cham_luat = True
+                da_duyet.append(it.id)
+            # Soi lại hiệu lực MỘT lần cho cả lô — chạy theo từng tài liệu là
+            # quét lại toàn bộ bảng quan hệ hàng trăm lần cho một cú bấm.
+            if cham_luat:
+                van_ban.cap_nhat_hieu_luc(cur)
+        for doc_id in da_duyet:
+            db.audit(conn, user["id"], "approve_label", "documents", doc_id,
+                     {"duyet_nhanh": True})
+    return {"ok": True, "da_duyet": len(da_duyet), "ids": da_duyet, "bo_qua": bo_qua}
 
 
 # ---------- 4. TỰ HỌC (duyệt hội thoại) ----------
@@ -1350,6 +2003,16 @@ def learn_review(message_id: int, body: LearnIn, user=Depends(current_user)):
     # RLS lọc theo khách hàng không ai đọc được (hoặc lọt sang khách khác).
     if body.access_level not in ("internal", "public"):
         raise HTTPException(400, "access_level chỉ nhận 'internal' hoặc 'public'")
+    # Bản sửa phải có nội dung VÀ lý do (kế hoạch 10 ngày: "bấm Cần sửa … đồng
+    # thời ghi nhận lý do chỉnh sửa"). Trước 03/10/2026 chỉ giao diện kiểm nên
+    # gọi API với nội dung rỗng vẫn nạp một tài liệu "Hỏi đáp" rỗng vào kho
+    # (kiểm thử TH-03/TH-04, F-08/F-23).
+    if body.action == "edit":
+        if not (body.edited_content or "").strip():
+            raise HTTPException(422, "Nội dung hiệu chỉnh không được để trống.")
+        if len((body.edit_reason or "").strip()) < 3:
+            raise HTTPException(422, "Cần ghi lý do hiệu chỉnh (luật thay đổi / rủi ro / "
+                                     "yêu cầu khách hàng / sửa nội dung sai / khác).")
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT m.content,
@@ -1433,12 +2096,18 @@ class UserIn(BaseModel):
     email: str
     full_name: str
     role: str
-    password: str = "hds12345"           # mật khẩu ban đầu (user tự đổi sau)
+    # Để trống = máy chủ sinh mật khẩu tạm ngẫu nhiên, trả về ĐÚNG MỘT LẦN
+    # trong phản hồi (mat_khau_tam). Trước 22/09/2026 mặc định là "hds12345"
+    # ghi trong mã và trong sổ tay — ai cũng biết mật khẩu của tài khoản mới.
+    password: str | None = None
     can_review: bool = False
     client_id: int | None = None
     department_ids: list[int] = []       # phòng user thuộc (nội bộ)
     head_of: list[int] = []              # phòng user làm trưởng
     monthly_quota: int = 0               # hạn mức câu hỏi/tháng (khách)
+    # Chức năng mở cho tài khoản này; để trống = theo mặc định của vai
+    # (khách chỉ hỏi đáp). Xem app/quyen_tinh_nang.py.
+    features: dict | None = None
 
 
 @app.get("/users")
@@ -1446,17 +2115,82 @@ def users_list(user=Depends(current_user)):
     require(user, {"admin"})
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            # Không trả api_key_hash ra ngoài — chỉ cho biết CÓ khoá hay không
-            cur.execute("""SELECT id,email,full_name,role,can_review,active,
-                                  can_view_finance,
-                                  (api_key_hash IS NOT NULL) AS has_api_key,
-                                  api_key_at
-                             FROM users ORDER BY id""")
+            # Không trả api_key_hash ra ngoài — chỉ cho biết CÓ khoá hay không.
+            # client_id + tên khách: trước 20/09/2026 không trả ra, nên cột
+            # "khách hàng" trong màn hình quản trị luôn trống và không ai biết
+            # tài khoản nào thuộc khách nào.
+            cur.execute("""SELECT u.id,u.email,u.full_name,u.role,u.can_review,u.active,
+                                  u.can_view_finance,
+                                  (u.api_key_hash IS NOT NULL) AS has_api_key,
+                                  u.api_key_at, u.client_id, c.name, c.code,
+                                  u.monthly_quota, u.used_this_month, u.features,
+                                  coalesce(u.must_change_password, false),
+                                  u.last_login_at, u.created_at
+                             FROM users u LEFT JOIN clients c ON c.id=u.client_id
+                            ORDER BY u.id""")
             rows = cur.fetchall()
+            # Phòng ban + cờ trưởng phòng của từng người: màn hình sửa tài
+            # khoản cần biết đang gán ở đâu để tick sẵn.
+            cur.execute("SELECT user_id, department_id, is_head FROM user_departments")
+            phong: dict[int, list[int]] = {}
+            truong: dict[int, list[int]] = {}
+            for uid, did, is_head in cur.fetchall():
+                phong.setdefault(uid, []).append(did)
+                if is_head:
+                    truong.setdefault(uid, []).append(did)
     return [{"id": r[0], "email": r[1], "full_name": r[2], "role": r[3],
              "can_review": r[4], "active": r[5], "can_view_finance": r[6],
-             "has_api_key": r[7], "api_key_at": str(r[8])[:10] if r[8] else None}
+             "has_api_key": r[7], "api_key_at": str(r[8])[:10] if r[8] else None,
+             "client_id": r[9], "client_name": r[10], "client_code": r[11],
+             "monthly_quota": r[12], "used_this_month": r[13],
+             "features": quyen_tinh_nang.quyen_hieu_luc(r[3], r[14]),
+             "features_tick": r[14],
+             "must_change_password": r[15],
+             "last_login_at": str(r[16])[:16] if r[16] else None,
+             "created_at": str(r[17])[:10] if r[17] else None,
+             "department_ids": phong.get(r[0], []),
+             "head_of": truong.get(r[0], [])}
             for r in rows]
+
+
+@app.get("/tinh-nang")
+def tinh_nang_list(user=Depends(current_user)):
+    """Danh mục chức năng bật/tắt được, để màn hình quản trị dựng các ô tick."""
+    require(user, {"admin"})
+    return {"items": [{"ma": ma, **cfg} for ma, cfg in quyen_tinh_nang.TINH_NANG.items()],
+            "mac_dinh_khach": quyen_tinh_nang.MAC_DINH_KHACH,
+            "mac_dinh_noi_bo": quyen_tinh_nang.MAC_DINH_NOI_BO}
+
+
+class TinhNangIn(BaseModel):
+    features: dict | None = None
+    monthly_quota: int | None = None
+
+
+@app.patch("/users/{uid}/tinh-nang")
+def users_set_tinh_nang(uid: int, body: TinhNangIn, user=Depends(current_user)):
+    """Bật/tắt chức năng và đặt hạn mức cho một tài khoản.
+
+    Gửi features=null để trả tài khoản về mặc định của vai."""
+    require(user, {"admin"})
+    sach = quyen_tinh_nang.chuan_hoa(body.features)
+    if body.monthly_quota is not None and not (0 <= body.monthly_quota <= 100000):
+        raise HTTPException(422, "Hạn mức câu hỏi mỗi tháng phải trong khoảng 0–100.000")
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT role FROM users WHERE id=%s", (uid,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Không thấy người dùng")
+            cur.execute("""UPDATE users SET features=%s,
+                                  monthly_quota=coalesce(%s, monthly_quota)
+                            WHERE id=%s""",
+                        (json.dumps(sach, ensure_ascii=False) if sach else None,
+                         body.monthly_quota, uid))
+        db.audit(conn, user["id"], "set_user_features", "users", uid,
+                 {"features": sach, "monthly_quota": body.monthly_quota})
+    return {"ok": True, "features": quyen_tinh_nang.quyen_hieu_luc(row[0], sach),
+            "features_tick": sach}
 
 
 @app.get("/users/su-dung")
@@ -1536,23 +2270,202 @@ def users_su_dung(user=Depends(current_user)):
             "tong_dung_luong": sum(dung_luong.values()) + khong_chu["bytes"]}
 
 
+def _kiem_tra_vai_va_khach(role: str, client_id: int | None) -> None:
+    """Ràng buộc vai ↔ hồ sơ khách, báo bằng tiếng Việt.
+
+    CSDL cũng có CHECK role + client_role_needs_client_id, nhưng để nó bắt là
+    màn hình nhận lỗi 500 thô. Dùng chung cho tạo mới và sửa."""
+    if role not in INTERNAL_ROLES | CLIENT_ROLES:
+        raise HTTPException(422, f"Vai không hợp lệ: {role}")
+    if role in CLIENT_ROLES and not client_id:
+        raise HTTPException(422, "Tài khoản khách phải gắn với một hồ sơ khách hàng")
+    if client_id is not None and role not in CLIENT_ROLES:
+        raise HTTPException(422, "Chỉ tài khoản khách mới gắn được vào hồ sơ khách hàng")
+
+
+def _kiem_tra_sua_tai_khoan(*, uid: int, nguoi_sua_id: int, vai_cu: str, vai_moi: str,
+                            active_moi: bool, so_admin_khac_dang_mo: int) -> None:
+    """Chốt an toàn khi sửa/khoá tài khoản — logic thuần để test không cần CSDL.
+
+    · Không tự hạ vai / tự khoá mình: đang là admin duy nhất mà tự khoá là
+      không ai vào được màn hình quản trị nữa, chỉ còn đường SQL.
+    · Không hạ vai / khoá admin CUỐI CÙNG còn mở, dù người sửa là ai."""
+    if uid == nguoi_sua_id:
+        if vai_moi != vai_cu:
+            raise HTTPException(400, "Không tự đổi vai của chính mình")
+        if not active_moi:
+            raise HTTPException(400, "Không tự khoá tài khoản của chính mình")
+    if vai_cu == "admin" and (vai_moi != "admin" or not active_moi):
+        if so_admin_khac_dang_mo <= 0:
+            raise HTTPException(400, "Đây là tài khoản quản trị duy nhất còn hoạt động — "
+                                     "hãy tạo/mở một tài khoản admin khác trước")
+
+
+def _kiem_tra_phong_ban(cur, department_ids: list[int], head_of: list[int]) -> None:
+    ids = set(department_ids) | set(head_of)
+    if not ids:
+        return
+    cur.execute("SELECT id FROM departments WHERE id = ANY(%s)", (list(ids),))
+    co = {r[0] for r in cur.fetchall()}
+    thieu = sorted(ids - co)
+    if thieu:
+        raise HTTPException(422, f"Phòng ban không tồn tại: {thieu}")
+    if set(head_of) - set(department_ids):
+        raise HTTPException(422, "Làm trưởng phòng thì phải thuộc phòng đó")
+
+
 @app.post("/users")
 def users_add(body: UserIn, user=Depends(current_user)):
     require(user, {"admin"})
+    email = _chuan_hoa_email(body.email)
+    ho_ten = " ".join((body.full_name or "").split())
+    if not ho_ten:
+        raise HTTPException(422, "Thiếu họ tên")
+    # Vai khách BẮT BUỘC gắn hồ sơ khách; vai nội bộ không được gắn.
+    _kiem_tra_vai_va_khach(body.role, body.client_id)
+    features = quyen_tinh_nang.chuan_hoa(body.features)
+    # Mật khẩu: quản trị tự đặt (phải qua chính sách) hoặc để máy sinh tạm.
+    # Cả hai trường hợp đều là mật khẩu "tạm" — người dùng phải đổi lần đầu.
+    if body.password:
+        loi = auth.kiem_tra_mat_khau_moi(body.password, email=email)
+        if loi:
+            raise HTTPException(422, loi)
+        mat_khau_tam = body.password
+    else:
+        mat_khau_tam = auth.new_temp_password()
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("""INSERT INTO users (email,password_hash,full_name,role,can_review,client_id,monthly_quota)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                        (body.email, auth.hash_password(body.password), body.full_name,
-                         body.role, body.can_review, body.client_id, body.monthly_quota))
+            cur.execute("SELECT 1 FROM users WHERE lower(email)=%s", (email,))
+            if cur.fetchone():
+                raise HTTPException(409, f"Email {email} đã có tài khoản")
+            if body.client_id is not None:
+                cur.execute("SELECT 1 FROM clients WHERE id=%s", (body.client_id,))
+                if not cur.fetchone():
+                    raise HTTPException(404, "Không thấy hồ sơ khách hàng đã chọn")
+            depts = [] if body.role in CLIENT_ROLES else list(dict.fromkeys(body.department_ids))
+            heads = [] if body.role in CLIENT_ROLES else list(dict.fromkeys(body.head_of))
+            _kiem_tra_phong_ban(cur, depts, heads)
+            cur.execute("""INSERT INTO users (email,password_hash,full_name,role,can_review,
+                                              client_id,monthly_quota,features,
+                                              must_change_password)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,true) RETURNING id""",
+                        (email, auth.hash_password(mat_khau_tam), ho_ten,
+                         body.role, body.can_review, body.client_id, body.monthly_quota,
+                         json.dumps(features, ensure_ascii=False) if features else None))
             uid = cur.fetchone()[0]
-            for did in body.department_ids:
+            for did in depts:
                 cur.execute("""INSERT INTO user_departments (user_id,department_id,is_head)
                                VALUES (%s,%s,%s) ON CONFLICT DO NOTHING""",
-                            (uid, did, did in body.head_of))
+                            (uid, did, did in heads))
         db.audit(conn, user["id"], "create_user", "users", uid,
-                 {"role": body.role, "depts": body.department_ids})
-    return {"ok": True, "user_id": uid}
+                 {"role": body.role, "depts": depts,
+                  "client_id": body.client_id, "features": features,
+                  "monthly_quota": body.monthly_quota})
+    # mat_khau_tam chỉ trả về đúng lần này; CSDL giữ bản băm nên không xem lại
+    # được — mất thì dùng "Đặt lại mật khẩu".
+    return {"ok": True, "user_id": uid, "email": email, "mat_khau_tam": mat_khau_tam}
+
+
+class UserPatchIn(BaseModel):
+    """Trường nào None = giữ nguyên."""
+    full_name: str | None = None
+    role: str | None = None
+    client_id: int | None = None
+    department_ids: list[int] | None = None
+    head_of: list[int] | None = None
+    active: bool | None = None
+
+
+@app.patch("/users/{uid}")
+def users_update(uid: int, body: UserPatchIn, user=Depends(current_user)):
+    """Sửa tài khoản đã tạo: họ tên, vai, hồ sơ khách, phòng ban, khoá/mở.
+
+    Trước 22/09/2026 những việc này chỉ làm được bằng SQL (sổ tay IT mục 8.2).
+    Đưa vào vận hành chính thức thì quản trị phải tự làm trên web."""
+    require(user, {"admin"})
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT role, client_id, coalesce(active,true), full_name
+                             FROM users WHERE id=%s""", (uid,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Không thấy người dùng")
+            vai_cu, khach_cu, active_cu, ten_cu = row
+            vai_moi = body.role or vai_cu
+            active_moi = active_cu if body.active is None else body.active
+            # client_id: gửi lên thì lấy; vai đổi sang nội bộ thì bỏ; không gửi thì giữ.
+            if vai_moi in CLIENT_ROLES:
+                khach_moi = body.client_id if body.client_id is not None else khach_cu
+            else:
+                khach_moi = None
+            _kiem_tra_vai_va_khach(vai_moi, khach_moi)
+            cur.execute("""SELECT count(*) FROM users
+                            WHERE role='admin' AND coalesce(active,true) AND id<>%s""", (uid,))
+            _kiem_tra_sua_tai_khoan(uid=uid, nguoi_sua_id=user["id"], vai_cu=vai_cu,
+                                    vai_moi=vai_moi, active_moi=active_moi,
+                                    so_admin_khac_dang_mo=cur.fetchone()[0])
+            if khach_moi is not None and khach_moi != khach_cu:
+                cur.execute("SELECT 1 FROM clients WHERE id=%s", (khach_moi,))
+                if not cur.fetchone():
+                    raise HTTPException(404, "Không thấy hồ sơ khách hàng đã chọn")
+            ten_moi = ten_cu
+            if body.full_name is not None:
+                ten_moi = " ".join(body.full_name.split())
+                if not ten_moi:
+                    raise HTTPException(422, "Thiếu họ tên")
+            cur.execute("""UPDATE users SET full_name=%s, role=%s, client_id=%s, active=%s
+                            WHERE id=%s""", (ten_moi, vai_moi, khach_moi, active_moi, uid))
+            # Phòng ban: vai khách không có phòng; vai nội bộ chỉ ghi lại khi
+            # có gửi danh sách (None = giữ nguyên).
+            if vai_moi in CLIENT_ROLES:
+                cur.execute("DELETE FROM user_departments WHERE user_id=%s", (uid,))
+            elif body.department_ids is not None:
+                depts = list(dict.fromkeys(body.department_ids))
+                heads = [d for d in dict.fromkeys(body.head_of or []) if d in depts]
+                _kiem_tra_phong_ban(cur, depts, heads)
+                cur.execute("DELETE FROM user_departments WHERE user_id=%s", (uid,))
+                for did in depts:
+                    cur.execute("""INSERT INTO user_departments (user_id,department_id,is_head)
+                                   VALUES (%s,%s,%s)""", (uid, did, did in heads))
+            # Khoá tài khoản khách thì khoá luôn khoá API — không để một đường
+            # còn mở trong khi đường kia đã đóng.
+            if not active_moi:
+                cur.execute("UPDATE users SET api_key_hash=NULL, api_key_at=NULL WHERE id=%s",
+                            (uid,))
+        db.audit(conn, user["id"], "update_user", "users", uid,
+                 {"role": vai_moi, "active": active_moi, "client_id": khach_moi,
+                  "depts": body.department_ids, "head_of": body.head_of,
+                  "renamed": body.full_name is not None and ten_moi != ten_cu})
+    return {"ok": True, "user_id": uid, "role": vai_moi, "active": active_moi,
+            "client_id": khach_moi, "full_name": ten_moi}
+
+
+class ResetPwIn(BaseModel):
+    new_password: str | None = None   # None = máy sinh mật khẩu tạm
+
+
+@app.post("/users/{uid}/reset-password")
+def users_reset_password(uid: int, body: ResetPwIn, user=Depends(current_user)):
+    """Quản trị đặt lại mật khẩu cho người quên. Mật khẩu mới trả về MỘT LẦN
+    và người dùng bị bắt đổi ngay lần đăng nhập kế tiếp."""
+    require(user, {"admin"})
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT email FROM users WHERE id=%s", (uid,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Không thấy người dùng")
+            if body.new_password:
+                loi = auth.kiem_tra_mat_khau_moi(body.new_password, email=row[0])
+                if loi:
+                    raise HTTPException(422, loi)
+                mat_khau_tam = body.new_password
+            else:
+                mat_khau_tam = auth.new_temp_password()
+            cur.execute("""UPDATE users SET password_hash=%s, must_change_password=true
+                            WHERE id=%s""", (auth.hash_password(mat_khau_tam), uid))
+        db.audit(conn, user["id"], "reset_password", "users", uid, {})
+    return {"ok": True, "user_id": uid, "mat_khau_tam": mat_khau_tam}
 
 
 @app.post("/users/{uid}/review-permission")
@@ -1561,7 +2474,9 @@ def users_set_review(uid: int, grant: bool, user=Depends(current_user)):
     require(user, {"admin"})
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET can_review=%s WHERE id=%s", (grant, uid))
+            cur.execute("UPDATE users SET can_review=%s WHERE id=%s RETURNING id", (grant, uid))
+            if not cur.fetchone():
+                raise HTTPException(404, "Không thấy người dùng")
         db.audit(conn, user["id"], "set_review_perm", "users", uid, {"grant": grant})
     return {"ok": True, "user_id": uid, "can_review": grant}
 
@@ -1575,7 +2490,10 @@ def users_set_finance(uid: int, grant: bool, user=Depends(current_user)):
     require(user, {"admin"})
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET can_view_finance=%s WHERE id=%s", (grant, uid))
+            cur.execute("UPDATE users SET can_view_finance=%s WHERE id=%s RETURNING id",
+                        (grant, uid))
+            if not cur.fetchone():
+                raise HTTPException(404, "Không thấy người dùng")
         db.audit(conn, user["id"], "set_finance_perm", "users", uid, {"grant": grant})
     return {"ok": True, "user_id": uid, "can_view_finance": grant}
 
@@ -1616,6 +2534,90 @@ def users_revoke_api_key(uid: int, user=Depends(current_user)):
 
 
 # ---------- 7. DANH SÁCH TÀI LIỆU ĐÃ HỌC ----------
+# TÌM THEO TÊN KHÔNG PHÂN BIỆT DẤU / GẠCH DƯỚI (kiểm thử 02/10, F-19): tên văn
+# bản luật là tên tệp "04_Bo_luat_Lao_dong_45-2019-QH14" — gõ "lao động" (có
+# dấu) không bao giờ khớp ILIKE. So trên bản đã bỏ dấu + đổi _ - . thành dấu
+# cách, MỖI TỪ phải có mặt (thứ tự tự do: "bộ luật lao động 2019" khớp tên có
+# "45" chen giữa). Bảng chữ dùng translate() — Postgres không có unaccent sẵn.
+_VN_CO_DAU = ("àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡ"
+              "ùúụủũưừứựửữỳýỵỷỹđ")
+_VN_CO_DAU += _VN_CO_DAU.upper()
+_VN_KHONG_DAU = "".join(
+    unicodedata.normalize("NFD", ch)[0].lower().replace("đ", "d") for ch in _VN_CO_DAU)
+assert len(_VN_CO_DAU) == len(_VN_KHONG_DAU)
+
+
+# & và dấu nháy (thẳng, cong) cũng là dấu ngắt (05/10/2026): "Dave & Buster's" từng
+# không tìm ra được vì "buster's" không khớp từ "buster". Nháy đơn được thoát khi
+# ghép vào SQL (_gap_sql).
+_DAU_NGAT_TIM = "_-.,;:()[]/&'’\""
+
+
+def _gap_tim(s: str) -> str:
+    """Bỏ dấu, chữ thường, dấu ngắt → dấu cách, gộp khoảng trắng."""
+    s = unicodedata.normalize("NFD", (s or "").lower())
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn").replace("đ", "d")
+    s = s.translate({ord(c): " " for c in _DAU_NGAT_TIM})
+    return " ".join(s.split())
+
+
+def _gap_sql(cols: tuple, sep: str = " | ") -> str:
+    """Biểu thức SQL tương đương _gap_tim trên các cột ghép (ngăn bằng " | " để
+    một cụm không khớp vắt qua hai cột), bọc dấu cách hai đầu để khớp theo TỪ.
+    Không gộp khoảng trắng ở đây (regexp_replace tốn thêm ~0,3 giây/lượt) — mẫu
+    tìm tự chịu nhiều dấu cách bằng ' +'."""
+    ghep = f" || '{sep}' || ".join(f"coalesce({c},'')" for c in cols)
+    return ("(' ' || translate(lower(translate(" + ghep + ",'" + _DAU_NGAT_TIM.replace("'", "''") + "','"
+            + " " * len(_DAU_NGAT_TIM) + "')),%s,%s) || ' ')")
+
+
+def _dk_tim_ten(q: str, cot_gap: tuple, cot_thuong: tuple) -> tuple[str, list]:
+    """Điều kiện SQL tìm theo tên, không phân biệt dấu / gạch dưới:
+      (a) cả cụm đã bỏ dấu nằm trong tên theo RANH GIỚI TỪ ("ban an" khớp
+          "Bản án số 12…" nhưng không khớp "ban hành … dự án"); HOẶC
+      (b) câu tìm có ≥ 2 từ dài (≥ 3 ký tự) và MỌI từ dài đều có mặt nguyên
+          từ, thứ tự tự do ("bộ luật lao động 2019" khớp "04_Bo_luat_Lao_dong_
+          45-2019-QH14" có "45" chen giữa); HOẶC
+      (c) q nguyên văn ILIKE một cột cot_thuong (tóm tắt, số hiệu).
+    Khớp chuỗi con theo từng từ ngắn ("an", "ba") là ra cả kho — kiểm thử 03/10.
+    (a)+(b) gói trong MỘT biểu thức chính quy để biểu thức bỏ dấu chỉ tính một
+    lần mỗi dòng (đo 03/10 trên 106.000 tài liệu: ~1,6 giây; tách nhiều LIKE /
+    subquery: 5–9 giây). Từ chỉ gồm [a-z0-9] nên ghép vào regex không cần thoát."""
+    tu = re.findall(r"[a-z0-9]+", _gap_tim(q))[:12]
+    phan, params = [], []
+    if tu:
+        mau = "( " + " +".join(tu) + " )"
+        dai = [w for w in tu if len(w) >= 3][:8]
+        if len(dai) >= 2:
+            mau += "|(^" + "".join(f"(?=.* {w} )" for w in dai) + ")"
+        phan.append(_gap_sql(cot_gap) + " ~ %s")
+        params += [_VN_CO_DAU, _VN_KHONG_DAU, mau]
+    for col in cot_thuong:
+        phan.append(f"{col} ILIKE %s")
+        params.append(f"%{q}%")
+    return "(" + " OR ".join(phan) + ")", params
+
+
+def _thu_tu_tim(q: str) -> tuple[str, list]:
+    """ORDER BY theo ĐỘ KHỚP thay vì chỉ theo ngày: trùng số hiệu → trùng đúng
+    tên "loại + trích yếu" ("Luật Doanh nghiệp") → tên tệp chứa cả cụm → mới
+    nhất. Thiếu bước này, tìm "59/2020/QH14" ra 20 nghị định / quyết định
+    NHẮC tới Luật Doanh nghiệp (mới nạp hơn) và chính văn bản luật rơi khỏi
+    trang đầu (kiểm thử 03/10, ST-03 "nguồn chọn=None")."""
+    tu = re.findall(r"[a-z0-9]+", _gap_tim(q))[:12]
+    if not tu:
+        return "d.created_at DESC", []
+    cum = " " + " ".join(tu) + " "
+    mau = "( " + " +".join(tu) + " )"
+    sql = (f"({_gap_sql(('d.so_hieu',))} = %s) DESC, "
+           f"({_gap_sql(('d.loai_van_ban', 'd.trich_yeu'), sep=' ')} = %s) DESC, "
+           f"({_gap_sql(('d.title',))} ~ %s) DESC, d.created_at DESC")
+    params = [_VN_CO_DAU, _VN_KHONG_DAU, cum,
+              _VN_CO_DAU, _VN_KHONG_DAU, cum,
+              _VN_CO_DAU, _VN_KHONG_DAU, mau]
+    return sql, params
+
+
 @app.get("/documents")
 def documents_list(user=Depends(current_user), q: str = "", doc_type: str = "", limit: int = 200):
     """Danh sách tài liệu đã vào kho, kèm tóm tắt. Chỉ admin hoặc người được cấp quyền.
@@ -1636,13 +2638,15 @@ def documents_list(user=Depends(current_user), q: str = "", doc_type: str = "", 
     if not user["can_finance"]:
         sql += " AND d.doc_type <> 'cong_no'"
     if q:
-        sql += " AND (d.title ILIKE %s OR d.summary ILIKE %s)"
-        params += [f"%{q}%", f"%{q}%"]
+        dk, ts = _dk_tim_ten(q, ("d.title", "d.trich_yeu"), ("d.summary", "d.so_hieu"))
+        sql += " AND " + dk
+        params += ts
     if doc_type:
         sql += " AND d.doc_type = %s"
         params.append(doc_type)
-    sql += " ORDER BY d.created_at DESC LIMIT %s"
-    params.append(limit)
+    thu_tu, tp = _thu_tu_tim(q) if q else ("d.created_at DESC", [])
+    sql += " ORDER BY " + thu_tu + " LIMIT %s"
+    params += tp + [limit]
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
@@ -1726,11 +2730,12 @@ def documents_browse(user=Depends(current_user), q: str = "", limit: int = 300):
         # Tên file luật là "Luật số 59-2020-QH14" — gõ "Luật Doanh nghiệp" mà
         # chỉ soi title thì ra toàn nghị định (kiểm thử 18/09/2026). Trích yếu
         # và số hiệu mới là chỗ tên thật của văn bản nằm.
-        sql += (" AND (d.title ILIKE %s OR d.summary ILIKE %s"
-                " OR d.trich_yeu ILIKE %s OR d.so_hieu ILIKE %s)")
-        params += [f"%{q}%"] * 4
-    sql += " ORDER BY d.created_at DESC LIMIT %s"
-    params.append(limit)
+        dk, ts = _dk_tim_ten(q, ("d.title", "d.trich_yeu"), ("d.summary", "d.so_hieu"))
+        sql += " AND " + dk
+        params += ts
+    thu_tu, tp = _thu_tu_tim(q) if q else ("d.created_at DESC", [])
+    sql += " ORDER BY " + thu_tu + " LIMIT %s"
+    params += tp + [limit]
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
@@ -1739,7 +2744,7 @@ def documents_browse(user=Depends(current_user), q: str = "", limit: int = 300):
     # Đọc ma trận MỘT LẦN cho cả danh sách, không mỗi dòng một lượt truy vấn
     rules = rag.load_access_rules()
     for r in rows:
-        doc = {"access_level": r[3], "department_id": r[5], "doc_type": r[2],
+        doc = {"id": r[0], "access_level": r[3], "department_id": r[5], "doc_type": r[2],
                "client_id": r[4], "title": r[1], "department_name": r[6]}
         can_open = rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"], doc,
                                     can_finance=user["can_finance"],
@@ -1827,12 +2832,36 @@ class KhoHocBody(BaseModel):
     auto_approve: bool = False
 
 
+# Chờ kết quả học tới mốc này rồi trả "đang học" — dưới 100 giây Cloudflare
+# cắt kết nối (quá mốc đó trình duyệt nhận trang lỗi HTML, không phải JSON).
+KHO_HOC_CHO_GIAY = float(os.getenv("KHO_HOC_CHO_GIAY", "60"))
+_NOTE_DANG_HOC = ("Tệp đã nằm trong kho; máy đang học nền (tệp dài hoặc bản scan cần "
+                  "vài phút). Bấm Tải lại sau ít phút để xem trạng thái — không cần "
+                  "tải lên lại.")
+
+
+async def _cho_hoc(fut, han: float) -> dict:
+    """Kết quả một lượt học xếp ở kho.gui_hoc, chờ tối đa tới mốc `han`
+    (time.monotonic). Quá mốc thì báo "đang học" — lượt học KHÔNG bị huỷ
+    (shield), nó chạy tiếp trong luồng nền."""
+    try:
+        return await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(fut)),
+                                      timeout=max(0.05, han - time.monotonic()))
+    except asyncio.TimeoutError:
+        return {"ok": True, "trang_thai": "dang_hoc", "warnings": [], "note": _NOTE_DANG_HOC}
+
+
 @app.post("/kho/hoc")
-def kho_hoc(body: KhoHocBody, user=Depends(current_user)):
-    """Học ngay một file đang nằm trong kho (chưa học / lỗi / nội dung đổi)."""
+async def kho_hoc(body: KhoHocBody, user=Depends(current_user)):
+    """Học ngay một file đang nằm trong kho (chưa học / lỗi / nội dung đổi).
+    Học trong luồng nền của kho; quá KHO_HOC_CHO_GIAY thì trả "đang học"."""
     require_reviewer(user)
-    return _kho_hoac_400(kho.hoc_file, body.path, user["id"],
-                         auto_approve=bool(body.auto_approve))
+    _kho_hoac_400(kho.kiem_tra_tep_hoc, body.path)
+    fut = kho.gui_hoc(body.path, user["id"], auto_approve=bool(body.auto_approve))
+    try:
+        return await _cho_hoc(fut, time.monotonic() + KHO_HOC_CHO_GIAY)
+    except kho.LoiKho as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/kho/quet")
@@ -1841,6 +2870,40 @@ def kho_quet(user=Depends(current_user)):
     sách duyệt như mọi lượt quét thường (không cờ tự duyệt)."""
     require_reviewer(user)
     return _kho_hoac_400(kho.bat_dau_quet, user["id"])
+
+
+# ---------- Lịch chạy tự động (cron) — bật/tắt trên trang Cài đặt ----------
+# app/lich_chay.py: web chỉ bật/tắt ĐÚNG các dòng crontab mang nhãn
+# "# hds-ai:" (thêm/bỏ tiền tố #TAT#), không sửa được lệnh hay lịch.
+def _lich_hoac_http(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except lich_chay.LoiLich as e:
+        raise HTTPException(e.status, str(e))
+
+
+class LichChayBody(BaseModel):
+    bat: bool
+
+
+@app.get("/lich-chay")
+def lich_chay_danh_sach(user=Depends(current_user)):
+    require(user, {"admin"})
+    return _lich_hoac_http(lich_chay.danh_sach)
+
+
+@app.post("/lich-chay/{ma}")
+def lich_chay_dat(ma: str, body: LichChayBody, user=Depends(current_user)):
+    """Bật / tắt một lịch. Tắt không dừng lượt đang chạy."""
+    require(user, {"admin"})
+    return _lich_hoac_http(lich_chay.dat, ma, body.bat, user["id"])
+
+
+@app.post("/lich-chay/{ma}/cai")
+def lich_chay_cai(ma: str, user=Depends(current_user)):
+    """Cài lại lịch có trong mã nguồn (quét kho, sao lưu) khi crontab thiếu."""
+    require(user, {"admin"})
+    return _lich_hoac_http(lich_chay.cai_lai, ma, user["id"])
 
 
 @app.get("/kho/tien-do")
@@ -1927,12 +2990,29 @@ async def kho_tai_len(
     user=Depends(current_user),
 ):
     """Tải một hay nhiều file vào ĐÚNG thư mục trong kho rồi học ngay từng
-    file. Mỗi file một kết quả riêng — một file hỏng không chặn các file khác."""
+    file. Mỗi file một kết quả riêng — một file hỏng không chặn các file khác.
+
+    Thứ tự có chủ ý (29/09/2026):
+      1. Kiểm thư mục MỘT lần trước khi ghi gì: thư mục khách chưa tách được
+         mã thì bộ quét bỏ qua mọi tệp trong đó — trước đây tệp vẫn được ghi
+         rồi báo "lỗi học", nằm kẹt không gỡ được, tải lại thì bị "đã có".
+      2. Ghi vào tên tạm ẩn rồi đổi tên một bước: cron quét 3 phút/lần không
+         đọc phải tệp đang ghi dở.
+      3. Học trong luồng nền của kho (kho.gui_hoc), chờ tới KHO_HOC_CHO_GIAY
+         cho CẢ lượt; tệp chưa xong báo "đang học" và vẫn học tiếp.
+    """
     require_reviewer(user)
     if len(files) > 20:
         raise HTTPException(400, "Mỗi lần tối đa 20 file")
+    try:
+        kho.thu_muc_tai_len(path)
+    except kho.LoiKho as e:
+        for f in files:
+            await f.close()
+        raise HTTPException(400, str(e))
+    han = time.monotonic() + KHO_HOC_CHO_GIAY
     gioi_han = MAX_UPLOAD_MB * 1024 * 1024
-    ket_qua = []
+    ket_qua, dang_cho = [], []
     for f in files:
         safe = _safe_filename(f.filename)
         try:
@@ -1941,31 +3021,48 @@ async def kho_tai_len(
             await f.close()
             ket_qua.append({"filename": safe, "ok": False, "loi": str(e)})
             continue
+        tam = kho.tep_tam_cho(dest)
         size, qua_co = 0, False
         try:
-            with dest.open("wb") as out:
+            with tam.open("wb") as out:
                 while chunk := await f.read(1024 * 1024):
                     size += len(chunk)
                     if size > gioi_han:
                         qua_co = True
                         break
                     out.write(chunk)
+        except OSError as e:
+            tam.unlink(missing_ok=True)
+            ket_qua.append({"filename": safe, "ok": False,
+                            "loi": f"Không ghi được tệp vào kho: {e.strerror or e}"})
+            continue
         finally:
             await f.close()
         if qua_co:
-            dest.unlink(missing_ok=True)
+            tam.unlink(missing_ok=True)
             ket_qua.append({"filename": safe, "ok": False,
                             "loi": f"Tệp vượt quá {MAX_UPLOAD_MB} MB"})
             continue
         try:
-            r = kho.hoc_file(kho.rel_cua(dest), user["id"], auto_approve=bool(auto_approve))
-            r.update({"filename": safe, "bytes": size, "path": kho.rel_cua(dest)})
+            kho.dat_vao_cho(tam, dest)
+        except kho.LoiKho as e:
+            ket_qua.append({"filename": safe, "ok": False, "loi": str(e)})
+            continue
+        rel = kho.rel_cua(dest)
+        r = {"filename": safe, "bytes": size, "path": rel}
+        ket_qua.append(r)
+        dang_cho.append((r, kho.gui_hoc(rel, user["id"], auto_approve=bool(auto_approve))))
+    for r, fut in dang_cho:
+        try:
+            r.update(await _cho_hoc(fut, han))
         except kho.LoiKho as e:
             # File vẫn nằm trong kho để admin thấy trạng thái "lỗi" trên cây và
             # quyết định gỡ hay sửa; bộ quét lần sau cũng sẽ thử lại.
-            r = {"filename": safe, "ok": False, "loi": str(e), "bytes": size,
-                 "path": kho.rel_cua(dest), "da_luu": True}
-        ket_qua.append(r)
+            r.update({"ok": False, "loi": str(e), "da_luu": True})
+        except Exception as e:  # noqa: BLE001 — một tệp lỗi lạ không được nuốt kết quả cả lượt
+            r.update({"ok": False, "da_luu": True,
+                      "loi": f"Lỗi máy khi học ({type(e).__name__}) — tệp đã lưu, "
+                             "lượt quét định kỳ sẽ thử lại."})
     return {"ok": all(x.get("ok") for x in ket_qua), "ket_qua": ket_qua}
 
 
@@ -2051,7 +3148,7 @@ def document_detail(doc_id: int, user=Depends(current_user)):
             r = _doc_row_or_404(cur, doc_id)
             quan_he = (van_ban.doc_quan_he(cur, r[11]) if r[11]
                        else {"xuoi": [], "nguoc": []})
-    doc = {"access_level": r[3], "department_id": r[5], "doc_type": r[2],
+    doc = {"id": r[0], "access_level": r[3], "department_id": r[5], "doc_type": r[2],
            "client_id": r[4], "title": r[1], "department_name": r[6]}
     rules = rag.load_access_rules()
     can_open = rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"],
@@ -2238,13 +3335,23 @@ def client_dossier(client_id: int, user=Depends(current_user)):
     dossier = rag.client_360(client_id, user["dept_ids"], user["is_banqt"])
     if not dossier:
         raise HTTPException(404, "Không dựng được hồ sơ")
+    # Phòng phụ trách — màn 360 hiện và (admin/Ban QT) đổi được ngay tại chỗ.
+    dossier["department_id"] = client_dept
+    dossier["department_name"] = None
+    if client_dept is not None:
+        with db.session(role="internal", admin=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT name FROM departments WHERE id=%s", (client_dept,))
+                r = cur.fetchone()
+                dossier["department_name"] = r[0] if r else None
     # Giấy tờ trong hồ sơ mở được ngay tại chỗ (nút Xem/Tải về gọi
     # /files/{id}/preview|download) nên phải đi qua ĐÚNG cửa quyền của hai
     # endpoint đó — cùng một hàm can_open_doc, không mở cửa thứ hai. Đọc ma
     # trận MỘT LẦN cho cả danh sách.
     rules = rag.load_access_rules()
     for d in dossier["documents"]:
-        doc = {"access_level": d["access_level"], "department_id": d["department_id"],
+        doc = {"id": d.get("id"), "access_level": d["access_level"],
+               "department_id": d["department_id"],
                "doc_type": d.pop("doc_type_raw"), "client_id": client_id,
                "title": d["title"], "department_name": d["department_name"]}
         can_open = rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"],
@@ -2256,6 +3363,47 @@ def client_dossier(client_id: int, user=Depends(current_user)):
             d["summary"] = None
             d["has_file"] = False
     return dossier
+
+
+class ClientPatchIn(BaseModel):
+    department_id: int | None = None
+
+
+@app.patch("/clients/{client_id}")
+def client_patch(client_id: int, body: ClientPatchIn, user=Depends(current_user)):
+    """Gán / bỏ gán PHÒNG PHỤ TRÁCH cho một khách (admin, Ban QT).
+
+    Vì sao cần (kiểm thử 02/10/2026, F-17): 329/329 khách tự sinh từ thư mục
+    kho đều chưa có phòng, nên luật "hồ sơ khách chỉ phòng phụ trách mở được"
+    chưa bao giờ có hiệu lực — mọi trưởng bộ phận, chuyên viên mở được hồ sơ
+    mọi khách. Gán phòng ở đây đổi luôn department_id của MỌI tài liệu khách
+    đó (trigger CSDL tự đồng bộ xuống chunks) nên phân quyền có hiệu lực ngay,
+    và các tệp học sau này tự nhận phòng từ khách (auto_learn.resolve_labels).
+    """
+    require(user, SEE_ALL)
+    dept = body.department_id
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT department_id, name FROM clients WHERE id=%s", (client_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Không thấy khách hàng")
+            ten_phong = None
+            if dept is not None:
+                cur.execute("SELECT name FROM departments WHERE id=%s", (dept,))
+                r = cur.fetchone()
+                if not r:
+                    raise HTTPException(422, "Phòng ban không tồn tại")
+                ten_phong = r[0]
+            cur.execute("UPDATE clients SET department_id=%s WHERE id=%s", (dept, client_id))
+            cur.execute("""UPDATE documents SET department_id=%s
+                            WHERE client_id=%s AND department_id IS DISTINCT FROM %s""",
+                        (dept, client_id, dept))
+            so_tai_lieu = cur.rowcount
+        db.audit(conn, user["id"], "set_client_department", "clients", client_id,
+                 {"truoc": row[0], "sau": dept, "khach": row[1], "so_tai_lieu": so_tai_lieu})
+    return {"ok": True, "client_id": client_id, "department_id": dept,
+            "department_name": ten_phong, "so_tai_lieu_cap_nhat": so_tai_lieu}
 
 
 @app.get("/alerts")
@@ -2336,13 +3484,20 @@ def departments_list(user=Depends(current_user)):
 
 # ---------- 8. Thống kê & sức khoẻ ----------
 @app.get("/stats")
-def stats():
+def stats(user=Depends(current_user)):
+    # Số liệu toàn kho (số tài liệu, khách, chờ duyệt…) là thông tin nội bộ —
+    # trước 03/10/2026 ai trên Internet cũng đọc được (kiểm thử HT-04).
+    require(user, INTERNAL_ROLES)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT
                 (SELECT count(*) FROM documents),
                 (SELECT count(*) FROM documents WHERE label_verified),
-                (SELECT count(*) FROM documents WHERE NOT label_verified),
+                -- Tài liệu ĐÃ GỠ (active=false) không còn chờ ai duyệt cả; đếm
+                -- nó vào đây thì con số trên Tổng quan lệch với số của tab Duyệt
+                -- nhãn (cùng điều kiện với /review/pending) và không ai hiểu vì sao.
+                (SELECT count(*) FROM documents
+                  WHERE NOT label_verified AND coalesce(active, true)),
                 (SELECT count(*) FROM documents WHERE access_level='client' AND client_id IS NULL),
                 (SELECT count(*) FROM chunks),
                 (SELECT count(DISTINCT m.id) FROM messages m
@@ -2363,10 +3518,67 @@ def stats():
 
 
 @app.get("/health")
-def health():
+def health(request: Request):
+    """Còn sống không — KHÔNG cần đăng nhập (setup.sh/giám sát gọi).
+
+    Từ Internet (đi qua nginx, có X-Forwarded-For) chỉ trả các cờ đúng/sai:
+    tên model, danh sách model đã nạp, cấu hình cloud là thông tin trinh sát,
+    không cho người lạ xem (kiểm thử 02/10, F-03). Gọi thẳng trên máy chủ
+    (127.0.0.1, không qua nginx) thì trả đủ chi tiết như cũ."""
     from app.models import check_models
     st = check_models()
-    return {"database": db.check_connection(), **st}
+    out = {"database": db.check_connection(), **st}
+    truc_tiep = (not request.headers.get("x-forwarded-for")
+                 and (request.client.host if request.client else "") in ("127.0.0.1", "::1"))
+    if truc_tiep:
+        return out
+    return {k: bool(out.get(k)) for k in ("database", "ollama", "llm", "embed")}
+
+
+# ---- Đọc giấy tờ cho web Đăng ký kinh doanh -------------------------------------
+# Web ĐKKD là app công khai (khách tự điền hồ sơ, không có tài khoản ở đây).
+# Không đăng nhập, không khoá API — khoá nhúng vào trang web là lộ. Thay vào đó:
+#   1. Origin phải nằm trong DKKD_ALLOWED_ORIGINS ("chỉ web của tôi");
+#   2. van tần suất theo IP (_dkkd_rate_check);
+#   3. endpoint không chạm CSDL, không đọc kho — chỉ nhận ảnh, trả JSON.
+# Chi tiết luồng + hợp đồng dữ liệu: app/dkkd_extract.py, deploy/DOC_GIAY_TO_DKKD.md
+def _dkkd_gate(request: Request):
+    if not dkkd_extract.ALLOWED_ORIGINS:
+        raise HTTPException(503, "Chưa bật đọc giấy tờ ĐKKD trên máy chủ "
+                                 "(thiếu DKKD_ALLOWED_ORIGINS trong .env)")
+    if not dkkd_extract.origin_allowed(request.headers.get("origin"),
+                                       request.headers.get("referer")):
+        raise HTTPException(403, "Nguồn gọi không được phép")
+    _dkkd_rate_check(request)
+
+
+@app.post("/dkkd/extract")
+async def dkkd_extract_documents(request: Request):
+    """Nhận ảnh CCCD / hộ chiếu / Giấy ĐKDN, trả JSON 14 trường để app tự điền.
+
+    Payload y hệt cái app đang gửi cho webhook n8n nên phía app chỉ đổi URL.
+    Model thị giác nạp vào GPU lúc gọi và (mặc định) dỡ ngay sau khi trả lời."""
+    _dkkd_gate(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Body phải là JSON") from None
+    from fastapi.concurrency import run_in_threadpool
+    try:
+        docs = dkkd_extract.parse_documents(body)
+        # Giải mã ảnh + chờ GPU vài giây tới vài chục giây: chạy ngoài event
+        # loop để SSE của chat nội bộ không đứng theo.
+        result = await run_in_threadpool(dkkd_extract.extract, docs)
+    except dkkd_extract.DkkdError as e:
+        raise HTTPException(e.status, e.message) from None
+    return result
+
+
+@app.get("/dkkd/status")
+def dkkd_status():
+    """Cho IT kiểm nhanh: model đã pull chưa, đang nằm trong VRAM không, đã khai
+    origin chưa. Không lộ gì ngoài tên model (như /health)."""
+    return dkkd_extract.status()
 
 
 @app.get("/models")
@@ -2473,7 +3685,9 @@ def models_benchmark(user=Depends(current_user), model: str | None = None):
 
 DATA_RAW = Path(os.getenv("DATA_RAW", "./data/raw"))
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
-ALLOWED_UPLOAD_EXT = {".pdf", ".docx", ".xlsx", ".csv", ".txt", ".md",
+# .doc (Word 97) nhận như bộ quét kho và /kho/tai-len — trước 03/10/2026 riêng
+# đường "Nạp tài liệu vào kho" từ chối .doc (F-15).
+ALLOWED_UPLOAD_EXT = {".pdf", ".docx", ".doc", ".xlsx", ".csv", ".txt", ".md",
                       # Ảnh chụp giấy tờ (CCCD, sơ yếu, CV…) — đọc bằng OCR,
                       # luôn vào hàng chờ duyệt vì OCR có thể sai ký tự.
                       ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"}
@@ -2534,9 +3748,13 @@ async def files_upload(
     finally:
         await file.close()
 
+    from fastapi.concurrency import run_in_threadpool
     from app.ingest import ingest_file
     try:
-        doc_id = ingest_file(
+        # Trích + OCR + nhúng chạy trong threadpool — gọi thẳng trong hàm async
+        # là treo event loop, cả trang web đứng theo tới khi học xong.
+        doc_id = await run_in_threadpool(
+            ingest_file,
             dest, doc_type=doc_type, access_level=access_level, client_id=client_id,
             department_id=department_id, matter_id=matter_id,
             approved=auto_approve, label_verified=auto_approve, source_kind="web",
@@ -2549,18 +3767,42 @@ async def files_upload(
         dest.unlink(missing_ok=True)
         raise HTTPException(400, "Không trích được nội dung văn bản từ tệp này")
 
+    tu_duyet_ly_do = None
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("UPDATE documents SET uploaded_by=%s WHERE id=%s", (user["id"], doc_id))
             cur.execute("SELECT approved,extraction_status FROM documents WHERE id=%s", (doc_id,))
             actual_approved, extraction_status = cur.fetchone()
+            # CHÍNH SÁCH DUYỆT 28/09 cho cả đường này (kiểm thử 02/10, F-15): thẻ
+            # "Tải lên vào đây" của Kho tài liệu tự duyệt khi tỉ lệ chữ rác ≤
+            # ngưỡng, còn "Nạp tài liệu vào kho" vẫn bắt chờ duyệt nếu không
+            # tick — hai cửa cùng một kho mà hai luật. Ngưỡng đặt 'off' trên
+            # web thì giữ nguyên hành vi cũ (chỉ duyệt khi người duyệt tick).
+            from app import auto_learn
+            if not actual_approved and auto_learn.nguong_tu_duyet() is not None:
+                cur.execute("SELECT content FROM chunks WHERE document_id=%s ORDER BY chunk_index",
+                            (doc_id,))
+                van_ban_hoc = "\n\n".join(_CTX_HEADER_RE.sub("", r[0] or "", count=1)
+                                          for r in cur.fetchall())
+                duyet, ty_le, tu_duyet_ly_do = auto_learn.quyet_dinh_duyet(
+                    van_ban_hoc, ext, extraction_status == "ready", False)
+                cur.execute("UPDATE documents SET ty_le_rac=%s WHERE id=%s", (ty_le, doc_id))
+                if duyet:
+                    cur.execute("""UPDATE documents SET approved=true,label_verified=true
+                                    WHERE id=%s""", (doc_id,))
+                    actual_approved = True
         db.audit(conn, user["id"], "web_upload", "documents", doc_id,
-                 {"file": safe, "bytes": size, "auto_approve": auto_approve})
+                 {"file": safe, "bytes": size, "auto_approve": auto_approve,
+                  "tu_duyet": tu_duyet_ly_do})
 
-    if extraction_status == "warning":
-        note = "Đã trích xuất nhưng có cảnh báo; bắt buộc duyệt thủ công trước khi dùng."
+    if actual_approved:
+        note = ("Đã nạp vào kho (tự duyệt: tỉ lệ chữ đọc lỗi dưới ngưỡng)."
+                if tu_duyet_ly_do else "Đã nạp vào kho.")
+    elif extraction_status == "warning":
+        note = ("Đã trích xuất nhưng chữ đọc lỗi nhiều (bản scan/OCR) — đã vào hàng "
+                "chờ duyệt, cần người duyệt soát nội dung trước khi dùng.")
     else:
-        note = "Đã nạp vào kho." if actual_approved else "Đã vào hàng chờ duyệt nhãn."
+        note = "Đã vào hàng chờ duyệt nhãn."
     return {"ok": True, "document_id": doc_id, "filename": safe, "bytes": size,
             "stored_path": str(dest),
             "extraction_status": extraction_status, "note": note}
@@ -2572,8 +3814,13 @@ def _original_file(doc_id: int, user) -> tuple[Path, str]:
 
     Quyền mở dùng CHUNG một hàm với cơ chế che tên (rag.can_open_doc) nên
     không thể mở thứ mình không được xem. Đường dẫn bị nhốt trong DATA_RAW.
+
+    Tài khoản khách chỉ vào được khi đã bật chức năng "Xem và tải tài liệu",
+    và can_open_doc chặn tiếp theo mã khách: chỉ hồ sơ của chính họ.
     """
-    require(user, INTERNAL_ROLES)
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    if user["role"] in CLIENT_ROLES:
+        _can_tinh_nang(user, "tai_lieu")
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT d.title, d.source_path, d.access_level, d.department_id,
@@ -2585,12 +3832,13 @@ def _original_file(doc_id: int, user) -> tuple[Path, str]:
     if not row:
         raise HTTPException(404, "Không thấy tài liệu")
 
-    doc = {"access_level": row[2], "department_id": row[3], "doc_type": row[4],
+    doc = {"id": doc_id, "access_level": row[2], "department_id": row[3], "doc_type": row[4],
            "client_id": row[5], "title": row[0], "department_name": row[6]}
     if not rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"], doc,
                             can_finance=user["can_finance"],
                             rules=rag.load_access_rules(),
-                            dept_codes=user["dept_codes"]):
+                            dept_codes=user["dept_codes"],
+                            client_id=user.get("client_id")):
         raise HTTPException(403, "Tài khoản chưa có quyền mở tài liệu này")
 
     if not row[1]:
@@ -2620,6 +3868,7 @@ def _original_file(doc_id: int, user) -> tuple[Path, str]:
 @app.get("/files/{doc_id}/download")
 def files_download(doc_id: int, user=Depends(current_user)):
     """Tải bản gốc tài liệu về máy người dùng."""
+    _can_tinh_nang(user, "tai_lieu")
     resolved, _title = _original_file(doc_id, user)
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user["id"], "download_document", "documents", doc_id, {})
@@ -2637,43 +3886,13 @@ def _preview_pdf(resolved: Path, cache_key) -> Path:
     """Bản PDF xem trước của một file Office, sinh một lần rồi dùng lại.
 
     cache_key: id tài liệu trong kho, hoặc "fill-<token>" cho file vừa điền.
-    Cache theo mtime: file gốc đổi (Drive đồng bộ bản mới) thì sinh lại.
-    LibreOffice đã có sẵn trên máy chủ (update.sh cài libreoffice-writer cho
-    khâu đọc .doc) — máy dev thiếu thì trả 409 để giao diện lùi về nút Tải về.
+    Việc chuyển nằm ở app/xem_truoc.py (dùng chung với phần xem thẳng cho CRM,
+    01/10/2026); ở đây chỉ đổi lỗi thành 409 để giao diện lùi về nút Tải về.
     """
-    import shutil as _shutil
-    import subprocess
-    import tempfile
-
-    out_dir = DATA_WORK / "preview"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / (re.sub(r"[^A-Za-z0-9_-]", "_", str(cache_key)) + ".pdf")
     try:
-        if out.exists() and out.stat().st_mtime >= resolved.stat().st_mtime:
-            return out
-    except OSError:
-        pass
-    soffice = _shutil.which("libreoffice") or _shutil.which("soffice")
-    if not soffice:
-        raise HTTPException(409, "Máy chủ chưa có LibreOffice để tạo bản xem "
-                                 "trước — hãy dùng nút Tải về.")
-    with tempfile.TemporaryDirectory() as tmp:
-        # Hồ sơ LibreOffice riêng cho mỗi lượt — cùng lý do với khâu đọc .doc
-        # trong ingest: hai lượt chuyển đổi chạy song song không giẫm profile.
-        cmd = [soffice, "--headless", "--convert-to", "pdf",
-               "--outdir", tmp, f"-env:UserInstallation=file://{tmp}/profile",
-               str(resolved)]
-        try:
-            subprocess.run(cmd, capture_output=True, timeout=120, check=True)
-        except (subprocess.SubprocessError, OSError):
-            raise HTTPException(409, "Chưa chuyển được file này sang PDF để xem "
-                                     "trước — hãy dùng nút Tải về.")
-        produced = Path(tmp) / (resolved.stem + ".pdf")
-        if not produced.exists():
-            raise HTTPException(409, "Chưa chuyển được file này sang PDF để xem "
-                                     "trước — hãy dùng nút Tải về.")
-        _shutil.move(str(produced), str(out))
-    return out
+        return xem_truoc.pdf_tu_office(resolved, cache_key)
+    except xem_truoc.LoiXemTruoc as e:
+        raise HTTPException(409, str(e))
 
 
 def _don_preview_fill(now: float | None = None):
@@ -2699,6 +3918,7 @@ def files_preview(doc_id: int, user=Depends(current_user)):
     PDF/ảnh/text trả thẳng; .docx/.doc/.xlsx chuyển sang PDF một lần bằng
     LibreOffice rồi cache ở data/work/preview. Cùng chốt quyền với tải về
     (_original_file) — không có cửa phân quyền thứ hai."""
+    _can_tinh_nang(user, "tai_lieu")
     resolved, title = _original_file(doc_id, user)
     suffix = resolved.suffix.lower()
     with db.session(role="internal", admin=True) as conn:
@@ -2746,7 +3966,7 @@ def template_files(user=Depends(current_user)):
     rules = rag.load_access_rules()
     items = []
     for doc_id, title, doc_type, source_path, access_level, dept_id, client_id in rows:
-        doc = {"access_level": access_level, "department_id": dept_id,
+        doc = {"id": doc_id, "access_level": access_level, "department_id": dept_id,
                "doc_type": doc_type, "client_id": client_id, "title": title}
         if not rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"],
                                 doc, can_finance=user["can_finance"],
@@ -3695,6 +4915,16 @@ def tom_tat_audit(action: str, entity: str | None, entity_id, detail) -> str:
         "run_draft_check": "Kiểm tra mâu thuẫn bản thảo",
         "update_setting": "Đổi cài đặt AI", "chat_temp_upload": "Đính kèm file trong chat",
         "edit_document_content": "Sửa nội dung tài liệu kho", "create_user": "Tạo người dùng",
+        "update_user": "Sửa tài khoản", "reset_password": "Đặt lại mật khẩu",
+        "change_password": "Đổi mật khẩu", "set_review_perm": "Cấp/thu quyền duyệt",
+        "set_finance_perm": "Cấp/thu quyền xem công nợ", "set_user_features": "Bật/tắt chức năng",
+        "issue_api_key": "Cấp khoá API", "revoke_api_key": "Thu hồi khoá API",
+        "lich_chay_bat": "Bật lịch chạy tự động", "lich_chay_tat": "Tắt lịch chạy tự động",
+        "lich_chay_cai": "Cài lại lịch chạy tự động",
+        "tich_hop_tao_khoa": "Cấp khoá tích hợp", "tich_hop_thu_hoi_khoa": "Thu hồi khoá tích hợp",
+        "tich_hop_tao_khach": "Hệ thống ngoài tạo khách", "tich_hop_nhan_tai_lieu": "Nhận tài liệu từ hệ thống ngoài",
+        "tich_hop_go": "Hệ thống ngoài gỡ tài liệu",
+        "seed_accounts": "Tạo tài khoản ban đầu", "ra_soat_tai_khoan": "Rà soát tài khoản",
         "login": "Đăng nhập", "lead_create": "Khách để lại liên hệ",
         "lead_update": "Xử lý khách quan tâm", "legal_checklist": "Rà soát rủi ro hợp đồng",
         "learn_review": "Duyệt câu trả lời (tự học)", "feedback_review": "Xử lý phản hồi",
@@ -3715,8 +4945,11 @@ def audit_list(user=Depends(current_user), limit: int = 200, offset: int = 0,
     _require_audit_viewer(user)
     limit = max(1, min(limit, 1000)); offset = max(0, offset)
     sql = """SELECT a.id,a.user_id,u.full_name,u.email,a.action,a.entity,a.entity_id,
-                    a.detail,a.created_at
-               FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE true"""
+                    a.detail,a.created_at, c.name
+               FROM audit_log a
+               LEFT JOIN users u ON u.id=a.user_id
+               LEFT JOIN clients c ON c.id=u.client_id
+              WHERE true"""
     params: list = []
     if action:
         sql += " AND a.action=%s"; params.append(action)
@@ -3738,6 +4971,9 @@ def audit_list(user=Depends(current_user), limit: int = 200, offset: int = 0,
         items.append({"id": r[0], "user_id": r[1], "user_name": r[2] or ("Hệ thống" if r[1] is None else None),
                       "user_email": r[3], "action": r[4], "entity": r[5], "entity_id": r[6],
                       "detail": detail, "created_at": r[8],
+                      # Tài khoản khách: kèm tên hồ sơ khách để đọc nhật ký là
+                      # biết ngay thao tác này của khách nào.
+                      "client_name": r[9],
                       "tom_tat": tom_tat_audit(r[4], r[5], r[6], detail)})
     return {"items": items, "total": tong, "limit": limit, "offset": offset}
 
@@ -3881,7 +5117,8 @@ def _van_ban_de_ra_soat(body: RaSoatIn, user) -> tuple[str, str]:
                 if not rag.can_open_doc(user["role"], user["dept_ids"], user["is_banqt"], doc,
                                         can_finance=user["can_finance"],
                                         rules=rag.load_access_rules(),
-                                        dept_codes=user["dept_codes"]):
+                                        dept_codes=user["dept_codes"],
+                                        client_id=user.get("client_id")):
                     raise HTTPException(403, "Không có quyền mở tài liệu này")
                 cur.execute("SELECT content FROM chunks WHERE document_id=%s ORDER BY chunk_index",
                             (body.document_id,))
@@ -3913,7 +5150,8 @@ def _kem_can_cu_kho(muc: list[dict], user) -> None:
 
 @app.get("/legal/ra-soat/loai")
 def ra_soat_loai(user=Depends(current_user)):
-    require(user, set(db.ROLE_TO_DBLEVEL) - CLIENT_ROLES - {"public"})
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    _can_tinh_nang(user, "kiem_tra")
     return {"items": [{"ma": ma, "ten": cfg["ten"],
                        "so_dieu_khoan": len(cfg.get("dieu_khoan", [])),
                        "so_nguong": len(cfg.get("nguong", []))}
@@ -3924,7 +5162,8 @@ def ra_soat_loai(user=Depends(current_user)):
 def ra_soat_hop_dong(body: RaSoatIn, user=Depends(current_user)):
     """Đối chiếu một hợp đồng với danh mục điều khoản chuẩn theo loại + ngưỡng
     bất thường theo luật → bảng Đạt / Cảnh báo / Thiếu, kèm đoạn luật trong kho."""
-    require(user, set(db.ROLE_TO_DBLEVEL) - CLIENT_ROLES - {"public"})
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    _can_tinh_nang(user, "kiem_tra")
     if body.loai and body.loai not in ra_soat_rui_ro.LOAI_HOP_DONG:
         raise HTTPException(422, "Loại hợp đồng không có trong danh mục")
     text, tieu_de = _van_ban_de_ra_soat(body, user)
@@ -3954,7 +5193,8 @@ class RaSoatExportIn(BaseModel):
 
 @app.post("/legal/ra-soat/export")
 def ra_soat_export(body: RaSoatExportIn, user=Depends(current_user)):
-    require(user, set(db.ROLE_TO_DBLEVEL) - CLIENT_ROLES - {"public"})
+    require(user, INTERNAL_ROLES | CLIENT_ROLES)
+    _can_tinh_nang(user, "kiem_tra")
     if not isinstance(body.ket_qua.get("muc"), list):
         raise HTTPException(422, "ket_qua không hợp lệ")
     tieu_de = body.tieu_de or body.ket_qua.get("tieu_de") or "Hợp đồng"
@@ -3978,6 +5218,13 @@ app.include_router(_build_draft_router(current_user, require_reviewer))
 # luôn rơi xuống RAG và từng trả lời bằng số lao động dự kiến của công ty khách.
 from app.hr_api import build_router as _build_hr_router
 app.include_router(_build_hr_router(current_user))
+
+# ---------- 13. Cửa cho hệ thống ngoài: CRM, chatbot bên thứ ba ----------
+# /khoa-tich-hop/* (admin cấp/thu hồi khoá có quyền) và /integration/v1/* (CRM
+# gọi bằng X-API-Key: hdsi_…). Xem app/tich_hop.py + deploy/API_TICH_HOP.md.
+from app.tich_hop_api import build_router as _build_tich_hop_router
+app.include_router(_build_tich_hop_router(current_user, require, get_user, _tra_loi_portal,
+                                          max_upload_mb=MAX_UPLOAD_MB))
 
 
 # ---------- 9. Giao diện quản trị ----------

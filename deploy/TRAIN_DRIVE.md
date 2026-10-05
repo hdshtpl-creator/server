@@ -1,5 +1,15 @@
 # Dạy bot học tài liệu — qua Google Drive
 
+> ⛔ **TOÀN BỘ TÀI LIỆU NÀY ĐÃ LỖI THỜI — KHÔNG LÀM THEO (ghi chú 02/10/2026).**
+> Từ 27/08/2026 kho nằm trên máy chủ, không dùng Google Drive. Đặt `DRIVE_FOLDER_ID`
+> hoặc bật `auto-learn.sh --install-timer` sẽ làm bộ học Drive từ chối chạy / lỗi và
+> đổi thẻ trạng thái trên web sang chế độ Drive; lệnh `python -m app.ingest data/raw`
+> ở Cách 2 nhân đôi cả kho. Nút "Tải tài liệu → Lưu vào kho" ở Cách 3 đã bỏ.
+> Làm theo: [CAU_TRUC_DRIVE.md](CAU_TRUC_DRIVE.md) (cây thư mục — vẫn đúng),
+> [HUONG_DAN_IT.md](HUONG_DAN_IT.md) mục kho tài liệu, và
+> `bash deploy/hoc-tu-thu-muc.sh --install-cron` (quét mỗi 3 phút).
+> Giữ lại tệp này chỉ để tra lịch sử.
+
 Bot học bằng cách: **đọc file → chia đoạn → tạo vector** rồi lưu vào CSDL. Khi có người
 hỏi, nó tìm các đoạn liên quan nhất và trả lời kèm trích dẫn (RAG). "Train" ở đây =
 đưa đúng tài liệu vào kho, gán đúng **loại / mức bảo mật / khách hàng**.

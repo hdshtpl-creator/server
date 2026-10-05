@@ -1,0 +1,882 @@
+{
+ "M1.1": {
+  "ok": false,
+  "ms": 3159,
+  "so_nguon": 36,
+  "vi_tri": [],
+  "dau": [
+   "law: 27-2014-NĐ-CP_07042014",
+   "law: 27-2014-NĐ-CP_07042014",
+   "law: 49-2005-QH11_29112005",
+   "law: 23-2014-TT-BLĐTBXH_29082014",
+   "law: 80-2021-TT-BQP_08072021"
+  ]
+ },
+ "M1.2": {
+  "ok": true,
+  "ms": 3237,
+  "so_nguon": 27,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "law: Luật số 45-2019-QH14",
+   "law: 04_Bo_luat_Lao_dong_45-2019-QH14",
+   "law: Luật số 45-2019-QH14",
+   "law: Luật số 45-2019-QH14",
+   "law: 04_Bo_luat_Lao_dong_45-2019-QH14"
+  ]
+ },
+ "M1.3": {
+  "ok": true,
+  "ms": 4214,
+  "so_nguon": 27,
+  "vi_tri": [
+   1,
+   4
+  ],
+  "dau": [
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: 07-VBHN-BXD_16082023",
+   "law: 02-VBHN-BCT_05022020",
+   "law: Luật số 36-2005-QH11",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH"
+  ]
+ },
+ "M1.4": {
+  "ok": true,
+  "ms": 3043,
+  "so_nguon": 32,
+  "vi_tri": [
+   3
+  ],
+  "dau": [
+   "law: 11-2018-TT-NHNN_17042018",
+   "law: 11-2018-TT-NHNN_17042018",
+   "law: Bộ-luật-91-2015-QH13",
+   "law: 28-2022-NĐ-CP_26042022",
+   "law: 25-2009-NQ-HĐND_15122009"
+  ]
+ },
+ "M1.5": {
+  "ok": true,
+  "ms": 3264,
+  "so_nguon": 29,
+  "vi_tri": [
+   1
+  ],
+  "dau": [
+   "law: Bộ-luật-91-2015-QH13",
+   "law: 32-2001-NĐ-CP_05072001",
+   "law: 49-2005-QH11_29112005",
+   "law: Bộ-luật-91-2015-QH13",
+   "law: Bộ-luật-91-2015-QH13"
+  ]
+ },
+ "M1.6": {
+  "ok": true,
+  "ms": 2879,
+  "so_nguon": 33,
+  "vi_tri": [
+   5,
+   6
+  ],
+  "dau": [
+   "law: 11-VBHN-VPQH_16092024",
+   "law: Luật số 101-2015-QH13",
+   "law: 11-VBHN-VPQH_16092024",
+   "law: 11-VBHN-VPQH_16092024",
+   "law: 03_Bo_luat_To_tung_dan_su_92-2015-QH13"
+  ]
+ },
+ "M1.7": {
+  "ok": true,
+  "ms": 2704,
+  "so_nguon": 39,
+  "vi_tri": [
+   30
+  ],
+  "dau": [
+   "law: 07-VBHN-BNNPTNT_28042015",
+   "law: 21-2014-TT-BKHCN_15072014",
+   "law: 08-VBHN-BCT_26032021",
+   "law: 52-VBHN-BCT_24102025",
+   "law: Nghị-định-168-2025-NĐ-CP"
+  ]
+ },
+ "M1.8": {
+  "ok": true,
+  "ms": 3223,
+  "so_nguon": 45,
+  "vi_tri": [
+   11
+  ],
+  "dau": [
+   "law: 235-2026-NĐ-CP_26062026",
+   "law: 173-2025-NĐ-CP_30062025",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: Bộ-luật-91-2015-QH13",
+   "law: Bộ-luật-91-2015-QH13"
+  ]
+ },
+ "M1.9": {
+  "ok": true,
+  "ms": 3060,
+  "so_nguon": 32,
+  "vi_tri": [
+   4,
+   11
+  ],
+  "dau": [
+   "law: 06-VBHN-BCT_21022023",
+   "law: 35-2026-TT-BGDĐT_21042026",
+   "law: 30-2013-TT-BLĐTBXH_25102013",
+   "law: Luật số 45-2019-QH14",
+   "law: 5795-VBHN-BTP_18092025"
+  ]
+ },
+ "M1.10": {
+  "ok": true,
+  "ms": 4560,
+  "so_nguon": 44,
+  "vi_tri": [
+   18,
+   27
+  ],
+  "dau": [
+   "law: 582-QĐ-UBND_24032017",
+   "law: 582-QĐ-UBND_24032017",
+   "law: 582-QĐ-UBND_17032008",
+   "law: 04_Bo_luat_Lao_dong_45-2019-QH14",
+   "law: 4753-VBHN-BLĐTBXH_12112018"
+  ]
+ },
+ "M2.1": {
+  "ok": true,
+  "ms": 3262,
+  "so_nguon": 33,
+  "vi_tri": [
+   4,
+   9
+  ],
+  "dau": [
+   "law: Bộ-luật-91-2015-QH13",
+   "law: Luật số 36-2005-QH11",
+   "law: Luật số 36-2005-QH11",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: 3035-QĐ-BTC_16122011"
+  ]
+ },
+ "M2.2": {
+  "ok": true,
+  "ms": 2996,
+  "so_nguon": 39,
+  "vi_tri": [
+   12,
+   15
+  ],
+  "dau": [
+   "law: Bộ-luật-91-2015-QH13",
+   "law: Bộ-luật-91-2015-QH13",
+   "law: Bộ-luật-91-2015-QH13",
+   "law: Luật số 36-2005-QH11",
+   "law: Bộ-luật-91-2015-QH13"
+  ]
+ },
+ "M2.3": {
+  "ok": true,
+  "ms": 3057,
+  "so_nguon": 26,
+  "vi_tri": [
+   3,
+   6
+  ],
+  "dau": [
+   "law: Văn-bản-hợp-nhất-67-VBHN-VPQH",
+   "law: 06-VBHN-VPQH_12072013",
+   "law: Văn-bản-hợp-nhất-67-VBHN-VPQH",
+   "law: 06-VBHN-VPQH_12072013",
+   "law: Luật số 59-2020-QH14"
+  ]
+ },
+ "M2.4": {
+  "ok": true,
+  "ms": 3368,
+  "so_nguon": 28,
+  "vi_tri": [
+   4,
+   6
+  ],
+  "dau": [
+   "law: 27-2014-NĐ-CP_07042014",
+   "law: 19-2014-TT-BLĐTBXH_15082014",
+   "law: 27-2014-NĐ-CP_07042014",
+   "law: 04_Bo_luat_Lao_dong_45-2019-QH14",
+   "law: 27-2014-NĐ-CP_07042014"
+  ]
+ },
+ "M3.1": {
+  "ok": true,
+  "ms": 2967,
+  "so_nguon": 33,
+  "vi_tri": [
+   1,
+   3
+  ],
+  "dau": [
+   "law: 01_Luat_SHTT_11-VBHN-VPQH",
+   "law: 23-2023-TT-BKHCN_30112023",
+   "law: 50-2005-QH11_29112005",
+   "law: 01_Luat_SHTT_11-VBHN-VPQH",
+   "law: 01_Luat_SHTT_11-VBHN-VPQH"
+  ]
+ },
+ "M3.2": {
+  "ok": false,
+  "ms": 3146,
+  "so_nguon": 28,
+  "vi_tri": [],
+  "dau": [
+   "law: 42-2026-QĐ-UBND_20072026",
+   "law: Văn-bản-hợp-nhất-67-VBHN-VPQH",
+   "law: 57-2026-NĐ-CP_12022026",
+   "law: 03-2005-TT-BKH_18072005",
+   "law: 797-QĐ-BNV_14052009"
+  ]
+ },
+ "M3.3": {
+  "ok": false,
+  "ms": 3735,
+  "so_nguon": 35,
+  "vi_tri": [],
+  "dau": [
+   "law: 03-2012-NQ-HĐTP_03122012",
+   "law: 11-VBHN-VPQH_16092024",
+   "law: 11-VBHN-VPQH_16092024",
+   "law: Luật số 93-2015-QH13",
+   "law: 15_Luat_Quan_ly_thue_38-2019-QH14"
+  ]
+ },
+ "M3.4": {
+  "ok": true,
+  "ms": 3989,
+  "so_nguon": 38,
+  "vi_tri": [
+   9,
+   11
+  ],
+  "dau": [
+   "law: 168-2025-NĐ-CP_30062025",
+   "law: 168-2025-NĐ-CP_30062025",
+   "law: Nghị-định-168-2025-NĐ-CP",
+   "law: 09_ND_01-2021-ND-CP",
+   "law: Văn-bản-hợp-nhất-67-VBHN-VPQH"
+  ]
+ },
+ "M5.1": {
+  "ok": false,
+  "ms": 3573,
+  "so_nguon": 35,
+  "vi_tri": [],
+  "dau": [
+   "law: Văn-bản-hợp-nhất-67-VBHN-VPQH",
+   "law: 06-VBHN-VPQH_12072013",
+   "law: Luật số 59-2020-QH14",
+   "law: 44-VBHN-BCT_13102025",
+   "law: 01_Luat_SHTT_11-VBHN-VPQH"
+  ]
+ },
+ "M5.2": {
+  "ok": true,
+  "ms": 2728,
+  "so_nguon": 47,
+  "vi_tri": [
+   5,
+   10
+  ],
+  "dau": [
+   "law: 01_Luat_SHTT_11-VBHN-VPQH",
+   "law: 23-2023-TT-BKHCN_30112023",
+   "law: 01_Luat_SHTT_11-VBHN-VPQH",
+   "law: 50-2005-QH11_29112005",
+   "law: 01_Luat_SHTT_11-VBHN-VPQH"
+  ]
+ },
+ "M7.2": {
+  "ok": true,
+  "ms": 3494,
+  "so_nguon": 36,
+  "vi_tri": [
+   6,
+   10
+  ],
+  "dau": [
+   "law: 93-QĐ-BTC_16012008",
+   "law: 71-2016-NĐ-CP_01072016",
+   "law: 186-2013-TT-BTC_05122013",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH"
+  ]
+ },
+ "M8.2": {
+  "ok": false,
+  "ms": 3232,
+  "so_nguon": 40,
+  "vi_tri": [],
+  "dau": [
+   "law: 69-2014-QH13_26112014",
+   "law: 69-2014-QH13_26112014",
+   "law: 69-2014-QH13_26112014",
+   "law: 115-2014-NĐ-CP_03122014",
+   "law: 115-2014-NĐ-CP_03122014"
+  ]
+ },
+ "M9.1": {
+  "ok": true,
+  "ms": 25,
+  "ghi": "trả lời thẳng từ CSDL",
+  "tra_loi": "Theo cây thư mục **8. HỒ SƠ NHÂN SỰ**, HDS đang có **3 bộ hồ sơ = 3 nhân sự** (tính đến 2026-10-05):\n- **Mai** — 12 giấy tờ trong bộ\n- **Ngân** — 11 giấy tờ trong bộ\n- **Nhi** — 6 giấy tờ trong bộ\nChi"
+ },
+ "M9.2": {
+  "ok": true,
+  "ms": 91,
+  "ghi": "trả lời thẳng từ CSDL",
+  "tra_loi": "Kho hiện có **93 tài liệu án lệ** đã duyệt (tính đến 2026-10-05):\n- 001_90-2026-AL\n- 002_89-2026-AL\n- 003_88-2026-AL\n- 004_87-2026-AL\n- 005_86-2026-AL\n- 006_85-2026-AL\n- 007_84-2026-AL\n- 008_83-2026-A"
+ },
+ "M9.3": {
+  "ok": true,
+  "ms": 99,
+  "ghi": "trả lời thẳng từ CSDL",
+  "tra_loi": "Kho hiện có **4279 tài liệu mẫu hợp đồng** đã duyệt (tính đến 2026-10-05):\n- 0. Hợp đồng theo mẫu trả sau (December 2023)\n- 0. Hợp đồng theo mẫu trả sau (December 2023)\n- 0. Phiếu đăng ký dịch vụ và b"
+ },
+ "M10.3": {
+  "ok": true,
+  "ms": 4617,
+  "so_nguon": 27,
+  "vi_tri": [
+   1,
+   3
+  ],
+  "dau": [
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: 07-VBHN-BXD_16082023",
+   "law: Luật số 36-2005-QH11",
+   "law: 02-VBHN-BCT_05022020",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH"
+  ]
+ },
+ "M10.4": {
+  "ok": true,
+  "ms": 3374,
+  "so_nguon": 25,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "law: Luật số 45-2019-QH14",
+   "law: 04_Bo_luat_Lao_dong_45-2019-QH14",
+   "law: Luật số 45-2019-QH14",
+   "law: 04_Bo_luat_Lao_dong_45-2019-QH14",
+   "law: 27-2014-NĐ-CP_07042014"
+  ]
+ },
+ "M11.6": {
+  "ok": false,
+  "ms": 22,
+  "so_nguon": 1,
+  "vi_tri": [],
+  "dau": [
+   "None: Cây thư mục HỒ SƠ NHÂN SỰ"
+  ]
+ },
+ "M12.6": {
+  "ok": false,
+  "ms": 3385,
+  "so_nguon": 44,
+  "vi_tri": [],
+  "dau": [
+   "law: 27-2014-NĐ-CP_07042014",
+   "law: 145-2020-NĐ-CP_14122020",
+   "law: Luật số 45-2019-QH14",
+   "law: 20-2009-QĐ-UBND_20052009",
+   "law: 04_Bo_luat_Lao_dong_45-2019-QH14"
+  ]
+ },
+ "EN-A1": {
+  "ok": true,
+  "ms": 2165,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: SUN_2026-09-10_6-007050_EX-10-02_Force Majeure",
+   "mau_hd: SUN_2026-09-10_6-007050_EX-10-02_Force Majeure"
+  ]
+ },
+ "EN-A2": {
+  "ok": true,
+  "ms": 1912,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: BOXABL Inc_2026-08-21_6-039614_EX-10-11_FORCE MAJEURE",
+   "mau_hd: BOXABL Inc_2026-08-21_6-039614_EX-10-11_FORCE MAJEURE"
+  ]
+ },
+ "EN-A3": {
+  "ok": true,
+  "ms": 2126,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: Algorhythm Holdings, Inc_2026-09-21_6-043599_EX-10-5_Governing Law; Ju",
+   "mau_hd: Algorhythm Holdings, Inc_2026-09-21_6-043599_EX-10-5_Governing Law; Ju"
+  ]
+ },
+ "EN-A4": {
+  "ok": true,
+  "ms": 1987,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: RTB Digital, Inc_2026-09-22_6-004208_EX-10-1_Jurisdiction; Venue",
+   "mau_hd: RTB Digital, Inc_2026-09-22_6-004208_EX-10-1_Jurisdiction; Venue"
+  ]
+ },
+ "EN-A5": {
+  "ok": true,
+  "ms": 2140,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: TAP REAL ESTATE TECHNOLOGIES, INC_2026-09-10_6-042091_EX-10-2_LIMITATI",
+   "mau_hd: TAP REAL ESTATE TECHNOLOGIES, INC_2026-09-10_6-042091_EX-10-2_LIMITATI"
+  ]
+ },
+ "EN-A6": {
+  "ok": true,
+  "ms": 327,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: GPO Plus, Inc_2026-09-11_6-001495_EX-10-1_Notices",
+   "mau_hd: GPO Plus, Inc_2026-09-11_6-001495_EX-10-1_Notices"
+  ]
+ },
+ "EN-A7": {
+  "ok": true,
+  "ms": 362,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: Invech Holdings, Inc_2026-09-15_6-007139_EX-10-02_INDEMNIFICATION",
+   "mau_hd: Invech Holdings, Inc_2026-09-15_6-007139_EX-10-02_INDEMNIFICATION"
+  ]
+ },
+ "EN-A8": {
+  "ok": true,
+  "ms": 2051,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: BuzzFeed, Inc_2026-09-16_6-000146_EX-10-1_Termination",
+   "mau_hd: BuzzFeed, Inc_2026-09-16_6-000146_EX-10-1_Termination"
+  ]
+ },
+ "EN-A9": {
+  "ok": true,
+  "ms": 2329,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: ABVC BIOPHARMA, INC_2026-08-12_6-088348_EX-10-84_TERMINATION",
+   "mau_hd: ABVC BIOPHARMA, INC_2026-08-12_6-088348_EX-10-84_TERMINATION"
+  ]
+ },
+ "EN-A10": {
+  "ok": true,
+  "ms": 2155,
+  "so_nguon": 3,
+  "vi_tri": [
+   1,
+   2,
+   3
+  ],
+  "dau": [
+   "mau_hd: SUN_2026-09-10_6-007050_EX-10-02_Data Protection and Security",
+   "mau_hd: SUN_2026-09-10_6-007050_EX-10-02_Data Protection and Security",
+   "mau_hd: SUN_2026-09-10_6-007050_EX-10-02_Data Protection and Security"
+  ]
+ },
+ "EN-A11": {
+  "ok": true,
+  "ms": 302,
+  "so_nguon": 13,
+  "vi_tri": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "dau": [
+   "mau_hd: APPLIED OPTOELECTRONICS, INC_2026-09-15_6-007160_EX-10-01",
+   "mau_hd: APPLIED OPTOELECTRONICS, INC_2026-09-15_6-007160_EX-10-01",
+   "mau_hd: APPLIED OPTOELECTRONICS, INC_2026-09-15_6-007160_EX-10-01",
+   "mau_hd: APPLIED OPTOELECTRONICS, INC_2026-09-15_6-007160_EX-10-01",
+   "mau_hd: APPLIED OPTOELECTRONICS, INC_2026-09-15_6-007160_EX-10-01"
+  ]
+ },
+ "EN-A12": {
+  "ok": true,
+  "ms": 336,
+  "so_nguon": 6,
+  "vi_tri": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "dau": [
+   "mau_hd: GROUP 1 AUTOMOTIVE INC_2026-04-30_6-000107_EX-10-1",
+   "mau_hd: GROUP 1 AUTOMOTIVE INC_2026-04-30_6-000107_EX-10-1",
+   "mau_hd: GROUP 1 AUTOMOTIVE INC_2026-04-30_6-000107_EX-10-1",
+   "mau_hd: GROUP 1 AUTOMOTIVE INC_2026-04-30_6-000107_EX-10-1",
+   "mau_hd: GROUP 1 AUTOMOTIVE INC_2026-04-30_6-000107_EX-10-1"
+  ]
+ },
+ "EN-A13": {
+  "ok": true,
+  "ms": 332,
+  "so_nguon": 2,
+  "vi_tri": [
+   1,
+   2
+  ],
+  "dau": [
+   "mau_hd: Dave & Buster's Entertainment, Inc_2026-09-14_6-000038_EX-10-2_Modific",
+   "mau_hd: Dave & Buster's Entertainment, Inc_2026-09-14_6-000038_EX-10-2_Modific"
+  ]
+ },
+ "EN-B1": {
+  "ok": true,
+  "ms": 3037,
+  "so_nguon": 41,
+  "vi_tri": [
+   20,
+   21,
+   22,
+   23,
+   24
+  ],
+  "dau": [
+   "law: 48-2019-QĐ-UBND_21112019",
+   "law: 48-2019-QĐ-UBND_21112019",
+   "law: 48-2019-QĐ-UBND_21112019",
+   "law: 03-2021-QĐ-UBND_29012021",
+   "law: 03-2021-QĐ-UBND_29012021"
+  ]
+ },
+ "EN-B2": {
+  "ok": true,
+  "ms": 2907,
+  "so_nguon": 52,
+  "vi_tri": [
+   37,
+   38,
+   39,
+   40,
+   41
+  ],
+  "dau": [
+   "law: Bộ-luật-91-2015-QH13",
+   "law: Bộ-luật-91-2015-QH13",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: Bộ-luật-91-2015-QH13",
+   "law: Luật số 36-2005-QH11"
+  ]
+ },
+ "EN-B3": {
+  "ok": true,
+  "ms": 4300,
+  "so_nguon": 49,
+  "vi_tri": [
+   28,
+   29,
+   30,
+   31,
+   32
+  ],
+  "dau": [
+   "law: 01_Luat_SHTT_11-VBHN-VPQH",
+   "law: 50-2005-QH11_29112005",
+   "law: 23-2018-QH14_12062018",
+   "law: 173-2025-NĐ-CP_30062025",
+   "law: 48-2019-QĐ-UBND_21112019"
+  ]
+ },
+ "EN-B4": {
+  "ok": true,
+  "ms": 2789,
+  "so_nguon": 49,
+  "vi_tri": [
+   25,
+   26,
+   28,
+   29,
+   30
+  ],
+  "dau": [
+   "law: 08-VBHN-BCT_20052025",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: 05_Luat_Trong_tai_thuong_mai_54-2010-QH12",
+   "law: 31-2022-QĐ-UBND_01082022",
+   "law: 41-2019-QĐ-UBND_27092019"
+  ]
+ },
+ "EN-B5": {
+  "ok": true,
+  "ms": 3283,
+  "so_nguon": 49,
+  "vi_tri": [
+   29,
+   30,
+   31,
+   32,
+   33
+  ],
+  "dau": [
+   "law: Bộ-luật-91-2015-QH13",
+   "law: 48-2019-QĐ-UBND_21112019",
+   "law: 48-2019-QĐ-UBND_21112019",
+   "law: 48-2019-QĐ-UBND_21112019",
+   "law: 43-2000-QĐ-UBCK3_14062000"
+  ]
+ },
+ "EN-B6": {
+  "ok": false,
+  "ms": 99,
+  "so_nguon": 1,
+  "vi_tri": [],
+  "dau": [
+   "None: Kho tài liệu HDS"
+  ]
+ },
+ "EN-C1": {
+  "ok": true,
+  "ms": 374,
+  "so_nguon": 12,
+  "vi_tri": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "dau": [
+   "mau_hd: BuzzFeed, Inc_2026-09-16_6-000146_EX-10-1_Conditions to Closing",
+   "mau_hd: AIB Data Centers Inc_2026-09-11_6-099305_EX-10-1_CONDITIONS PRECEDENT ",
+   "mau_hd: Vireo Growth Inc_2026-07-23_6-086256_EX-10-1_Conduct of Business Prior",
+   "mau_hd: Clearwater Paper Corp_2026-09-21_6-396048_EX-10-1_CONDITIONS OF CLOSIN",
+   "mau_hd: Alaunos Therapeutics, Inc_2026-09-22_6-397996_EX-10-1_Closing Conditio"
+  ]
+ },
+ "EN-C2": {
+  "ok": false,
+  "ms": 474,
+  "so_nguon": 16,
+  "vi_tri": [],
+  "dau": [
+   "ban_an: Quyết định số 07/2023/QĐST-KDTM ngày 28/12/2024 của TAND tỉnh Kiên Gia",
+   "ban_an: Bản án số 151/2024/KDTM-ST ngày 09/07/2024 của TAND Quận 1, TP. Hồ Chí",
+   "ban_an: Bản án số 11/2021/KDTM-ST ngày 12/11/2021 của TAND huyện Củ Chi, TP. H",
+   "ban_an: Bản án số 23/2021/KDTM-ST ngày 22/10/2021 của TAND TP. Long Xuyên, tỉn",
+   "ban_an: Bản án số 1108/2023/KDTM-PT ngày 29/11/2023 của TAND TP. Hồ Chí Minh"
+  ]
+ },
+ "EN-C3": {
+  "ok": true,
+  "ms": 513,
+  "so_nguon": 16,
+  "vi_tri": [
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "dau": [
+   "other: [KH: CÔNG TY CỔ PHẦN SÁNG TẠO FANTASTIC EGGS] MMS Master Contract - 9M",
+   "mau_hd: SUN_2026-09-10_6-007050_EX-10-02_Data Protection and Security",
+   "mau_hd: AIAI Holdings Corp_2026-09-21_6-043456_EX-10-1_Privacy Laws",
+   "mau_hd: AIAI Holdings Corp_2026-09-21_6-043456_EX-10-1",
+   "mau_hd: IB Acquisition Corp_2026-09-21_6-043585_EX-10-1"
+  ]
+ },
+ "EN-C4": {
+  "ok": true,
+  "ms": 1125,
+  "so_nguon": 12,
+  "vi_tri": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "dau": [
+   "mau_hd: Invech Holdings, Inc_2026-09-15_6-007139_EX-10-01_INDEMNIFICATION",
+   "mau_hd: Invech Holdings, Inc_2026-09-15_6-007139_EX-10-02_INDEMNIFICATION",
+   "mau_hd: Invech Holdings, Inc_2026-09-15_6-007139_EX-10-02",
+   "mau_hd: Invech Holdings, Inc_2026-09-15_6-007139_EX-10-01",
+   "mau_hd: Invech Holdings, Inc_2026-09-15_6-007139_EX-10-01_MISCELLANEOUS"
+  ]
+ },
+ "EN-D1": {
+  "ok": true,
+  "ms": 2996,
+  "so_nguon": 51,
+  "vi_tri": [
+   36,
+   37,
+   39,
+   40,
+   41
+  ],
+  "dau": [
+   "law: 19-2014-TT-BLĐTBXH_15082014",
+   "law: 4753-VBHN-BLĐTBXH_12112018",
+   "law: 10-VBHN-BCT_05092017",
+   "law: 04-2015-TT-BXD_03042015",
+   "law: 02-VBHN-BCT_05022020"
+  ]
+ },
+ "EN-D2": {
+  "ok": false,
+  "ms": 2905,
+  "so_nguon": 41,
+  "vi_tri": [],
+  "dau": [
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: 3035-QĐ-BTC_16122011",
+   "law: 264-2025-NĐ-CP_14102025",
+   "law: Luật số 36-2005-QH11",
+   "law: 12-VBHN-VPQH_12122014"
+  ]
+ },
+ "EN-D3": {
+  "ok": true,
+  "ms": 3030,
+  "so_nguon": 33,
+  "vi_tri": [
+   14,
+   18
+  ],
+  "dau": [
+   "law: 09-VBHN-BTC_00000000",
+   "law: 59-2000-QĐ-UBCK_12072000",
+   "law: 07-VBHN-BXD_16082023",
+   "law: 19-2014-TT-BLĐTBXH_15082014",
+   "law: 15-2022-TT-BTTTT_28102022"
+  ]
+ },
+ "EN-D4": {
+  "ok": true,
+  "ms": 2822,
+  "so_nguon": 51,
+  "vi_tri": [
+   32,
+   33,
+   34,
+   35,
+   36
+  ],
+  "dau": [
+   "law: 12-VBHN-VPQH_12122014",
+   "law: 10-VBHN-BCT_05092017",
+   "law: 77-2002-QĐ-BNN_28082002",
+   "law: Bộ-luật-91-2015-QH13",
+   "law: 48-2019-QĐ-UBND_21112019"
+  ]
+ },
+ "EN-E1": {
+  "ok": true,
+  "ms": 3046,
+  "so_nguon": 52,
+  "vi_tri": [
+   31,
+   32,
+   33,
+   34,
+   35
+  ],
+  "dau": [
+   "law: 10-VBHN-BCT_05092017",
+   "law: 19-VBHN-BCT_07082024",
+   "law: 368-2025-NĐ-CP_31122025",
+   "law: 173-2025-NĐ-CP_30062025",
+   "law: 71-2014-NĐ-CP_21072014"
+  ]
+ },
+ "EN-F2": {
+  "ok": false,
+  "ms": 5124,
+  "so_nguon": 62,
+  "vi_tri": [],
+  "dau": [
+   "law: 13-VBHN-BQP_05052025",
+   "law: 13-VBHN-BQP_05052025",
+   "law: 13-VBHN-BQP_05052025",
+   "law: 2334 -VBHN-BVHTTDL_03062024",
+   "law: 2334 -VBHN-BVHTTDL_03062024"
+  ]
+ },
+ "EN-F4": {
+  "ok": true,
+  "ms": 2516,
+  "so_nguon": 52,
+  "vi_tri": [
+   32,
+   33,
+   34,
+   35,
+   36
+  ],
+  "dau": [
+   "law: Bộ-luật-91-2015-QH13",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: 18-2021-QĐ-UBND_27042021",
+   "law: 02_Luat_Thuong_mai_17-VBHN-VPQH",
+   "law: 01-VBHN-BCT_06012023"
+  ]
+ }
+}

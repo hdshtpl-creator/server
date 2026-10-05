@@ -276,7 +276,82 @@ export interface ChatMessage {
   /** Trạng thái kiểm chứng sau khi model viết xong. */
   grounding_status?: GroundingStatus;
   answer_mode?: string;
+  /** Kết quả model ngoài (ChatGPT) soát câu trả lời này — lưu ở máy chủ. */
+  ai_soat?: AiSoatKetQua | null;
+  /** Câu trả lời khác của model ngoài cho cùng câu hỏi — lưu ở máy chủ. */
+  ai_khac?: AiKhacKetQua | null;
 }
+
+/** Thứ đã bị bỏ khỏi phần gửi ra ngoài (phạm vi dữ liệu `cloud_scope`). */
+export interface AiNgoaiLoc {
+  cong_no?: number;
+  ho_so_khach?: number;
+  tai_lieu_noi_bo?: number;
+  dinh_kem?: number;
+  du_lieu_cong_ty?: boolean;
+  lich_su?: number;
+  tong?: number;
+}
+
+/** POST /messages/{id}/ai-soat → done.ket_qua */
+export interface AiSoatKetQua {
+  /** xong = đã soát · khong_gui = phạm vi dữ liệu không cho gửi đi. */
+  trang_thai: 'xong' | 'khong_gui' | string;
+  ket_luan?: 'on' | 'can_xem_lai' | 'co_sai_sot' | 'khong_ro' | string;
+  tom_tat?: string;
+  van_de?: Array<{ muc_do: 'cao' | 'vua' | 'thap' | string; noi_dung: string; goi_y?: string }>;
+  ly_do?: string;
+  model?: string;
+  ten_model?: string;
+  ms?: number;
+  cost_usd?: number | null;
+  nguon_gui?: number;
+  nguon_bo?: number;
+  da_che?: number;
+  at?: string;
+}
+
+/** POST /messages/{id}/cau-tra-loi-khac → done.ket_qua */
+export interface AiKhacKetQua {
+  /** xong · khong_gui (mọi căn cứ là dữ liệu nội bộ) · khong_ap_dung (lượt
+   *  không do model viết: đếm, tạo file…). */
+  trang_thai: 'xong' | 'khong_gui' | 'khong_ap_dung' | string;
+  text?: string;
+  sources?: Source[];
+  grounding_status?: GroundingStatus;
+  ly_do?: string;
+  model?: string;
+  ten_model?: string;
+  ms?: number;
+  cost_usd?: number | null;
+  loc?: AiNgoaiLoc | null;
+  da_che?: number;
+  at?: string;
+}
+
+/** GET /ai-ngoai/cau-hinh — nút nào dùng được lúc này. */
+export interface AiNgoaiCauHinh {
+  soat: 'tat' | 'nut' | 'tu_dong';
+  khac: boolean;
+  ten_soat?: string;
+  ten_khac?: string;
+  /** Chỉ admin. */
+  quan_tri?: {
+    co_khoa_openai: boolean;
+    co_khoa_claude: boolean;
+    dia_chi_api: string;
+    su_dung_thang: { luot: number; soat: number; khac: number; usd: number };
+    tran_luot_thang: number;
+    pham_vi: string;
+  };
+}
+
+/** Sự kiện SSE của hai endpoint model ngoài. */
+export type AiNgoaiEvent =
+  | { type: 'status'; label: string }
+  | { type: 'meta'; sources: Source[]; loc?: AiNgoaiLoc | null }
+  | { type: 'delta'; text: string }
+  | { type: 'done'; ket_qua: AiSoatKetQua | AiKhacKetQua };
 
 export interface Conversation {
   id: string;
@@ -601,6 +676,8 @@ export interface ChatSearchHit {
   evidence?: Source[];
   grounding_status?: GroundingStatus;
   answer_mode?: string;
+  ai_soat?: AiSoatKetQua | null;
+  ai_khac?: AiKhacKetQua | null;
 }
 
 /** Ghi chú cá nhân trong khung chat. */
@@ -784,6 +861,45 @@ export interface Client {
   name: string;
   code: string;
   department?: string | null;
+  /** Phòng phụ trách (F-17) — GET /clients/{id}/360 trả kèm ở mức client.
+   *  null/thiếu = chưa gán: mọi trưởng bộ phận và chuyên viên nội bộ mở được. */
+  department_id?: number | null;
+  department_name?: string | null;
+}
+
+/** Chế độ trả lời của POST /chat/stream (trường `mode`) — tab Kiểm tra pháp lý.
+ *  Ba chế độ cuối là công cụ tranh tụng / dịch (03/10/2026); máy chủ bỏ qua
+ *  `mode` với vai khách. */
+export type ChatStreamMode =
+  | 'legal_review'
+  | 'template_check'
+  | 'du_bao_tranh_tung'
+  | 'chuan_bi_phien_toa'
+  | 'dich_ban_dia_hoa';
+
+/** Mã lý do sửa nội dung tài liệu (khớp EDIT_REASONS ở DocumentCompareModal). */
+export type LyDoSuaNoiDung =
+  | 'luat_thay_doi'
+  | 'rui_ro'
+  | 'yeu_cau_khach'
+  | 'sua_loi_trich_xuat'
+  | 'khac';
+
+/** POST /review/{id}/goi-y-ly-do — máy chủ gợi ý lý do sửa, người duyệt vẫn
+ *  phải tự bấm lưu. nguon: 'quy_tac' (đối chiếu tất định) hoặc 'ai'. */
+export interface GoiYLyDoSua {
+  ok: boolean;
+  ly_do: LyDoSuaNoiDung;
+  giai_thich: string;
+  nguon: 'quy_tac' | 'ai';
+}
+
+/** PATCH /clients/{id} {department_id} — đổi phòng phụ trách khách (F-17). */
+export interface ClientDepartmentResult {
+  ok: boolean;
+  client_id: number;
+  department_id: number | null;
+  department_name: string | null;
 }
 
 export interface ClientProfile {
@@ -1005,7 +1121,10 @@ export type KhoTrangThai =
   | 'cho_duyet'
   | 'chua_hoc'
   | 'loi'
-  | 'khong_ho_tro';
+  | 'khong_ho_tro'
+  /** Chỉ có trong kết quả /kho/tai-len, /kho/hoc: tệp đã vào kho, luồng nền
+   *  học chưa xong trong thời gian API chờ — cây sẽ đổi nhãn khi xong. */
+  | 'dang_hoc';
 
 export interface KhoThuMuc {
   ten: string;
@@ -1287,4 +1406,70 @@ export interface RaSoatLoai {
   ten: string;
   so_dieu_khoan: number;
   so_nguong: number;
+}
+
+// ============ Khoá API tích hợp cho hệ thống ngoài (28/09/2026) ============
+export interface QuyenTichHop {
+  ma: string;
+  ten: string;
+  mo_ta: string;
+}
+export interface BoQuyenMau {
+  ma: string;
+  ten: string;
+  quyen: string[];
+}
+export interface QuyenTichHopResponse {
+  quyen: QuyenTichHop[];
+  bo_mau: BoQuyenMau[];
+  /** Tiền tố của khoá tích hợp ('hdsi_'), khác khoá tài khoản khách ('hds_'). */
+  tien_to: string;
+}
+export interface KhoaTichHop {
+  id: number;
+  ten: string;
+  /** Không gian mã ngoài ('crm'): thu hồi rồi cấp khoá mới cùng nguồn thì dữ liệu đã gửi vẫn nhận ra. */
+  nguon: string;
+  /** 12 ký tự đầu của khoá để nhận diện — máy chủ không giữ khoá thật. */
+  key_dau: string;
+  quyen: string[];
+  user_id: number | null;
+  ghi_chu: string | null;
+  created_at: string | null;
+  last_used_at: string | null;
+  so_lan_goi: number;
+  revoked_at: string | null;
+  email?: string | null;
+  full_name?: string | null;
+  client_name?: string | null;
+  so_tai_lieu?: number;
+  hoat_dong: boolean;
+}
+/** Kết quả POST /khoa-tich-hop — `khoa` là khoá thật, chỉ có đúng lần này. */
+export interface KhoaTichHopMoi extends Partial<KhoaTichHop> {
+  id: number;
+  ten: string;
+  nguon: string;
+  khoa: string;
+  note?: string;
+}
+
+// ============ Lịch chạy tự động (cron) — bật/tắt trên Cài đặt (01/10/2026) ============
+export interface LichChay {
+  ma: string;
+  ten: string;
+  mo_ta?: string | null;
+  /** Hậu quả khi tắt — hiện trong hộp xác nhận. */
+  khi_tat?: string | null;
+  /** Tắt lâu là nguy hiểm (sao lưu). */
+  nguy_hiem?: boolean;
+  trang_thai: 'bat' | 'tat' | 'chua_cai';
+  /** Lịch có trong mã nguồn mà crontab thiếu — web cài lại được. */
+  cai_duoc?: boolean;
+  lich?: string | null;
+  lich_mo_ta?: string | null;
+  ke_tiep?: string | null;
+  dang_chay?: boolean;
+  lan_cuoi?: string | null;
+  ket_qua_cuoi?: string | null;
 }

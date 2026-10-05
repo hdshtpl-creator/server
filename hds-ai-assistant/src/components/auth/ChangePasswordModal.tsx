@@ -26,7 +26,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   onClose,
   forced = false,
 }) => {
-  const { showToast, refreshMe } = useApp();
+  const { showToast, refreshMe, logout } = useApp();
 
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -222,6 +222,18 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
           </div>
 
           <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
+            {/* Bắt buộc đổi: phía sau hộp không còn thanh tiêu đề (App.tsx không
+                dựng gì để khỏi bắn loạt lời gọi 403), nên lối thoát duy nhất
+                là đăng xuất ngay tại đây. */}
+            {forced && (
+              <button
+                type="button"
+                onClick={logout}
+                className="mr-auto px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-xl font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+              >
+                Đăng xuất
+              </button>
+            )}
             {!forced && (
               <button
                 type="button"

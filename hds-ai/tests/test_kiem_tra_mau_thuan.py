@@ -132,6 +132,75 @@ class TrichXuatTests(unittest.TestCase):
         self.assertEqual(kt.trich_xuat_quy_tac(""), [])
 
 
+# Kiểm thử nghiệm thu 02/10/2026 (F-09): deploy/kiem-thu/du-lieu-mau/KTMT01.
+KTMT01 = ("Sửa bản nháp: bổ sung điều khoản thử việc 90 ngày với tiền lương thử việc bằng "
+          "70% mức lương chính thức; thời hạn hợp đồng 48 tháng; người lao động làm việc "
+          "10 giờ/ngày; phạt vi phạm 12% giá trị phần nghĩa vụ bị vi phạm; lãi chậm thanh "
+          "toán 3%/tháng.\n")
+
+
+class MenhDeTests(unittest.TestCase):
+    """Con số thuộc về từ khoá trong CÙNG mệnh đề — không để "thử việc" đầu câu
+    với tới "48 tháng" của mệnh đề "thời hạn hợp đồng" phía sau."""
+
+    def test_ktmt01_dung_loai_tung_menh_de(self):
+        kq = kt.kiem_tra_quy_tac(kt.trich_xuat_quy_tac(KTMT01))
+        bo = [(m["loai"], m["ket_luan"], m["gia_tri"]) for m in kq]
+        self.assertEqual(bo, [
+            ("thu_viec", "canh_bao", 90),
+            ("luong_thu_viec", "canh_bao", 70),
+            ("thoi_han_hop_dong", "canh_bao", 48),
+            ("gio_lam_viec_ngay", "canh_bao", 10),
+            ("phat_vi_pham", "canh_bao", 12),
+            ("lai_suat", "canh_bao", 36),
+        ])
+        # Ca lỗi cũ: thử việc 48 tháng × 30 = 1.440 ngày.
+        self.assertFalse([m for m in kq if m["loai"] == "thu_viec" and m["gia_tri"] > 1000])
+        hd = _theo_loai(kq, "thoi_han_hop_dong")[0]
+        self.assertTrue(hd["ngu_canh_lao_dong"])          # có "người lao động"
+        self.assertIn("Điều 20 Bộ luật Lao động", hd["can_cu"])
+        self.assertIn("48 tháng", hd["trich"])
+
+    def test_tu_khoa_xa_hon_khong_cuop_so_trong_cung_cau(self):
+        muc = kt.trich_xuat_quy_tac("Hợp đồng có thử việc, thời hạn hợp đồng 48 tháng.")
+        self.assertEqual([(m["loai"], m["gia_tri"]) for m in muc], [("thoi_han_hop_dong", 48)])
+        muc = kt.trich_xuat_quy_tac("Trong thời gian thử việc, mỗi bên phải báo trước 3 ngày.")
+        self.assertEqual([(m["loai"], m["gia_tri"]) for m in muc], [("bao_truoc", 3)])
+
+    def test_dau_cham_ket_cau_va_dau_cham_nghin(self):
+        muc = kt.trich_xuat_quy_tac("Thử việc 60 ngày. Thời hạn hợp đồng 48 tháng.")
+        self.assertEqual([(m["loai"], m["gia_tri"]) for m in muc],
+                         [("thu_viec", 60), ("thoi_han_hop_dong", 48)])
+        # Dấu chấm nghìn trong khoảng giữa từ khoá và số KHÔNG phải hết câu.
+        muc = kt.trich_xuat_quy_tac("Phạt 1.000.000 đồng hoặc 5% giá trị.")
+        self.assertEqual(_theo_loai(muc, "phat_vi_pham")[0]["gia_tri"], 5)
+        # Dấu phẩy trong cùng mệnh đề vẫn nối được.
+        muc = kt.trich_xuat_quy_tac("Thử việc, tối đa 2 tháng.")
+        self.assertEqual(_theo_loai(muc, "thu_viec")[0]["gia_tri"], 60)
+
+    def test_rr03_giu_nguyen(self):
+        """Mẫu RR03 (HĐLĐ vi phạm ngưỡng) — kết quả trước và sau sửa phải như nhau."""
+        from pathlib import Path
+        p = (Path(__file__).resolve().parents[2] / "deploy" / "kiem-thu" / "du-lieu-mau"
+             / "RR03_HDLD_vi_pham_nguong.docx")
+        if not p.exists():
+            self.skipTest("không có thư mục deploy/kiem-thu trên máy này")
+        try:
+            from app.ingest import extract_text
+            text = extract_text(p)
+        except Exception as e:                       # thiếu thư viện đọc docx
+            self.skipTest(f"không đọc được docx: {e}")
+        bo = [(m["loai"], m["ket_luan"], m["gia_tri"])
+              for m in kt.kiem_tra_quy_tac(kt.trich_xuat_quy_tac(text))]
+        self.assertEqual(bo, [
+            ("ngay", "hop_le", None), ("ngay", "hop_le", None),
+            ("thoi_han_hop_dong", "canh_bao", 48), ("ngay", "hop_le", None),
+            ("thu_viec", "canh_bao", 90), ("luong_thu_viec", "canh_bao", 70),
+            ("gio_lam_viec_ngay", "canh_bao", 10), ("lam_them_nam", "canh_bao", 300),
+            ("so_tien", "khong_ro", 15_000_000),
+        ])
+
+
 class QuyTacTests(unittest.TestCase):
     def test_lai_suat(self):
         cb = kt.kiem_tra_quy_tac(kt.trich_xuat_quy_tac(HD_VAY))

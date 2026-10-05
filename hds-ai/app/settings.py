@@ -142,6 +142,67 @@ DEFAULTS = {
         "có. Không có file đính kèm thì chỉ làm mục 1 và nói rõ cần đính kèm file "
         "để đối chiếu."
     ),
+    # ---- BA CÔNG CỤ PHÁP LÝ (hợp đồng mục 14, 18, 17 — thêm 03/10/2026) ----
+    # Cùng kênh nội bộ, cùng RLS; chỉ khác vai của model và kệ căn cứ được kéo
+    # thêm (rag.prepare: _KE_THEO_CHE_DO). Admin sửa câu chữ trên web.
+    "prompt_du_bao_tranh_tung": (
+        "Bạn là luật sư tranh tụng của Công ty Luật TNHH HDS. Nhiệm vụ: DỰ BÁO "
+        "kết quả giải quyết tranh chấp cho vụ việc trong HỒ SƠ người dùng cung cấp "
+        "(file đính kèm / mô tả), dựa trên BẢN ÁN, ÁN LỆ và văn bản luật trong TÀI "
+        "LIỆU THAM KHẢO.\n"
+        "Cách trình bày:\n"
+        "1. TÓM TẮT VỤ VIỆC VÀ YÊU CẦU: các bên, quan hệ tranh chấp, yêu cầu chính.\n"
+        "2. VẤN ĐỀ PHÁP LÝ CỐT LÕI: 2-5 vấn đề toà sẽ phải giải quyết, mỗi vấn đề "
+        "kèm căn cứ (tên văn bản + số hiệu + Điều/khoản).\n"
+        "3. ĐỐI CHIẾU BẢN ÁN / ÁN LỆ TƯƠNG TỰ: với mỗi bản án trong nguồn, nêu số "
+        "bản án/toà xét xử nếu có, điểm GIỐNG và KHÁC với vụ này, toà đã quyết "
+        "định thế nào. Không có bản án tương tự trong nguồn thì nói rõ, KHÔNG bịa "
+        "số bản án.\n"
+        "4. DỰ BÁO: với mỗi yêu cầu, chọn đúng một mức — KHẢ NĂNG ĐƯỢC CHẤP NHẬN "
+        "CAO / NGANG NHAU / THẤP — và lý do gắn với mục 2-3. Không đưa tỉ lệ phần "
+        "trăm giả tạo.\n"
+        "5. RỦI RO VÀ VIỆC NÊN LÀM: chứng cứ cần bổ sung, thời hiệu, phương án "
+        "hoà giải/thương lượng.\n"
+        "Mỗi nhận định dựa trên tài liệu phải kèm [Nguồn n]. Kết thúc bằng câu: "
+        "'Đây là dự báo tham khảo định hướng; kết luận cuối cùng do luật sư phụ "
+        "trách quyết định.'"
+    ),
+    "prompt_chuan_bi_phien_toa": (
+        "Bạn là luật sư của Công ty Luật TNHH HDS đang CHUẨN BỊ PHIÊN TOÀ cho khách "
+        "hàng, dựa trên HỒ SƠ người dùng cung cấp và căn cứ trong TÀI LIỆU THAM "
+        "KHẢO. Hãy ĐÓNG VAI LUẬT SƯ PHÍA ĐỐI PHƯƠNG để tìm điểm yếu của hồ sơ.\n"
+        "Cách trình bày:\n"
+        "1. LUẬN CỨ CHÍNH CỦA BÊN MÌNH: mỗi luận cứ kèm chứng cứ trong hồ sơ và "
+        "căn cứ pháp luật (tên văn bản + số hiệu + Điều/khoản).\n"
+        "2. ĐỐI PHƯƠNG SẼ TẤN CÔNG Ở ĐÂU: 4-8 câu hỏi/lập luận phía bên kia hoặc "
+        "Hội đồng xét xử có thể đặt ra, mỗi câu kèm CÁCH TRẢ LỜI gợi ý và căn cứ.\n"
+        "3. CHỨNG CỨ CÒN YẾU / CÒN THIẾU: tài liệu nào cần bổ sung, xác minh, "
+        "giám định; hạn nộp nếu nguồn có.\n"
+        "4. KỊCH BẢN PHIÊN TOÀ NGẮN: thứ tự trình bày, điểm cần nhấn mạnh, điểm "
+        "nên tránh.\n"
+        "Mỗi nhận định dựa trên tài liệu phải kèm [Nguồn n]. Không bịa chứng cứ "
+        "hay số bản án không có trong nguồn. Đây là bản chuẩn bị hỗ trợ — luật sư "
+        "phụ trách quyết định chiến lược cuối cùng."
+    ),
+    "prompt_dich_ban_dia_hoa": (
+        "Bạn là luật sư song ngữ của Công ty Luật TNHH HDS. Nhiệm vụ: DỊCH tài "
+        "liệu (thường là hợp đồng tiếng Anh) trong HỒ SƠ người dùng cung cấp sang "
+        "tiếng Việt pháp lý chuẩn, rồi BẢN ĐỊA HOÁ theo pháp luật Việt Nam.\n"
+        "Cách trình bày:\n"
+        "1. BẢN DỊCH THEO TỪNG ĐIỀU: giữ nguyên số điều/khoản của bản gốc; dịch "
+        "đúng nghĩa pháp lý, không lược bỏ. Tài liệu quá dài thì dịch các điều "
+        "quan trọng nhất (đối tượng, giá, thanh toán, trách nhiệm, phạt, chấm "
+        "dứt, luật áp dụng, giải quyết tranh chấp) và ghi rõ phần chưa dịch.\n"
+        "2. BẢNG THUẬT NGỮ: thuật ngữ gốc | thuật ngữ tiếng Việt chuẩn | ghi chú "
+        "(vd indemnity, liquidated damages, force majeure, governing law).\n"
+        "3. ĐIỂM CẦN ĐIỀU CHỈNH THEO PHÁP LUẬT VIỆT NAM: mỗi điểm nêu điều khoản "
+        "gốc, vì sao không phù hợp / rủi ro (vd phạt vượt 8% theo Luật Thương "
+        "mại, lãi vượt trần Bộ luật Dân sự, chọn luật nước ngoài cho hợp đồng "
+        "không có yếu tố nước ngoài), căn cứ (tên văn bản + số hiệu + Điều) và "
+        "câu chữ đề xuất sửa.\n"
+        "Mỗi căn cứ dựa trên tài liệu phải kèm [Nguồn n]. Không có căn cứ trong "
+        "nguồn thì ghi 'chưa đối chiếu được'."
+    ),
     # Tham số sinh câu trả lời
     "llm_temperature": "0.2",
     # ---- Chính sách 20/08/2026: BOT KHÔNG BỊ GIỚI HẠN --------------------
@@ -195,6 +256,25 @@ DEFAULTS = {
     # ngày 9). 1 = bật. Mỗi lượt tốn ~1–3 phút model trên GPU; máy dùng chung
     # nhiều người thấy chậm thì đặt 0 và bấm "Kiểm tra lại" tay khi cần.
     "draft_check_auto": "1",
+    # ---- CHÍNH SÁCH DUYỆT TÀI LIỆU MỚI (chủ dự án 28/09/2026) -------------
+    # Tài liệu mới (nhân viên tải lên / thả vào kho / CRM gửi sang) MẶC ĐỊNH
+    # TỰ DUYỆT; chỉ tài liệu đọc lỗi quá ngưỡng — tỉ lệ token rác
+    # (app/chat_luong.ty_le_rac) LỚN HƠN số này — mới vào hàng chờ người duyệt.
+    # Thay cho chính sách 20/08 "PDF luôn chờ duyệt" (hàng chờ lên hàng nghìn
+    # tài liệu scan, không ai duyệt nổi). Đặt 'off' = quay về chính sách cũ
+    # nguyên vẹn (AUTO_LEARN_AUTO_APPROVE + PDF chờ duyệt). Xem
+    # auto_learn.quyet_dinh_duyet. Hiệu chỉnh thật 15/09: rác OCR 51%, điều
+    # luật 1,8%, hồ sơ doanh nghiệp 0% → 0.2 nằm giữa khoảng trống.
+    "tu_duyet_nguong_rac": "0.2",
+    # BẢNG GIÁ DỊCH VỤ CÔNG KHAI cho khung chat website (hợp đồng mục 5: chatbot
+    # tư vấn khách vãng lai, báo giá dịch vụ). Mỗi dòng một dịch vụ. Để TRỐNG
+    # thì bot KHÔNG được tự nêu con số nào — trả "liên hệ để được báo giá" và
+    # mời để lại thông tin. Bot chỉ đọc lại đúng các dòng này, không tự tính.
+    "bang_gia_dich_vu": "",
+    # Khi CRM đã là nơi DUY NHẤT thêm/sửa hồ sơ khách (deploy/API_TICH_HOP.md):
+    # 'true' = khoá tải lên / tạo thư mục trong ngăn Hồ sơ khách hàng từ web
+    # (API tích hợp vẫn ghi được). Ổ mạng Samba phải đặt chỉ đọc riêng.
+    "kho_khach_chi_doc": "false",
     # Model sinh câu trả lời (Ollama). Chính sách 20/08/2026: chạy FULL
     # qwen3:14b cho mọi câu — không tự hạ xuống model nhỏ. Admin đổi trên web
     # nếu máy không kham nổi. KHÔNG áp cho model tạo vector (bge-m3): mọi đoạn
@@ -231,15 +311,66 @@ DEFAULTS = {
     # cho phép thì KHÔNG bị cắt xén — nó tự động quay về Qwen local. Nhờ vậy
     # không có đường nào rò dữ liệu mà cũng không có câu trả lời nào bị thiếu
     # căn cứ vì bộ lọc.
-    #   law_only        — chỉ văn bản luật/án lệ/quan điểm KHÔNG gắn khách
-    #                     hàng. Hồ sơ khách, dữ liệu công ty, file đính kèm
-    #                     đều ở lại máy nhà. An toàn nhất.
+    #   law_only        — chỉ văn bản pháp luật, án lệ, bản án (loại law /
+    #                     an_le / ban_an hoặc tài liệu đặt mức công khai).
+    #                     Hồ sơ khách, hồ sơ nhân sự, hợp đồng, mẫu, quy trình,
+    #                     thư tư vấn, dữ liệu công ty, file đính kèm đều ở lại
+    #                     máy nhà. An toàn nhất. (Trước 04/10/2026 tài liệu
+    #                     nội bộ KHÔNG gắn khách — vd hồ sơ nhân sự — vẫn lọt
+    #                     qua mức này; nay đã chặn.)
     #   plus_attachments— thêm file người dùng TỰ đính kèm trong hội thoại
     #                     (đúng luồng tab Kiểm tra pháp lý). Kho hồ sơ khách
     #                     và dữ liệu công ty vẫn ở lại.
     #   all_but_finance — mọi thứ trừ công nợ/tài chính (chặn cứng, không cấu
     #                     hình gỡ được).
     "cloud_scope": "law_only",
+    # THƯ MỤC TÀI LIỆU CÔNG KHAI trong kho (05/10/2026): tài liệu do NƠI KHÁC
+    # công bố (vd hợp đồng nộp SEC Hoa Kỳ) dù nằm trong ngăn nội bộ (Mẫu hợp
+    # đồng) thì MỌI tài khoản nội bộ mở được, bỏ qua ma trận "trợ lý / chuyên
+    # viên DN-ĐT không mở mẫu HĐ" — ma trận đó để giữ mẫu CỦA HDS. Kênh website
+    # và tài khoản khách vẫn không thấy. Danh sách JSON tên thư mục (khớp một
+    # đoạn đường dẫn), [] = tắt.
+    "thu_muc_cong_khai_noi_bo": json.dumps(["Hợp đồng Hoa Kỳ – SEC"], ensure_ascii=False),
+    # ---- CHATGPT LÀM VIỆC SONG SONG (04/10/2026) --------------------------
+    # Hai việc PHỤ, không thay model trả lời chính (Qwen trên máy chủ):
+    #   (1) SOÁT ĐẦU RA — model ngoài đọc câu hỏi + câu trả lời + nguồn rồi
+    #       chấm "ổn / cần xem lại / có điểm sai" kèm ghi chú;
+    #   (2) "XEM CÂU TRẢ LỜI KHÁC" — model ngoài trả lời lại cùng câu hỏi,
+    #       cùng quyền đọc tài liệu, hiện bên dưới để luật sư so sánh.
+    # Cả hai gửi dữ liệu RA KHỎI máy chủ nên mặc định TẮT, chỉ kênh nội bộ, và
+    # đi qua CÙNG phạm vi dữ liệu `cloud_scope` ở trên: nguồn ngoài phạm vi bị
+    # BỎ khỏi phần gửi đi (câu trả lời khác chỉ dựa trên phần còn lại), nguồn
+    # ngoài phạm vi mà câu trả lời đã TRÍCH DẪN thì không soát được. Cần khoá
+    # OPENAI_API_KEY (hoặc COMPAT_API_KEY / ANTHROPIC_API_KEY cho model
+    # 'claude:…') trong .env — quản trị điền, không lưu ở bảng cài đặt.
+    #
+    # Soát đầu ra: tat | nut (người dùng bấm "ChatGPT soát") | tu_dong (soát
+    # ngay sau mỗi câu trả lời, vẫn có nút soát lại).
+    "ai_soat_che_do": "tat",
+    "ai_soat_model": "api:gpt-5-mini",
+    # Độ sâu suy nghĩ khi soát: low | medium | high. Soát là việc đọc-đối
+    # chiếu, 'low' đủ và rẻ.
+    "ai_soat_effort": "low",
+    # Nút "Xem câu trả lời khác" dưới mỗi câu trả lời.
+    "ai_khac_bat": "false",
+    "ai_khac_model": "api:gpt-5",
+    "ai_khac_effort": "medium",
+    # CHE DỮ LIỆU ĐỊNH DANH trước khi gửi: số CCCD/CMND, điện thoại, email,
+    # mã số thuế và TÊN KHÁCH HÀNG có trong kho được thay bằng nhãn
+    # [Số định danh], [Khách hàng]… Tắt chỉ khi đã chọn cloud_scope
+    # all_but_finance và chấp nhận gửi nguyên văn.
+    "ai_ngoai_che_dinh_danh": "true",
+    # Trần số LƯỢT gọi model ngoài mỗi tháng (soát + trả lời khác cộng lại),
+    # 0 = không giới hạn. Đây là trần hoá đơn: hết lượt thì nút báo hết,
+    # không âm thầm gọi tiếp.
+    "ai_ngoai_tran_luot_thang": "500",
+    # Trần token model ngoài được sinh ra mỗi lượt (với gpt-5 tính cả phần
+    # suy nghĩ — đặt thấp quá là câu trả lời rỗng).
+    "ai_ngoai_max_tokens": "12000",
+    # Khi đã bật soát TỰ ĐỘNG: bỏ lượt "bot tự đọc lại" của Qwen (vốn chạy
+    # trên câu trả lời dài > 3.500 ký tự, tốn thêm 30–60 giây) — ChatGPT soát
+    # thay. Chỉ bỏ khi lượt đó chắc chắn soát được (nguồn trong phạm vi).
+    "ai_soat_thay_doc_lai": "false",
     # NGUỒN VĂN BẢN TRÊN MẠNG cho bộ quét định kỳ (app/web_watch.py).
     # Mỗi nguồn tải file mới về một thư mục trong kho, rồi bộ quét kho học như
     # file nhân viên thả vào — nghĩa là vẫn qua cổng duyệt, vẫn phân quyền theo
@@ -407,12 +538,41 @@ def get_prompt(channel):
     return get(f"prompt_{channel}") or DEFAULTS.get(f"prompt_{channel}", "")
 
 
+# Khoá có tập giá trị đóng — gõ sai một chữ ('tudong') thì tính năng lặng lẽ
+# coi như TẮT mà không ai biết vì sao. Chặn ngay lúc lưu.
+_GIA_TRI_DONG = {
+    "ai_soat_che_do": {"tat", "nut", "tu_dong"},
+    "ai_soat_effort": {"minimal", "low", "medium", "high"},
+    "ai_khac_effort": {"minimal", "low", "medium", "high"},
+    "cloud_scope": {"law_only", "plus_attachments", "all_but_finance"},
+}
+_KHOA_SO_KHONG_AM = {"ai_ngoai_tran_luot_thang", "ai_ngoai_max_tokens"}
+_KHOA_MODEL = {"ai_soat_model", "ai_khac_model"}
+
+
+def kiem_gia_tri(key, value):
+    """Ném ValueError (câu tiếng Việt cho admin đọc) nếu giá trị không hợp lệ."""
+    v = (value or "").strip()
+    if key in _GIA_TRI_DONG and v.lower() not in _GIA_TRI_DONG[key]:
+        raise ValueError(f"{key} chỉ nhận: {', '.join(sorted(_GIA_TRI_DONG[key]))}")
+    if key in _KHOA_SO_KHONG_AM:
+        try:
+            if int(v) < 0:
+                raise ValueError
+        except ValueError:
+            raise ValueError(f"{key} phải là số nguyên ≥ 0") from None
+    if key in _KHOA_MODEL and (not v or len(v) > 120 or any(c.isspace() for c in v)):
+        raise ValueError(f"{key}: tên model không hợp lệ (vd api:gpt-5-mini, "
+                         "claude:claude-sonnet-5)")
+
+
 def set(key, value, user_id=None):  # noqa: A001 - đặt tên theo nghiệp vụ
     """Ghi một cài đặt. Kiểm quyền admin ở tầng API trước khi gọi."""
     if key not in EDITABLE_KEYS:
         raise ValueError(f"Khoá cài đặt không hợp lệ: {key}")
     if key in ("drive_map", "web_sources"):
         json.loads(value)  # sai JSON thì báo lỗi ngay, đừng để hỏng lúc quét kho
+    kiem_gia_tri(key, value)
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute(

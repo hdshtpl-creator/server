@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
-import type { Client, Client360Data } from '../../types';
+import type { Client, Client360Data, Department } from '../../types';
 import { MATTER_STATUS_BADGES, DOC_TYPE_LABELS } from '../../constants';
 import { ThuMucKhachPanel } from './ThuMucKhachPanel';
 import {
@@ -82,6 +82,14 @@ export const Client360Tab: React.FC = () => {
   const [issuesNote, setIssuesNote] = useState('');
   const [warnings, setWarnings] = useState('');
   const [suggestions, setSuggestions] = useState('');
+
+  // Phòng phụ trách (F-17): chỉ admin / Ban QT đổi được (PATCH /clients/{id}).
+  // Quyền mở hồ sơ khách đi theo phòng này — xem dòng giải thích dưới ô chọn.
+  const canEditDept = currentUser?.role === 'admin' || currentUser?.role === 'ban_qt';
+  const [departments, setDepartments] = useState<Department[]>([]);
+  // '' = chưa gán; còn lại là id phòng dạng chuỗi (giá trị của <select>).
+  const [deptDraft, setDeptDraft] = useState('');
+  const [savingDept, setSavingDept] = useState(false);
 
   const sortedClients = useMemo(() => {
     const list = [...clients];
@@ -173,6 +181,75 @@ export const Client360Tab: React.FC = () => {
     fetchClientsList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!canEditDept) return;
+    api
+      .getDepartments()
+      .then((list) => setDepartments(Array.isArray(list) ? list : []))
+      .catch(() => setDepartments([]));
+  }, [canEditDept]);
+
+  /** Mã phòng đang gán của khách đang xem. Máy chủ cũ chưa trả department_id
+   *  thì dò theo tên phòng — vẫn hơn hiện "chưa gán" sai sự thật. */
+  const currentDeptId = useMemo<number | null>(() => {
+    const c = data360?.client;
+    if (!c) return null;
+    if (typeof c.department_id === 'number') return c.department_id;
+    const ten = (c.department_name ?? c.department ?? '').trim();
+    if (!ten) return null;
+    return departments.find((d) => d.name === ten)?.id ?? null;
+  }, [data360, departments]);
+
+  const currentDeptName = data360
+    ? data360.client.department_name ??
+      data360.client.department ??
+      departments.find((d) => d.id === currentDeptId)?.name ??
+      null
+    : null;
+
+  useEffect(() => {
+    setDeptDraft(currentDeptId != null ? String(currentDeptId) : '');
+  }, [currentDeptId, data360?.client.id]);
+
+  const deptChanged = deptDraft !== (currentDeptId != null ? String(currentDeptId) : '');
+
+  const handleSaveDept = async () => {
+    if (!data360 || !canEditDept || !deptChanged) return;
+    const clientId = data360.client.id;
+    setSavingDept(true);
+    try {
+      const res = await api.updateClientDepartment(clientId, deptDraft ? Number(deptDraft) : null);
+      const depId = res?.department_id ?? null;
+      const depName =
+        res?.department_name ?? departments.find((d) => d.id === depId)?.name ?? null;
+      setData360((prev) =>
+        prev && prev.client.id === clientId
+          ? {
+              ...prev,
+              client: {
+                ...prev.client,
+                department_id: depId,
+                department_name: depName,
+                department: depName,
+              },
+            }
+          : prev
+      );
+      setClients((prev) =>
+        prev.map((c) =>
+          c.id === clientId
+            ? { ...c, department_id: depId, department_name: depName, department: depName }
+            : c
+        )
+      );
+      showToast('Đã cập nhật phòng phụ trách.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Không cập nhật được phòng phụ trách.', 'error');
+    } finally {
+      setSavingDept(false);
+    }
+  };
 
   // Chọn sẵn khách đầu tiên THEO THỨ TỰ ĐANG HIỂN THỊ, không theo thứ tự API
   // trả về — nếu không, danh sách xếp theo mã mà hồ sơ mở sẵn lại là khách
@@ -421,10 +498,58 @@ export const Client360Tab: React.FC = () => {
                   <span className="text-xs text-blue-200 font-mono">ID: {data360.client.id}</span>
                 </div>
                 <h3 className="text-xl font-extrabold break-words">{data360.client.name}</h3>
-                <p className="text-xs text-blue-100 flex items-center gap-2">
-                  <Building2 className="w-3.5 h-3.5 shrink-0" />
-                  <span>{data360.client.department || 'Chưa gán phòng ban phụ trách'}</span>
-                </p>
+                {/* Phòng phụ trách — quyết định AI mở hồ sơ khách cho ai. */}
+                <div className="space-y-1 pt-1">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-blue-100">
+                    <Building2 className="w-3.5 h-3.5 shrink-0" />
+                    <span className="font-semibold">Phòng phụ trách:</span>
+                    {canEditDept ? (
+                      <>
+                        <select
+                          value={deptDraft}
+                          onChange={(e) => setDeptDraft(e.target.value)}
+                          disabled={savingDept}
+                          aria-label="Phòng phụ trách khách hàng"
+                          className="max-w-full sm:max-w-xs px-2 py-1 rounded-lg bg-white/15 border border-white/25 text-white text-xs font-semibold focus:ring-2 focus:ring-hds-gold focus:outline-none disabled:opacity-60 [&>option]:text-slate-900"
+                        >
+                          <option value="">— Chưa gán (mọi phòng nội bộ xem được) —</option>
+                          {departments.map((d) => (
+                            <option key={d.id} value={String(d.id)}>
+                              {d.name}
+                            </option>
+                          ))}
+                          {/* Phòng đang gán mà danh sách phòng chưa tải được /
+                              không có — vẫn giữ một dòng để ô chọn không nói sai. */}
+                          {currentDeptId != null &&
+                            !departments.some((d) => d.id === currentDeptId) && (
+                              <option value={String(currentDeptId)}>
+                                {currentDeptName || `Phòng #${currentDeptId}`}
+                              </option>
+                            )}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveDept()}
+                          disabled={!deptChanged || savingDept}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-hds-gold text-hds-navy font-bold text-[11px] hover:brightness-105 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {savingDept ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Save className="w-3 h-3" />
+                          )}
+                          Lưu
+                        </button>
+                      </>
+                    ) : (
+                      <span>{currentDeptName || 'Chưa gán (mọi phòng nội bộ xem được)'}</span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-blue-200/90 leading-snug max-w-xl">
+                    Khách đã gán phòng: chỉ trưởng bộ phận / chuyên viên của phòng đó (và Ban QT)
+                    mở được hồ sơ. Chưa gán: mọi trưởng bộ phận và chuyên viên nội bộ mở được.
+                  </p>
+                </div>
               </div>
 
               <div className="flex gap-3 text-xs bg-white/10 p-3 rounded-xl border border-white/15 shrink-0">

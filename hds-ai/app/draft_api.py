@@ -19,7 +19,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app import autofill, db, drafting, kiem_tra_mau_thuan, rag, so_sanh
+from app import (autofill, db, drafting, kiem_tra_mau_thuan,
+                 quyen_tinh_nang, rag, so_sanh)
 
 
 INTERNAL_ROLES = {"admin", "ban_qt", "truong_bph", "chuyen_vien", "tro_ly"}
@@ -110,8 +111,19 @@ def _don_ban_nhap_trong():
 
 
 def _require_internal(user):
-    if user["role"] not in INTERNAL_ROLES:
-        raise HTTPException(403, "Chức năng soạn tài liệu chỉ dành cho nhân viên nội bộ")
+    """Cửa vào khu Soạn tài liệu.
+
+    Từ 20/09/2026 tài khoản khách VÀO ĐƯỢC nếu quản trị đã bật chức năng
+    "Soạn tài liệu" cho họ. Việc đó không nới quyền dữ liệu: nguồn của bản
+    nháp vẫn phải qua _allowed_documents, mà hàm đó so mã khách nên khách chỉ
+    dùng được hồ sơ của chính mình.
+    """
+    if user["role"] in INTERNAL_ROLES:
+        return
+    if user["role"] in quyen_tinh_nang.CLIENT_ROLES and quyen_tinh_nang.co_quyen(
+            user, "soan_thao"):
+        return
+    raise HTTPException(403, "Tài khoản chưa được mở chức năng Soạn tài liệu")
 
 
 def _check_size(value, name: str, maximum: int):
@@ -216,7 +228,7 @@ def _allowed_documents(user, ids: list[int]) -> list[dict]:
         if not rag.can_open_doc(
             user["role"], user["dept_ids"], user["is_banqt"], doc,
             can_finance=user["can_finance"], rules=rules,
-            dept_codes=user["dept_codes"],
+            dept_codes=user["dept_codes"], client_id=user.get("client_id"),
         ):
             raise HTTPException(403, f"Không có quyền dùng tài liệu nguồn #{doc_id}")
         # Cổng con người là approved+label_verified — KHÔNG chặn theo

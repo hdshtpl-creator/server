@@ -39,7 +39,7 @@ import unicodedata
 import zipfile
 from pathlib import Path
 
-from app import db, settings, template_fill
+from app import chong_chen_lenh, db, settings, template_fill
 
 # 0 = KHÔNG giới hạn số file một lượt (chủ dự án 15/09/2026: "nới từ 8 lên vô
 # hạn"). Admin muốn đặt trần thì sửa cài đặt doc_factory_max_files trên web.
@@ -499,6 +499,12 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
     # ---- Nguyên liệu -----------------------------------------------------
     note("Đang đọc hồ sơ đính kèm…")
     temp_rows = _attachments(conversation_id, use_temp)
+    # Che câu "ra lệnh cho AI" giấu trong hồ sơ TRƯỚC khi văn bản vào bất kỳ
+    # prompt nào (kế hoạch, điền khuôn, soạn mới) hay vào trường tin cậy — F-22
+    # (kiểm thử 02/10/2026). Cảnh báo đứng đầu mục KIỂM TRA BẮT BUỘC.
+    temp_rows, canh_bao_chen = template_fill.che_lenh_tep(temp_rows)
+    da_canh_bao = {fname for fname, _t, _s in temp_rows
+                   if any(f"«{fname}»" in c for c in canh_bao_chen)}
     attachments = [(fname, text, bool(src)) for fname, text, src in temp_rows]
     docx_uploads = {fname: src for fname, _text, src in temp_rows if src}
     du_lieu_hoi_thoai = build_history_block(summary, history)
@@ -649,6 +655,18 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
                     doc = _load_skeleton(skeleton_path)
                 if skeleton_text is None:
                     skeleton_text = template_fill.document_text(doc)
+                # Khuôn (nhất là .docx người dùng tải lên) cũng là chữ vào
+                # prompt: che dòng lệnh trong bản đưa model. File kết quả vẫn
+                # giữ nguyên dòng đó nên phải báo để xoá tay.
+                skeleton_text, n_che = chong_chen_lenh.loc_lenh_chen(skeleton_text)
+                ten_khuon = (kho_doc[0] if skeleton_kind == "kho" and kho_doc
+                             else ten_file if skeleton_kind == "bo" else khuon)
+                if n_che:
+                    if ten_khuon not in da_canh_bao:
+                        da_canh_bao.add(ten_khuon)
+                        canh_bao_chen.append(chong_chen_lenh.canh_bao(ten_khuon, n_che))
+                    warnings.append("khuôn có đoạn giống câu lệnh gửi AI — đoạn đó VẪN "
+                                    "CÒN trong file kết quả, xoá tay trước khi gửi")
                 placeholders = template_fill.scan_placeholders(doc)
                 fill_prompt, fill_system = template_fill.build_fill_prompt(
                     skeleton_text,
@@ -770,7 +788,7 @@ def handle(question, *, user_id, dept_ids=None, is_banqt=False, can_finance=Fals
                      "này, danh sách file trên là do AI tự kê — hãy đối chiếu "
                      "với quy định trước khi dùng.")
 
-    review_lines = []
+    review_lines = [f"- {c}" for c in canh_bao_chen]
     if template_warning:
         review_lines.append(f"- {template_warning}")
     if attachments_truncated:

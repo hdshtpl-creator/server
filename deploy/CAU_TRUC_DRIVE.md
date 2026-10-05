@@ -220,11 +220,14 @@ này cho thư mục nào là thư mục đó thành vùng hạn chế.
 
 ## Vận hành
 
+Từ 27/08/2026 cây thư mục này nằm trên máy chủ (`hds-ai/data/raw/`), không còn trên
+Google Drive; bộ học là `hoc-tu-thu-muc.sh` (`auto-learn.sh` của Drive sẽ báo lỗi).
+
 ```bash
 cd ~/hds-ai-full
-bash deploy/auto-learn.sh --dry-run           # xem sẽ học file nào, nhãn gì
-bash deploy/auto-learn.sh                     # học thật
-sudo bash deploy/auto-learn.sh --install-timer # tự học mỗi 15 phút
+bash deploy/hoc-tu-thu-muc.sh --dry-run        # xem sẽ học file nào, nhãn gì
+bash deploy/hoc-tu-thu-muc.sh                  # học thật một lượt
+bash deploy/hoc-tu-thu-muc.sh --install-cron   # tự quét mỗi 3 phút (không cần root)
 ```
 
 > **Nâng cấp 08/2026 — cần học lại kho một lần.** Bộ nạp đã đổi ba điểm:
@@ -239,8 +242,9 @@ Bot chỉ xử lý file **mới hoặc đã sửa** (file thường so checksum;
 so `modifiedTime`) → chạy lại rất nhanh.
 Sửa nội dung file trên Drive → lần sau bot tự thay bản cũ bằng bản mới.
 
-Mặc định an toàn: file mới **chờ người duyệt** trước khi được dùng để trả lời. Sau khi
-đã kiểm tra quy trình và dashboard, có thể chủ động bật trong `hds-ai/.env`:
+Từ 28/09/2026: file mới **tự duyệt khi máy đọc sạch** (tỉ lệ chữ rác ≤ 20%, chỉnh ở
+*Cài đặt AI → Tự duyệt tài liệu mới*); đọc kém hơn thì chờ người duyệt. Biến dưới đây
+chỉ còn tác dụng khi ngưỡng đặt *Tắt* (chính sách cũ):
 
 ```env
 AUTO_LEARN_AUTO_APPROVE=1

@@ -86,6 +86,31 @@ export function onMockFallback(listener) {
   fallbackListener = typeof listener === 'function' ? listener : null;
 }
 
+/**
+ * Tài khoản đang dùng mật khẩu tạm do quản trị cấp (F-04): máy chủ trả 403 cho
+ * MỌI cửa trừ GET /auth/me và POST /auth/change-password. Gặp đúng lỗi đó thì
+ * báo AppContext nạp lại /auth/me — cờ must_change_password bật lên, App.tsx
+ * chỉ còn dựng hộp đổi mật khẩu (ca: quản trị đặt lại mật khẩu khi người dùng
+ * đang mở trang). Giãn cách 5 giây để một loạt 403 cùng lúc chỉ gây một lần hỏi.
+ */
+const DAU_HIEU_MAT_KHAU_TAM = 'mật khẩu tạm do quản trị cấp';
+let mustChangeListener = null;
+let mustChangeLastAt = 0;
+export function onMustChangePassword(listener) {
+  mustChangeListener = typeof listener === 'function' ? listener : null;
+}
+function baoPhaiDoiMatKhau(detail) {
+  if (!mustChangeListener || !String(detail || '').includes(DAU_HIEU_MAT_KHAU_TAM)) return;
+  const now = Date.now();
+  if (now - mustChangeLastAt < 5000) return;
+  mustChangeLastAt = now;
+  try {
+    mustChangeListener();
+  } catch {
+    /* listener lỗi không được làm hỏng lời gọi gốc */
+  }
+}
+
 // ==================== TIỆN ÍCH ====================
 
 /** Ép về số nguyên hợp lệ, ngược lại trả null. Dùng cho mọi id gửi lên backend. */
@@ -100,8 +125,31 @@ export function toIntOrNull(value) {
  * FastAPI trả {"detail": "..."} hoặc {"detail":[{loc,msg,...}]} cho lỗi 422.
  * Nếu không bóc được thì mới hiện nguyên văn — tránh đập raw JSON vào mặt người dùng.
  */
+// Lỗi do tầng trước ứng dụng trả (nginx, Cloudflare) — thân là trang HTML
+// ngắn chứ không phải JSON. Trước 29/09/2026 trang dưới 300 ký tự được hiện
+// NGUYÊN VĂN, người dùng thấy cả một khối mã "<html><head><title>413…".
+const LOI_HA_TANG = {
+  413: 'Lượt tải quá lớn so với giới hạn của máy chủ — chia nhỏ tệp hoặc tải ít tệp hơn mỗi lần.',
+  502: 'Máy chủ đang khởi động lại hoặc tạm ngừng — thử lại sau ít phút.',
+  503: 'Máy chủ đang bận hoặc bảo trì — thử lại sau ít phút.',
+  504: 'Máy chủ xử lý quá lâu nên kết nối bị cắt. Việc có thể vẫn đang chạy — tải lại trang để xem kết quả trước khi gửi lại.',
+  524: 'Máy chủ xử lý quá lâu nên kết nối bị cắt. Việc có thể vẫn đang chạy — tải lại trang để xem kết quả trước khi gửi lại.',
+};
+
+function loiHaTang(status) {
+  if (LOI_HA_TANG[status]) return LOI_HA_TANG[status];
+  if (status >= 520 && status <= 530) {
+    return `Không kết nối được tới máy chủ qua Cloudflare (mã ${status}) — thử lại sau ít phút.`;
+  }
+  return null;
+}
+
+function laTrangHtml(text) {
+  return /<\s*(!doctype|html|head|body|title|center|h1)\b/i.test(text);
+}
+
 function parseErrorBody(rawText, status) {
-  if (!rawText) return `Lỗi máy chủ (${status})`;
+  if (!rawText) return loiHaTang(status) || `Lỗi máy chủ (${status})`;
   try {
     const data = JSON.parse(rawText);
     const detail = data.detail ?? data.message ?? data.error;
@@ -117,9 +165,14 @@ function parseErrorBody(rawText, status) {
     }
     if (detail) return String(detail);
   } catch {
-    // không phải JSON — dùng nguyên văn bên dưới
+    // không phải JSON — xét tiếp bên dưới
   }
-  return rawText.length > 300 ? `Lỗi máy chủ (${status})` : rawText;
+  const haTang = loiHaTang(status);
+  if (haTang) return haTang;
+  if (laTrangHtml(rawText) || rawText.length > 300 || status >= 500) {
+    return `Lỗi máy chủ (${status})`;
+  }
+  return rawText;
 }
 
 /**
@@ -170,7 +223,10 @@ async function request(endpoint, options = {}) {
     const detail = parseErrorBody(rawText, response.status);
 
     if (response.status === 401) throw new Error(detail || 'Phiên đăng nhập đã hết hạn (401)');
-    if (response.status === 403) throw new Error(detail || 'Tài khoản không đủ quyền (403)');
+    if (response.status === 403) {
+      baoPhaiDoiMatKhau(detail);
+      throw new Error(detail || 'Tài khoản không đủ quyền (403)');
+    }
     if (response.status === 429) throw new Error(detail || 'Đã hết lượt hỏi trong tháng (429)');
     throw new Error(detail);
   }
@@ -398,6 +454,138 @@ export async function chatStream(
   }
 }
 
+// ---------- ChatGPT làm việc song song (hds-ai/app/ai_ngoai.py) ----------
+// Hai việc phụ cạnh câu trả lời của Qwen: SOÁT đầu ra, và "XEM CÂU TRẢ LỜI
+// KHÁC". Cả hai trả luồng SSE (status/meta/delta… → done{ket_qua}) để máy chủ
+// phát nhịp tim — model ngoài đọc prompt dài có thể im quá 100 giây.
+
+/** POST một endpoint SSE ngắn của model ngoài; trả sự kiện 'done' cuối cùng. */
+async function postSseAiNgoai(path, body, onEvent, signal) {
+  const control = new AbortController();
+  let lastByteAt = Date.now();
+  let imLang = false;
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastByteAt > SSE_SILENCE_MS) {
+      imLang = true;
+      control.abort();
+    }
+  }, 5000);
+  let nguoiDungDung = false;
+  const dung = () => {
+    nguoiDungDung = true;
+    control.abort();
+  };
+  if (signal) {
+    if (signal.aborted) dung();
+    else signal.addEventListener('abort', dung, { once: true });
+  }
+  const loi = () =>
+    nguoiDungDung
+      ? Object.assign(new Error('Đã dừng theo yêu cầu.'), { code: DUNG_BOI_NGUOI_DUNG })
+      : imLang
+        ? new Error('Máy chủ ngừng phản hồi giữa chừng — hãy thử lại.')
+        : null;
+  try {
+    let response;
+    try {
+      response = await fetch(`${apiBaseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': currentUserId,
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify(body || {}),
+        signal: control.signal,
+      });
+    } catch (err) {
+      throw loi() || new Error(`Không kết nối được backend tại ${apiBaseUrl}.`);
+    }
+    if (!response.ok || !response.body) {
+      const rawText = await response.text().catch(() => '');
+      throw new Error(parseErrorBody(rawText, response.status));
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let last = null;
+    for (;;) {
+      let value;
+      let done;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        throw loi() || err;
+      }
+      if (done) break;
+      lastByteAt = Date.now();
+      buffer += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, sep).trim();
+        buffer = buffer.slice(sep + 2);
+        if (!raw.startsWith('data:')) continue;
+        let evt;
+        try {
+          evt = JSON.parse(raw.slice(5).trim());
+        } catch {
+          continue;
+        }
+        if (evt.type === 'error') throw new Error(evt.message || 'Máy chủ báo lỗi giữa chừng.');
+        onEvent?.(evt);
+        last = evt;
+      }
+    }
+    if (!last || last.type !== 'done') {
+      throw new Error('Kết nối bị đóng trước khi có kết quả.');
+    }
+    return last;
+  } finally {
+    clearInterval(watchdog);
+    if (signal) signal.removeEventListener('abort', dung);
+  }
+}
+
+// Cấu hình nút model ngoài: hỏi một lần, giữ 60 giây — mỗi câu trả lời trong
+// khung chat đều cần biết có hiện nút hay không, không đáng mỗi cái một request.
+let aiNgoaiCache = { at: 0, promise: null };
+
+/** GET /ai-ngoai/cau-hinh — {soat: 'tat'|'nut'|'tu_dong', khac, ten_soat, ten_khac}. */
+export function getAiNgoaiCauHinh(force = false) {
+  const now = Date.now();
+  if (!force && aiNgoaiCache.promise && now - aiNgoaiCache.at < 60_000) {
+    return aiNgoaiCache.promise;
+  }
+  const p = request('/ai-ngoai/cau-hinh', { method: 'GET' }).catch(() => ({
+    soat: 'tat',
+    khac: false,
+  }));
+  aiNgoaiCache = { at: now, promise: p };
+  return p;
+}
+
+/** POST /messages/{id}/ai-soat — model ngoài soát câu trả lời. */
+export async function aiSoat(messageId, { lamLai = false, signal } = {}, onEvent) {
+  if (useMockBackend) return mockAiSoat(messageId, lamLai, onEvent);
+  return postSseAiNgoai(
+    `/messages/${toIntOrNull(messageId)}/ai-soat`,
+    { lam_lai: Boolean(lamLai) },
+    onEvent,
+    signal
+  );
+}
+
+/** POST /messages/{id}/cau-tra-loi-khac — model ngoài trả lời lại câu hỏi. */
+export async function cauTraLoiKhac(messageId, { lamLai = false, signal } = {}, onEvent) {
+  if (useMockBackend) return mockCauTraLoiKhac(messageId, lamLai, onEvent, signal);
+  return postSseAiNgoai(
+    `/messages/${toIntOrNull(messageId)}/cau-tra-loi-khac`,
+    { lam_lai: Boolean(lamLai) },
+    onEvent,
+    signal
+  );
+}
+
 // POST /chat/portal (dành cho khách hàng)
 export async function chatPortal({ question, conversation_id }) {
   return request('/chat/portal', {
@@ -524,6 +712,16 @@ export async function saveReviewContent(id, content, edit_reason = 'sua_loi_tric
   return request(`/review/${id}/content`, {
     method: 'PUT',
     body: JSON.stringify({ content, edit_reason, edit_note: edit_note || null }),
+  });
+}
+
+// POST /review/{id}/goi-y-ly-do {content} — máy chủ đối chiếu bản sửa với bản
+// đang lưu rồi GỢI Ý lý do sửa (quy tắc trước, AI sau). Chỉ là gợi ý: người
+// duyệt vẫn phải bấm "Lưu nội dung đã sửa" — không tự lưu.
+export async function goiYLyDoSua(id, content) {
+  return request(`/review/${toIntOrNull(id)}/goi-y-ly-do`, {
+    method: 'POST',
+    body: JSON.stringify({ content }),
   });
 }
 
@@ -802,6 +1000,16 @@ export async function getDepartments() {
   return request('/departments', { method: 'GET' });
 }
 
+// PATCH /clients/{id} {department_id} — gán / bỏ gán phòng phụ trách (F-17).
+// department_id = null là bỏ gán: mọi trưởng bộ phận và chuyên viên nội bộ mở
+// được hồ sơ. Gán phòng: chỉ người của phòng đó (và Ban QT) mở được.
+export async function updateClientDepartment(clientId, departmentId) {
+  return request(`/clients/${toIntOrNull(clientId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ department_id: toIntOrNull(departmentId) }),
+  });
+}
+
 // ==================== 8. NGƯỜI DÙNG ====================
 
 export async function getUsers() {
@@ -887,6 +1095,60 @@ export async function issueApiKey(uid) {
 // DELETE /users/{uid}/api-key — thu hồi khoá, chặn ngay mọi lời gọi bằng khoá cũ
 export async function revokeApiKey(uid) {
   return request(`/users/${uid}/api-key`, { method: 'DELETE' });
+}
+
+// ==================== Lịch chạy tự động (01/10/2026) ====================
+// GET /lich-chay — mọi lịch cron của hệ thống; POST /lich-chay/{ma} {bat} — bật/tắt;
+// POST /lich-chay/{ma}/cai — cài lại lịch có trong mã nguồn mà crontab thiếu. Chỉ admin.
+export async function getLichChay() {
+  return request('/lich-chay', { method: 'GET' });
+}
+export async function datLichChay(ma, bat) {
+  return request(`/lich-chay/${encodeURIComponent(ma)}`, { method: 'POST', body: JSON.stringify({ bat: Boolean(bat) }) });
+}
+export async function caiLichChay(ma) {
+  return request(`/lich-chay/${encodeURIComponent(ma)}/cai`, { method: 'POST' });
+}
+
+// ==================== Khoá API tích hợp (28/09/2026) ====================
+// Khoá `hdsi_…` cho HỆ THỐNG NGOÀI (CRM, chatbot bên thứ ba), có danh sách
+// quyền — khác khoá `hds_…` gắn với tài khoản khách ở trên. Chỉ admin.
+
+// GET /khoa-tich-hop/quyen — danh sách quyền + bộ quyền mẫu để vẽ ô tick
+export async function getKhoaTichHopQuyen() {
+  return request('/khoa-tich-hop/quyen', { method: 'GET' });
+}
+
+// GET /khoa-tich-hop — mọi khoá (đang hoạt động trước, đã thu hồi sau)
+export async function getKhoaTichHop() {
+  return request('/khoa-tich-hop', { method: 'GET' });
+}
+
+// POST /khoa-tich-hop — cấp khoá; trường `khoa` trong kết quả chỉ có đúng lần này
+export async function taoKhoaTichHop({ ten, nguon, quyen, user_id, ghi_chu } = {}) {
+  return request('/khoa-tich-hop', {
+    method: 'POST',
+    body: JSON.stringify({
+      ten,
+      nguon,
+      quyen: Array.isArray(quyen) ? quyen : [],
+      user_id: toIntOrNull(user_id),
+      ghi_chu: ghi_chu || null,
+    }),
+  });
+}
+
+// PATCH /khoa-tich-hop/{id} — sửa quyền của khoá đang dùng; chuỗi khoá giữ nguyên
+export async function suaKhoaTichHop(id, { quyen, ten } = {}) {
+  const body = {};
+  if (Array.isArray(quyen)) body.quyen = quyen;
+  if (ten !== undefined) body.ten = ten;
+  return request(`/khoa-tich-hop/${toIntOrNull(id)}`, { method: 'PATCH', body: JSON.stringify(body) });
+}
+
+// DELETE /khoa-tich-hop/{id} — thu hồi, chặn ngay mọi lời gọi bằng khoá đó
+export async function thuHoiKhoaTichHop(id) {
+  return request(`/khoa-tich-hop/${toIntOrNull(id)}`, { method: 'DELETE' });
 }
 
 // PATCH /users/{uid} — sửa họ tên, vai, hồ sơ khách, phòng ban, khoá/mở tài
@@ -1165,24 +1427,85 @@ export async function taiLenKho({ path, files, auto_approve = false, onProgress 
       })),
     };
   }
+  // Chia lượt (29/09/2026): nginx chặn CẢ request quá 50 MB
+  // (client_max_body_size 50m, deploy/setup.sh), Cloudflare chặn quá 100 MB —
+  // cả hai trả trang HTML trước khi tới máy chủ, nên một bộ hồ sơ scan gửi
+  // chung một request là hỏng trọn bộ. Mỗi lượt ≤ 20 tệp (giới hạn máy chủ)
+  // và ≤ 45 MB; tệp lớn hơn đi riêng một lượt.
+  const ds = Array.from(files);
+  const ketQua = [];
+  const luot = [];
+  let hienTai = [];
+  let coHienTai = 0;
+  for (const f of ds) {
+    if (f.size > KHO_TEP_TOI_DA) {
+      ketQua.push({
+        ok: false, filename: f.name, bytes: f.size,
+        loi: `Tệp ${(f.size / 1024 / 1024).toFixed(1)} MB vượt giới hạn ${KHO_TEP_TOI_DA_MB} MB mỗi tệp.`,
+      });
+      continue;
+    }
+    if (hienTai.length && (hienTai.length >= KHO_TEP_MOI_LUOT || coHienTai + f.size > KHO_BYTE_MOI_LUOT)) {
+      luot.push(hienTai);
+      hienTai = [];
+      coHienTai = 0;
+    }
+    hienTai.push(f);
+    coHienTai += f.size;
+  }
+  if (hienTai.length) luot.push(hienTai);
+
+  const tongByte = luot.reduce((s, l) => s + l.reduce((a, f) => a + f.size, 0), 0) || 1;
+  let daGui = 0;
+  for (const l of luot) {
+    const coLuot = l.reduce((a, f) => a + f.size, 0);
+    try {
+      const data = await guiMotLuotKho({
+        path, files: l, auto_approve,
+        onProgress: (phan) => {
+          if (onProgress) onProgress(Math.min(100, Math.round(((daGui + phan * coLuot) / tongByte) * 100)));
+        },
+      });
+      ketQua.push(...data.ket_qua);
+    } catch (err) {
+      const loi = err?.message || 'Tải lên thất bại.';
+      l.forEach((f) => ketQua.push({ ok: false, filename: f.name, bytes: f.size, loi }));
+    }
+    daGui += coLuot;
+    if (onProgress) onProgress(Math.round((daGui / tongByte) * 100));
+  }
+  return { ok: ketQua.every((k) => k.ok), ket_qua: ketQua };
+}
+
+const KHO_TEP_MOI_LUOT = 20;
+const KHO_BYTE_MOI_LUOT = 45 * 1024 * 1024;
+// MAX_UPLOAD_MB của máy chủ là 50 cho MỘT tệp, nhưng nginx tính cả phần bao
+// multipart vào 50 MB — chừa 1 MB để tệp sát ngưỡng không bị nginx chặn.
+const KHO_TEP_TOI_DA_MB = 49;
+const KHO_TEP_TOI_DA = KHO_TEP_TOI_DA_MB * 1024 * 1024;
+
+function guiMotLuotKho({ path, files, auto_approve, onProgress }) {
   const form = new FormData();
   form.append('path', path);
   form.append('auto_approve', String(Boolean(auto_approve)));
-  Array.from(files).forEach((f) => form.append('files', f));
+  files.forEach((f) => form.append('files', f));
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${apiBaseUrl}/kho/tai-len`);
     if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);
     xhr.upload.onprogress = (e) => {
-      if (onProgress && e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total);
     };
     xhr.onload = () => {
-      let data = {};
+      let data = null;
       try { data = JSON.parse(xhr.responseText); } catch { /* rơi xuống nhánh lỗi */ }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-      else reject(new Error(parseErrorBody(xhr.responseText, xhr.status)));
+      if (xhr.status >= 200 && xhr.status < 300 && data && Array.isArray(data.ket_qua)) resolve(data);
+      else if (xhr.status >= 200 && xhr.status < 300) {
+        reject(new Error('Máy chủ trả về dữ liệu không đọc được — tải lại trang rồi xem tệp đã vào kho chưa.'));
+      } else reject(new Error(parseErrorBody(xhr.responseText, xhr.status)));
     };
-    xhr.onerror = () => reject(new Error('Không kết nối được máy chủ khi tải tệp lên.'));
+    xhr.onerror = () => reject(new Error(
+      'Mất kết nối khi đang tải lên (mạng chập chờn, hoặc lượt tải quá lớn bị chặn giữa đường).'));
     xhr.send(form);
   });
 }
@@ -1987,6 +2310,32 @@ let mockState = {
   boMau: [],
   // Bộ hồ sơ đã điền mà người dùng bấm Lưu (18/09/2026).
   hoSoDaLuu: [],
+  // Khoá API tích hợp (28/09/2026) — giả lập bắt đầu trống, cấp ở tab Quản trị.
+  khoaTichHop: [],
+  // Lịch chạy tự động (01/10/2026) — giống crontab máy chủ thật.
+  lichChay: [
+    { ma: 'quet-kho', ten: 'Quét kho tài liệu', trang_thai: 'bat', lich: '*/3 * * * *', lich_mo_ta: 'Mỗi 3 phút',
+      mo_ta: 'Học tệp mới / tệp đã sửa được thả vào kho (ổ mạng, chép tay). Tắt trong lúc chép lô lớn (USB, ổ mạng) để không học tệp chép dở, chép xong bật lại.',
+      khi_tat: 'Tệp thả vào kho sẽ KHÔNG được học cho tới khi bật lại. Tải lên trên web và qua API vẫn học ngay.',
+      ke_tiep: '2026-10-01T10:03', dang_chay: false, lan_cuoi: '2026-10-01T10:00',
+      ket_qua_cuoi: '2026-10-01 10:00:01 → 10:00:11 rc=0 0 mới | 0 cập nhật | 106159 không đổi' },
+    { ma: 'sao-luu', ten: 'Sao lưu CSDL + kho', trang_thai: 'chua_cai', cai_duoc: true, nguy_hiem: true,
+      lich: '30 2 * * *', lich_mo_ta: 'Hằng ngày lúc 02:30',
+      mo_ta: 'Sao lưu cơ sở dữ liệu (giữ 3 bản gần nhất) và toàn bộ kho tài liệu ra ~/hds-backup.',
+      khi_tat: 'KHÔNG có bản sao lưu mới. Máy chủ là nơi giữ bản gốc duy nhất — chỉ tắt tạm thời, nhớ bật lại.',
+      lan_cuoi: '2026-09-30T02:51', ket_qua_cuoi: '2026-09-30 02:30:01 → 02:51:04 rc=0 db=11G kho 83G' },
+    { ma: 'tu-duyet', ten: 'Tự duyệt tài liệu đọc tốt', trang_thai: 'bat', lich: '*/15 * * * *', lich_mo_ta: 'Mỗi 15 phút',
+      mo_ta: 'Duyệt bù các tài liệu đang chờ duyệt mà tỉ lệ chữ đọc lỗi ≤ 20%.',
+      khi_tat: 'Tài liệu chờ duyệt phải duyệt tay ở tab Duyệt nhãn.', ke_tiep: '2026-10-01T10:15',
+      lan_cuoi: '2026-10-01T10:00', ket_qua_cuoi: 'Đã duyệt 0 tài liệu.' },
+    { ma: 'hieu-luc', ten: 'Cập nhật hiệu lực văn bản luật', trang_thai: 'tat', lich: '7 * * * *', lich_mo_ta: 'Mỗi giờ, phút 07',
+      mo_ta: 'Lấy trạng thái hiệu lực chính thức từ vbpl.vn cho văn bản luật trong kho.',
+      khi_tat: 'Trạng thái còn / hết hiệu lực của văn bản luật không được cập nhật.', lan_cuoi: '2026-10-01T09:07' },
+    { ma: 'go-ban-thay-the', ten: 'Gỡ bản văn bản đã bị thay thế', trang_thai: 'bat', lich: '37 * * * *', lich_mo_ta: 'Mỗi giờ, phút 37',
+      mo_ta: 'Gỡ bản cũ của văn bản luật khi tệp đã được tải lại ở định dạng khác.', dang_chay: true,
+      khi_tat: 'Bản cũ không tự gỡ — trợ lý có thể trả lời từ cả bản cũ lẫn bản mới.', ke_tiep: '2026-10-01T10:37',
+      lan_cuoi: '2026-10-01T09:37', ket_qua_cuoi: 'tep mat han, chua co thay the: 13  -> GIU NGUYEN' },
+  ],
   stats: {
     tai_lieu: 148,
     da_duyet_nhan: 134,
@@ -2016,9 +2365,9 @@ let mockState = {
     { id: 6, email: 'lienhe@sungroup.vn', full_name: 'Đại diện SunGroup', role: 'client_plus', can_review: false, can_view_finance: false, active: true, client_id: 1, department_ids: [], head_of: [], monthly_quota: 50 },
   ],
   clients: [
-    { id: 1, name: 'Tập đoàn SunGroup', code: '1729', department: 'Doanh nghiệp - Đầu tư' },
-    { id: 2, name: 'Công ty CP Vinapharma', code: '9', department: 'Tranh tụng' },
-    { id: 3, name: 'Công ty TechLogistics', code: '712', department: 'Sở hữu trí tuệ' },
+    { id: 1, name: 'Tập đoàn SunGroup', code: '1729', department: 'Doanh nghiệp - Đầu tư', department_id: 1, department_name: 'Doanh nghiệp - Đầu tư' },
+    { id: 2, name: 'Công ty CP Vinapharma', code: '9', department: 'Tranh tụng', department_id: 3, department_name: 'Tranh tụng' },
+    { id: 3, name: 'Công ty TechLogistics', code: '712', department: 'Sở hữu trí tuệ', department_id: 4, department_name: 'Sở hữu trí tuệ' },
   ],
   clientProfiles: {
     1: {
@@ -2276,11 +2625,30 @@ let mockState = {
     context_char_budget: '6000',
     chunk_char_limit: '1500',
     min_relevance: '0.25',
+    // Chính sách duyệt 28/09/2026 + khoá ghi ngăn khách khi CRM vận hành
+    tu_duyet_nguong_rac: '0.2',
+    kho_khach_chi_doc: 'false',
     llm_num_ctx: '8192',
     llm_num_predict: '700',
     llm_num_thread: '0',
     chat_history_turns: '3',
     llm_model: '',
+    // Bảng giá dịch vụ công khai cho khung chat website (mặc định rỗng = mời
+    // liên hệ để được báo giá) — khớp DEFAULTS trong hds-ai/app/settings.py.
+    bang_gia_dich_vu: '',
+    // ChatGPT làm việc song song — bản giả lập BẬT sẵn để xem thử giao diện
+    // (máy chủ thật mặc định TẮT, xem hds-ai/app/settings.py).
+    cloud_scope: 'law_only',
+    ai_soat_che_do: 'nut',
+    ai_soat_model: 'api:gpt-5-mini',
+    ai_soat_effort: 'low',
+    ai_khac_bat: 'true',
+    ai_khac_model: 'api:gpt-5',
+    ai_khac_effort: 'medium',
+    ai_ngoai_che_dinh_danh: 'true',
+    ai_ngoai_tran_luot_thang: '500',
+    ai_ngoai_max_tokens: '12000',
+    ai_soat_thay_doc_lai: 'false',
     drive_map: JSON.stringify(
       {
         categories: {
@@ -2561,6 +2929,118 @@ async function mockChatStream(payload, onEvent) {
     { id: done.message_id, role: 'assistant', content: text, created_at: now }
   );
   convObj.updated_at = now;
+  onEvent?.(done);
+  return done;
+}
+
+/** Tin nhắn trợ lý trong hội thoại giả lập — để lưu kết quả soát / trả lời
+ *  khác, mở lại hội thoại vẫn thấy như máy chủ thật. */
+function mockTimTinNhan(messageId) {
+  const id = toIntOrNull(messageId);
+  for (const c of mockState.conversations) {
+    const m = (c.messages || []).find((x) => x.id === id);
+    if (m) return m;
+  }
+  return null;
+}
+
+async function mockAiSoat(messageId, lamLai, onEvent) {
+  const m = mockTimTinNhan(messageId);
+  if (m?.ai_soat && !lamLai) {
+    const done = { type: 'done', ket_qua: m.ai_soat };
+    onEvent?.(done);
+    return done;
+  }
+  onEvent?.({ type: 'status', label: 'ChatGPT (gpt-5-mini) đang soát…' });
+  await new Promise((res) => setTimeout(res, 1500));
+  const ket_qua = {
+    trang_thai: 'xong',
+    ket_luan: 'can_xem_lai',
+    tom_tat:
+      'Kết luận chính đúng hướng, nhưng thời hạn thông báo cần dẫn đúng khoản và nêu hệ quả khi nộp muộn.',
+    van_de: [
+      {
+        muc_do: 'vua',
+        noi_dung:
+          'Thời hạn "10 ngày làm việc" ở bảng so sánh không thấy trong đoạn [Nguồn 1] được gửi kèm.',
+        goi_y: 'Dẫn đúng khoản quy định thời hạn hoặc ghi rõ là cần kiểm tra lại.',
+      },
+      {
+        muc_do: 'thap',
+        noi_dung: 'Chưa nêu mức phạt hành chính cụ thể khi chậm thông báo.',
+        goi_y: 'Bổ sung nghị định xử phạt nếu kho có.',
+      },
+    ],
+    model: 'api:gpt-5-mini',
+    ten_model: 'ChatGPT (gpt-5-mini)',
+    ms: 1500,
+    cost_usd: 0.0031,
+    nguon_gui: 2,
+    nguon_bo: 3,
+    da_che: 1,
+    at: new Date().toISOString(),
+  };
+  if (m) m.ai_soat = ket_qua;
+  const done = { type: 'done', ket_qua };
+  onEvent?.(done);
+  return done;
+}
+
+async function mockCauTraLoiKhac(messageId, lamLai, onEvent, signal) {
+  const m = mockTimTinNhan(messageId);
+  if (m?.ai_khac && !lamLai) {
+    const done = { type: 'done', ket_qua: m.ai_khac };
+    onEvent?.(done);
+    return done;
+  }
+  const wait = (ms) =>
+    new Promise((res, rej) => {
+      const t = setTimeout(res, ms);
+      signal?.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(t);
+          rej(Object.assign(new Error('Đã dừng theo yêu cầu.'), { code: DUNG_BOI_NGUOI_DUNG }));
+        },
+        { once: true }
+      );
+    });
+  onEvent?.({ type: 'status', label: 'Đang tìm trong kho tài liệu…' });
+  await wait(900);
+  const sources = [
+    { n: 1, kind: 'document', title: 'Luật Doanh nghiệp số 59/2020/QH14', so_hieu: '59/2020/QH14', loai_van_ban: 'Luật', section_title: 'Điều 31', score: 0.91, document_id: 1, quote: 'Doanh nghiệp phải đăng ký với Cơ quan đăng ký kinh doanh khi thay đổi nội dung Giấy chứng nhận đăng ký doanh nghiệp…' },
+    { n: 2, kind: 'document', title: 'Nghị định 01/2021/NĐ-CP về Đăng ký Doanh nghiệp', so_hieu: '01/2021/NĐ-CP', loai_van_ban: 'Nghị định', section_title: 'Điều 15', score: 0.86, document_id: 9, quote: 'Trường hợp thay đổi nội dung đăng ký doanh nghiệp, doanh nghiệp nộp hồ sơ tới Phòng Đăng ký kinh doanh…' },
+  ];
+  const loc = { cong_no: 0, ho_so_khach: 0, tai_lieu_noi_bo: 1, dinh_kem: 3, du_lieu_cong_ty: false, lich_su: 2, tong: 4 };
+  onEvent?.({ type: 'meta', sources, loc });
+  onEvent?.({ type: 'status', label: 'ChatGPT (gpt-5) đang đọc và trả lời…' });
+  await wait(1200);
+  const text =
+    '**Ngắn gọn:** doanh nghiệp phải đăng ký thay đổi trong **10 ngày** kể từ ngày có thay đổi [Nguồn 1].\n\n' +
+    '**Trình tự:**\n' +
+    '1. Lập hồ sơ theo Điều 15 Nghị định 01/2021/NĐ-CP [Nguồn 2].\n' +
+    '2. Nộp tới Phòng Đăng ký kinh doanh nơi đặt trụ sở chính [Nguồn 2].\n\n' +
+    '*Lưu ý:* câu trả lời này không dựa trên file đính kèm (phạm vi dữ liệu không cho gửi ra ngoài).';
+  const words = text.split(' ');
+  for (let i = 0; i < words.length; i += 1) {
+    onEvent?.({ type: 'delta', text: (i ? ' ' : '') + words[i] });
+    await wait(35);
+  }
+  const ket_qua = {
+    trang_thai: 'xong',
+    text,
+    sources,
+    grounding_status: 'grounded',
+    model: 'api:gpt-5',
+    ten_model: 'ChatGPT (gpt-5)',
+    ms: 1200 + words.length * 35,
+    cost_usd: 0.041,
+    loc,
+    da_che: 0,
+    at: new Date().toISOString(),
+  };
+  if (m) m.ai_khac = ket_qua;
+  const done = { type: 'done', ket_qua };
   onEvent?.(done);
   return done;
 }
@@ -2872,6 +3352,25 @@ Với câu hỏi "${question}":
     return { ok: true, document_id: Number(mockContent[1]), chunks: 4, van_ban: null };
   }
 
+  // Gợi ý lý do sửa — giả lập phần "quy tắc" của máy chủ bằng vài từ khoá.
+  if (/^\/review\/\d+\/goi-y-ly-do$/.test(endpoint) && method === 'POST') {
+    const text = String(body.content || '').toLowerCase();
+    if (/(sửa đổi|thay thế|hết hiệu lực|luật mới|nghị định mới|bãi bỏ)/.test(text)) {
+      return { ok: true, ly_do: 'luat_thay_doi', nguon: 'quy_tac',
+               giai_thich: 'Bản sửa nhắc tới văn bản sửa đổi / thay thế — có vẻ do luật thay đổi.' };
+    }
+    if (/(rủi ro|phạt|bồi thường|vi phạm)/.test(text)) {
+      return { ok: true, ly_do: 'rui_ro', nguon: 'quy_tac',
+               giai_thich: 'Phần sửa chạm điều khoản phạt / bồi thường — xếp vào nhóm rủi ro.' };
+    }
+    if (/(khách hàng yêu cầu|theo yêu cầu)/.test(text)) {
+      return { ok: true, ly_do: 'yeu_cau_khach', nguon: 'quy_tac',
+               giai_thich: 'Bản sửa ghi rõ "theo yêu cầu" — có vẻ là yêu cầu của khách hàng.' };
+    }
+    return { ok: true, ly_do: 'sua_loi_trich_xuat', nguon: 'ai',
+             giai_thich: 'Chỗ sửa chủ yếu là chính tả / ký tự đọc lỗi — giống sửa lỗi trích xuất (giả lập).' };
+  }
+
   if (endpoint === '/review/duyet-nhanh' && method === 'POST') {
     const items = body.items || [];
     const bo_qua = [];
@@ -2917,6 +3416,15 @@ Với câu hỏi "${question}":
   if (endpoint === '/learn/pending') return [...mockState.pendingLearns];
 
   if (/^\/learn\/[^/]+$/.test(endpoint) && method === 'POST') {
+    // Khớp 422 của máy chủ (F-08): bản hiệu chỉnh phải có nội dung + lý do.
+    if (body.action === 'edit') {
+      if (!String(body.edited_content || '').trim()) {
+        throw new Error('Nội dung hiệu chỉnh không được để trống.');
+      }
+      if (!String(body.edit_reason || '').trim()) {
+        throw new Error('Cần ghi lý do hiệu chỉnh (luật thay đổi / rủi ro / yêu cầu khách hàng / …).');
+      }
+    }
     const msgId = endpoint.split('/')[2];
     mockState.pendingLearns = mockState.pendingLearns.filter(
       (m) => String(m.message_id) !== String(msgId)
@@ -3020,6 +3528,28 @@ Với câu hỏi "${question}":
     };
   }
 
+  // PATCH /clients/{id} — đổi phòng phụ trách (F-17), chỉ admin / Ban QT.
+  if (/^\/clients\/\d+$/.test(endpoint) && method === 'PATCH') {
+    if (me.role !== 'admin' && me.role !== 'ban_qt') {
+      throw new Error('Chỉ admin hoặc Ban Quản trị đổi được phòng phụ trách (403)');
+    }
+    const cid = Number(endpoint.split('/')[2]);
+    const client = mockState.clients.find((c) => c.id === cid);
+    if (!client) throw new Error('Không thấy khách hàng (404)');
+    const depId = body.department_id == null ? null : Number(body.department_id);
+    const dep = depId == null ? null : mockState.departments.find((d) => d.id === depId);
+    if (depId != null && !dep) throw new Error('Không thấy phòng ban (404)');
+    client.department_id = dep ? dep.id : null;
+    client.department_name = dep ? dep.name : null;
+    client.department = dep ? dep.name : null;
+    return {
+      ok: true,
+      client_id: cid,
+      department_id: client.department_id,
+      department_name: client.department_name,
+    };
+  }
+
   if (/^\/clients\/[^/]+\/profile$/.test(endpoint) && method === 'POST') {
     const cid = endpoint.split('/')[2];
     const stamp = new Date().toLocaleDateString('vi-VN');
@@ -3060,6 +3590,94 @@ Với câu hỏi "${question}":
       if (body.monthly_quota != null) u.monthly_quota = body.monthly_quota;
     }
     return { ok: true, features: u?.features || {}, features_tick: body.features || null };
+  }
+
+  // ---------- Lịch chạy tự động (01/10/2026) ----------
+  if (endpoint.startsWith('/lich-chay') && me.role !== 'admin') {
+    throw new Error('Không đủ quyền (403)');
+  }
+  if (endpoint === '/lich-chay' && method === 'GET') {
+    return mockState.lichChay.map((l) => ({ ...l }));
+  }
+  const lichMa = endpoint.match(/^\/lich-chay\/([a-z0-9-]+)(\/cai)?$/);
+  if (lichMa && method === 'POST') {
+    const l = mockState.lichChay.find((x) => x.ma === lichMa[1]);
+    if (!l) throw new Error('Không thấy lịch này (404)');
+    if (lichMa[2]) {
+      if (l.trang_thai !== 'chua_cai') throw new Error('Lịch đã có trên máy chủ (409)');
+      l.trang_thai = 'bat';
+      l.cai_duoc = false;
+    } else {
+      if (l.trang_thai === 'chua_cai') throw new Error('Lịch này chưa có trên máy chủ — bấm Cài lại (404)');
+      l.trang_thai = body.bat ? 'bat' : 'tat';
+    }
+    return { ...l };
+  }
+
+  // ---------- Khoá API tích hợp (28/09/2026) ----------
+  if (endpoint.startsWith('/khoa-tich-hop') && me.role !== 'admin') {
+    throw new Error('Không đủ quyền (403) — chỉ admin cấp khoá tích hợp');
+  }
+  if (endpoint === '/khoa-tich-hop/quyen') {
+    return {
+      tien_to: 'hdsi_',
+      quyen: [
+        { ma: 'clients:read', ten: 'Xem danh sách khách hàng', mo_ta: 'Tra mã, tên khách và số tài liệu đã có trong kho.' },
+        { ma: 'clients:write', ten: 'Tạo khách hàng / cấp mã mới', mo_ta: 'Tạo bản ghi khách và thư mục khách trong kho; thiếu mã thì máy chủ cấp mã kế tiếp.' },
+        { ma: 'employees:read', ten: 'Xem danh sách nhân viên', mo_ta: 'Tra mã, họ tên, thư mục hồ sơ nhân viên. Cần có để thao tác tài liệu nhân viên.' },
+        { ma: 'employees:write', ten: 'Tạo / cập nhật nhân viên', mo_ta: 'Tạo nhân viên và thư mục hồ sơ trong ngăn nhân sự; thiếu mã thì máy chủ cấp mã NV kế tiếp.' },
+        { ma: 'documents:read', ten: 'Xem và tải tài liệu', mo_ta: 'Danh sách tệp, trạng thái, tải tệp gốc và các phiên bản cũ.' },
+        { ma: 'documents:write', ten: 'Gửi tài liệu / bộ hồ sơ vào kho', mo_ta: 'Tệp được đặt vào đúng thư mục hồ sơ và học ngay; gửi lại cùng mã là thay bản mới (bản cũ được lưu).' },
+        { ma: 'documents:delete', ten: 'Gỡ tài liệu khỏi kho', mo_ta: 'Trợ lý ngừng dùng ngay; bản gốc được lưu lại, không xoá hẳn.' },
+        { ma: 'chat', ten: 'Hỏi đáp với trợ lý', mo_ta: 'Dưới danh nghĩa tài khoản khách gắn với khoá — phạm vi dữ liệu đúng bằng của khách đó.' },
+      ],
+      bo_mau: [
+        { ma: 'crm', ten: 'CRM — hồ sơ khách, hợp đồng, nhân viên', quyen: ['clients:read', 'clients:write', 'employees:read', 'employees:write', 'documents:read', 'documents:write', 'documents:delete'] },
+        { ma: 'chatbot', ten: 'Chatbot bên thứ ba — chỉ hỏi đáp', quyen: ['chat'] },
+        { ma: 'doi_soat', ten: 'Chỉ đọc — đối soát', quyen: ['clients:read', 'documents:read'] },
+      ],
+    };
+  }
+  if (endpoint === '/khoa-tich-hop' && method === 'POST') {
+    if (!body.ten) throw new Error('Tên khoá trống (400)');
+    if (!/^[a-z0-9][a-z0-9_-]{1,29}$/.test(String(body.nguon || ''))) throw new Error('Tên nguồn không hợp lệ (400)');
+    if (!Array.isArray(body.quyen) || !body.quyen.length) throw new Error('Khoá phải có ít nhất một quyền (400)');
+    if (body.quyen.includes('chat') && !body.user_id) throw new Error('Quyền hỏi đáp phải gắn tài khoản khách đại diện (400)');
+    const dd = mockState.users.find((u) => u.id === body.user_id);
+    const raw = `hdsi_giaLap${Math.random().toString(36).slice(2, 12)}${Date.now().toString(36)}`;
+    const khoa = {
+      id: (mockState.khoaTichHop.reduce((m, k) => Math.max(m, k.id), 0) || 0) + 1,
+      ten: body.ten, nguon: body.nguon, key_dau: raw.slice(0, 12), quyen: body.quyen,
+      user_id: body.user_id ?? null, ghi_chu: body.ghi_chu || null,
+      created_at: new Date().toISOString(), last_used_at: null, so_lan_goi: 0, revoked_at: null,
+      email: dd?.email || null, full_name: dd?.full_name || null, client_name: dd?.client_name || null,
+      so_tai_lieu: 0, hoat_dong: true,
+    };
+    mockState.khoaTichHop.unshift(khoa);
+    return { ...khoa, khoa: raw, note: 'Lưu lại ngay — khoá này không hiển thị lại lần nào nữa.' };
+  }
+  if (endpoint === '/khoa-tich-hop') {
+    return [...mockState.khoaTichHop].sort((a, b) => Number(b.hoat_dong) - Number(a.hoat_dong));
+  }
+  const suaKhoa = endpoint.match(/^\/khoa-tich-hop\/(\d+)$/);
+  if (suaKhoa && method === 'PATCH') {
+    const k = mockState.khoaTichHop.find((x) => String(x.id) === suaKhoa[1] && x.hoat_dong);
+    if (!k) throw new Error('Không thấy khoá hoặc khoá đã thu hồi (404)');
+    if (Array.isArray(body.quyen)) {
+      if (!body.quyen.length) throw new Error('Khoá phải có ít nhất một quyền (400)');
+      if (body.quyen.includes('chat') && !k.user_id) throw new Error('Quyền hỏi đáp phải gắn tài khoản khách đại diện (400)');
+      k.quyen = body.quyen;
+    }
+    if (body.ten) k.ten = body.ten;
+    return { ok: true, id: k.id, ten: k.ten, quyen: k.quyen, user_id: k.user_id };
+  }
+  const thuHoiKhoa = endpoint.match(/^\/khoa-tich-hop\/(\d+)$/);
+  if (thuHoiKhoa && method === 'DELETE') {
+    const k = mockState.khoaTichHop.find((x) => String(x.id) === thuHoiKhoa[1] && x.hoat_dong);
+    if (!k) throw new Error('Không thấy khoá hoặc khoá đã thu hồi trước đó (404)');
+    k.hoat_dong = false;
+    k.revoked_at = new Date().toISOString();
+    return { ok: true, id: k.id, ten: k.ten };
   }
 
   // ---------- Người dùng (POST phải xét TRƯỚC GET) ----------
@@ -3161,6 +3779,29 @@ Với câu hỏi "${question}":
     };
   }
 
+  // ---------- ChatGPT làm việc song song ----------
+  if (endpoint === '/ai-ngoai/cau-hinh' && method === 'GET') {
+    const s = mockState.settings;
+    const ten = (m) => {
+      const t = String(m || '').replace(/^(api|claude):/, '');
+      return /^claude/.test(t) ? `Claude (${t})` : `ChatGPT (${t})`;
+    };
+    return {
+      soat: s.ai_soat_che_do || 'tat',
+      khac: s.ai_khac_bat === 'true',
+      ten_soat: ten(s.ai_soat_model),
+      ten_khac: ten(s.ai_khac_model),
+      quan_tri: {
+        co_khoa_openai: true,
+        co_khoa_claude: false,
+        dia_chi_api: 'https://api.openai.com/v1',
+        su_dung_thang: { luot: 37, soat: 29, khac: 8, usd: 0.4123 },
+        tran_luot_thang: Number(s.ai_ngoai_tran_luot_thang || 0),
+        pham_vi: s.cloud_scope || 'law_only',
+      },
+    };
+  }
+
   // ---------- Cài đặt AI ----------
   if (endpoint === '/settings' && method === 'GET') {
     return {
@@ -3179,6 +3820,11 @@ Với câu hỏi "${question}":
 
   if (/^\/settings\/[^/]+\/reset$/.test(endpoint) && method === 'POST') {
     const key = endpoint.split('/')[2];
+    // Bảng giá: mặc định trong mã nguồn là rỗng — đặt lại là xoá trắng.
+    if (key === 'bang_gia_dich_vu') {
+      mockState.settings[key] = '';
+      return { ok: true, key, value: '' };
+    }
     return { ok: true, key, value: mockState.settings[key] };
   }
 

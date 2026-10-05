@@ -10,8 +10,34 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Thieu DB_PASSWORD - hay tao .env tu .env.example}
       POSTGRES_DB: hdsai
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    # CHỈ nghe trên máy chủ (backend chạy cùng máy, nối 127.0.0.1). Trước
+    # 03/10/2026 là "5432:5432" = mở ra mọi địa chỉ (0.0.0.0 và ::) — Docker
+    # tự thêm luật iptables nên tường lửa ufw KHÔNG chặn được (kiểm thử 02/10,
+    # F-02). Cần xem CSDL từ máy khác thì đi qua SSH (ssh -L 5432:127.0.0.1:5432).
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
+    # BỘ NHỚ (04/10/2026): mặc định của image là shared_buffers=128MB — chỉ mục
+    # vector đã 15 GB, bảng đoạn 32 GB, nên mọi lượt tìm đọc lại trang từ đĩa /
+    # bộ đệm hệ điều hành. Máy chủ 31 GB RAM (model nằm trên GPU): 8 GB cho
+    # Postgres, phần còn lại để hệ điều hành đệm tệp. Ổ NVMe → random_page_cost
+    # thấp để planner không né chỉ mục. Đổi các số này phải tạo lại container
+    # (docker compose up -d postgres) — tránh giờ sao lưu 02:30–03:00.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=8GB
+      - -c
+      - effective_cache_size=20GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=1GB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - max_wal_size=4GB
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -19,6 +45,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    shm_size: 512mb
+    shm_size: 1gb
 volumes:
   pgdata:

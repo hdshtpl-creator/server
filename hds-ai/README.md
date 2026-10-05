@@ -103,9 +103,9 @@ hồ sơ 360° và cho Lớp 3 sau này (thời hiệu, timeline, án lệ).
 - **Học cách phân tích:** dashboard → Mẫu phương pháp. Hỏi kèm `use_method:true`.
 
 Đồng bộ Drive nhận PDF, DOCX, DOC, TXT, MD, XLSX, CSV và Google Docs/Sheets. File
-mới mặc định chờ duyệt; chỉ bật `AUTO_LEARN_AUTO_APPROVE=1` sau khi đã kiểm tra chất
-lượng trích xuất. File có cảnh báo (OCR, nội dung quá ngắn, bảng bị giới hạn, sheet ẩn)
-vẫn chờ duyệt để không đưa dữ liệu thiếu/sai vào câu trả lời.
+mới **tự duyệt khi máy đọc sạch** (tỉ lệ chữ rác ≤ 20% — chính sách 28/09/2026, chỉnh ở
+Cài đặt AI); đọc lỗi quá ngưỡng thì chờ duyệt để không đưa dữ liệu thiếu/sai vào câu trả
+lời. `AUTO_LEARN_AUTO_APPROVE` chỉ còn tác dụng khi ngưỡng đặt *Tắt*.
 
 ---
 
@@ -148,7 +148,8 @@ Máy yếu (RAM/VRAM dưới 12GB) thì hạ xuống bản nhẹ:
 
 ```bash
 ollama pull qwen3:8b
-# sửa .env: LLM_MODEL=qwen3:8b
+# rồi chọn model ở Quản trị → Cài đặt AI → Model sinh câu trả lời
+# (biến LLM_MODEL trong .env chỉ là giá trị khởi đầu — cài đặt trên web thắng)
 ```
 
 Không đổi code. GPU chỉ nạp model khi có câu hỏi rồi nhả sau ~5 phút — thấy VRAM "rảnh" là bình thường.
@@ -166,7 +167,8 @@ POST /auth/change-password {old_password,new_password}
 GET  /auth/me
 ```
 
-`10_init_db.sh` tự tạo tài khoản demo (in ra email + mật khẩu). Đăng nhập ở `/admin`.
+Cài đặt chỉ tạo **một tài khoản admin** (mật khẩu ngẫu nhiên, in ra một lần, bắt đổi ở lần
+đăng nhập đầu) — không còn tài khoản demo. Nhân viên do admin tạo ở Quản trị → Người dùng.
 `JWT_SECRET` phải là chuỗi ngẫu nhiên dài — mã đã **bắt buộc** (xem lưu ý ở phần đầu).
 
 ## ⚠️ Trước khi công khai ra internet
@@ -175,7 +177,10 @@ GET  /auth/me
   [`../deploy/`](../deploy/README.md) (nginx phục vụ frontend + proxy `/api`, tự cấp
   Let's Encrypt cho tên miền). Không phải dựng tay nữa.
 - **Rate limit theo gói**: khách đã có `monthly_quota` (429 khi hết lượt).
-- Đổi mật khẩu các tài khoản demo (`admin123` / `demo123`) trước khi mở ra ngoài.
+- Tài khoản: `seed_accounts` chỉ tạo admin với mật khẩu tạm ngẫu nhiên; tài khoản
+  mẫu (`--demo`, mật khẩu `demo123`) không được tạo trên máy thật. Chạy
+  `python -m app.ra_soat_tai_khoan --thuc-hien` để khoá tài khoản mẫu còn sót và
+  bắt đổi mật khẩu mặc định trước khi mở ra ngoài.
 
 ---
 

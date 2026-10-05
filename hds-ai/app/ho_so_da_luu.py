@@ -14,6 +14,7 @@ khác trong công ty không có việc gì phải mở được (chốt quyền 
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -112,6 +113,9 @@ def luu(*, user_id, ten: str, kieu: str = "bo_mau", bo_id=None, bo_ten: str = ""
         "bo_id": int(bo_id) if str(bo_id or "").strip().isdigit() else None,
         "bo_ten": _cat(bo_ten, MAX_TEN),
         "luc": float(now or time.time()),
+        # Số thứ tự trong tiến trình: hai lần Lưu cùng một nhịp đồng hồ (đồng
+        # hồ Windows / mtime thô 1 giây) vẫn phân được cái nào mới hơn.
+        "stt": next(_DEM),
         "files": ds_file,
         "zip_token": _cat(zip_token, 64) or None,
         "so_o": int(so_o or 0),
@@ -122,6 +126,9 @@ def luu(*, user_id, ten: str, kieu: str = "bo_mau", bo_id=None, bo_ten: str = ""
         json.dumps(ban_ghi, ensure_ascii=False), encoding="utf-8")
     _gioi_han_moi_nguoi(int(user_id))
     return ban_ghi
+
+
+_DEM = itertools.count(1)
 
 
 def _tat_ca() -> list[tuple[Path, dict]]:
@@ -142,10 +149,11 @@ def _gioi_han_moi_nguoi(user_id: int):
     Không để một người lấp ổ đĩa bằng cách bấm Lưu liên tục; file .docx thì đã
     có hạn 7 ngày lo rồi.
     """
-    cua_toi = sorted((p for p, d in _tat_ca() if d.get("user_id") == user_id),
-                     key=lambda p: p.stat().st_mtime if p.exists() else 0,
+    cua_toi = sorted(((p, d) for p, d in _tat_ca() if d.get("user_id") == user_id),
+                     key=lambda pd: (float(pd[1].get("luc") or 0), int(pd[1].get("stt") or 0),
+                                     pd[0].stat().st_mtime if pd[0].exists() else 0),
                      reverse=True)
-    for path in cua_toi[MAX_MOI_NGUOI:]:
+    for path, _d in cua_toi[MAX_MOI_NGUOI:]:
         path.unlink(missing_ok=True)
 
 

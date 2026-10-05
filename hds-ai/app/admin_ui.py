@@ -149,7 +149,7 @@ function tab(id,btn){
   if(id==='methods')loadMethods(); if(id==='clients')loadClients(); if(id==='users')loadUsers();
 }
 async function loadStats(){
-  const r=await fetch('/stats'); const s=await r.json();
+  const r=await fetch('/stats',{headers:H()}); const s=await r.json();
   const items=[
     ['Tài liệu',s.tai_lieu,''],['Đã duyệt nhãn',s.da_duyet_nhan,''],
     ['Chờ duyệt nhãn',s.cho_duyet_nhan,''],['Thiếu chủ sở hữu',s.thieu_chu_so_huu,s.thieu_chu_so_huu>0?'alert':''],

@@ -78,7 +78,7 @@ RE_DRAFT = re.compile(
 )
 
 # "tạo/soạn <loại> cho <A>" — KHÔNG có vế mẫu → dùng MẪU CHUẨN trong kho
-# (ngăn 4. HỢP ĐỒNG MẪU / 6. THƯ MẪU). Yêu cầu 21/08/2026 của chủ dự án:
+# (ngăn 3. HỢP ĐỒNG MẪU / 5. THƯ MẪU - BIỂU MẪU). Yêu cầu 21/08/2026 của chủ dự án:
 # "làm hợp đồng lao động thì ra file docx để điền chỗ trống hoặc tự điền".
 RE_DRAFT_SIMPLE = re.compile(
     r"(?:^|\s)(?:tao|soan thao|soan|lam|viet)\s+"
@@ -562,7 +562,8 @@ def _missing_answer(req) -> dict:
         f"nào của {like}** để làm mẫu.\n\n"
         f"Bạn có thể:\n"
         f"- Thả file {req['kind_label']} của {like} vào thư mục "
-        f"`8. HỒ SƠ NHÂN SỰ/{like}/` trên Drive rồi chờ đồng bộ (≤15 phút), hoặc\n"
+        f"`8. HỒ SƠ NHÂN SỰ/{like}/` của kho tài liệu (ổ mạng Z:, hoặc **Quản trị → "
+        f"Kho tài liệu → Tải lên vào đây**) — kho tự quét mỗi 3 phút, hoặc\n"
         f"- Mở tab **Soạn tài liệu** để soạn từ mẫu chuẩn của HDS mà không cần "
         f"bản của {like}."
     )
@@ -577,9 +578,10 @@ def _missing_template_answer(req) -> dict:
         f"Mình chưa tạo bản nháp được: **trong kho chưa có mẫu "
         f"{req['kind_label']}** để bám theo.\n\n"
         f"Bạn có thể:\n"
-        f"- Thả file mẫu {req['kind_label']} vào thư mục `4. HỢP ĐỒNG MẪU/` "
-        f"(hoặc `6. THƯ MẪU - BIỂU MẪU/`) trên Drive rồi chờ đồng bộ "
-        f"(≤15 phút), hoặc\n"
+        f"- Thả file mẫu {req['kind_label']} vào thư mục `3. HỢP ĐỒNG MẪU/` "
+        f"(hoặc `5. THƯ MẪU - BIỂU MẪU/`) của kho tài liệu (ổ mạng Z:, hoặc "
+        f"**Quản trị → Kho tài liệu → Tải lên vào đây**) — kho tự quét mỗi 3 phút, "
+        f"hoặc\n"
         f"- Nói rõ muốn theo bản của ai: *\"tạo {req['kind_label']} cho "
         f"{req['for_name'].title()} như của …\"*, hoặc\n"
         f"- Mở tab **Soạn tài liệu** → Tạo bản nháp và chọn mẫu/nguồn thủ công."
@@ -824,7 +826,7 @@ def _handle_tu_do(question, req, *, user_id, dept_ids=None, is_banqt=False,
     else:
         lines.append(f"- Kho chưa có mẫu {kind_label}; bản nháp soạn theo khung thể thức "
                      f"thông dụng ({len(muc)} mục). Muốn bám mẫu riêng của công ty thì thả "
-                     f"file mẫu vào ngăn `6. THƯ MẪU - BIỂU MẪU/`.")
+                     f"file mẫu vào ngăn `5. THƯ MẪU - BIỂU MẪU/` của kho tài liệu.")
     if luat_ids:
         lines.append(f"- Căn cứ pháp lý kéo từ kệ luật: {len(luat_ids)} văn bản — chỉ điều "
                      "nào có trong bằng chứng mới được dẫn.")

@@ -188,7 +188,7 @@ chen vào lượt quét bấm từ web:
 
 ```bash
 bash deploy/hoc-tu-thu-muc.sh --install-cron   # không cần sudo
-crontab -l                                     # thấy dòng "*/15 … --cron"
+crontab -l                                     # thấy dòng "*/3 … --cron"
 tail -n 40 hds-ai/data/quet_kho.log            # lượt quét gần nhất
 tail hds-ai/data/quet_kho_lich_su.log          # một dòng tổng kết mỗi lượt
 ```
@@ -206,7 +206,12 @@ tiêu đề thành **“Quét kho tài liệu trên máy chủ”** kèm đườ
 ## 6. SAO LƯU — BẮT BUỘC TỪ LÚC NÀY
 
 Trước đây mất `data/raw` chỉ mất chức năng tải bản gốc, vì Drive còn giữ. **Giờ
-không còn ai giữ hộ.** Sao lưu cả hai thứ:
+không còn ai giữ hộ.** Sao lưu cả hai thứ.
+
+> **Từ 15/09/2026 dùng `bash deploy/sao-luu.sh --install-cron`** (02:30 hằng đêm, giữ 3 bản
+> ~11 GB/bản, có `--restore-test`, `--status` cảnh báo khi bản sao CÙNG Ổ với bản gốc) — xem
+> HUONG_DAN_IT.md mục 7. Lịch tay dưới đây là cách CŨ, chỉ để tham khảo: đừng đặt song song
+> với script, và đừng giữ 60 bản — 60 × 11 GB là đầy ổ.
 
 ```bash
 mkdir -p /backup && chmod 700 /backup
@@ -295,8 +300,9 @@ Việc cần theo dõi tuần đầu:
 - Danh sách đỏ *“bot chưa đọc được”* — file scan mờ.
 - Mục **“tài liệu còn trong kho tri thức nhưng KHÔNG còn tệp trong thư mục”**
   trong log lần quét: dấu hiệu ai đó xoá file khỏi ổ mạng. Bot vẫn trả lời bằng
-  nội dung đã học. Muốn gỡ hẳn khỏi kho tri thức thì hiện phải làm bằng SQL
-  (xem mục 9) — giao diện web chưa có nút xoá tài liệu.
+  nội dung đã học. Muốn gỡ hẳn khỏi kho tri thức: **Quản trị → Tổng quan → Kho
+  tài liệu → nút Gỡ** (admin; tài liệu ngừng được dùng ngay, tệp chuyển sang
+  `data/_da_go/`, nhật ký ghi lại) — không cần SQL nữa.
 
 ---
 
@@ -359,4 +365,4 @@ hội thoại cũ không hỏng và còn đường bật lại.
 | `[DỪNG] N tài liệu vẫn mang danh tính Drive` | Chưa chạy bước 4 | Chạy `--chuyen-doi` |
 | `[DỪNG] Kho chỉ thấy N tệp trong khi đã học M` | Ổ chưa mount hoặc mất quyền đọc | `mount \| grep <đường dẫn>`, kiểm tra quyền |
 | `[DỪNG] .env vẫn còn DRIVE_FOLDER_ID` | Chưa làm bước 3 | Gỡ timer Drive + xoá dòng đó |
-| `N tài liệu đang phục vụ vừa rơi lại hàng chờ duyệt` | File sửa nội dung; PDF luôn phải duyệt lại | Vào **Duyệt nhãn tài liệu** duyệt lại |
+| `N tài liệu đang phục vụ vừa rơi lại hàng chờ duyệt` | File sửa nội dung và bản mới đọc lỗi quá ngưỡng (tỉ lệ rác > 20%) | Vào **Duyệt nhãn tài liệu** duyệt lại |

@@ -49,15 +49,15 @@ nên trang đi tìm `/openapi.json` ở ngoài tiền tố `/api`.) Quyền: tà
 
    curl -s -X POST https://<máy chủ>/api/hr/import/validate \
      -H "Authorization: Bearer $TOKEN" \
-     -F "upload=@deploy/mau-nhap-nhan-su.csv"
+     -F "file=@deploy/mau-nhap-nhan-su.csv"
    ```
 
 3. Kết quả validate sạch lỗi thì import thật:
 
    ```bash
-   curl -s -X POST https://<máy chủ>/api/hr/import \
+   curl -s -X POST "https://<máy chủ>/api/hr/import?dry_run=false&commit=true" \
      -H "Authorization: Bearer $TOKEN" \
-     -F "upload=@deploy/mau-nhap-nhan-su.csv"
+     -F "file=@deploy/mau-nhap-nhan-su.csv"
    ```
 
 4. Vào chat nội bộ hỏi lại **"cty tôi có bao nhiêu nhân sự"** — câu trả lời

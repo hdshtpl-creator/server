@@ -13,7 +13,9 @@ import { FeedbackReviewTab } from './FeedbackReviewTab';
 import { BoMauTab } from './BoMauTab';
 import { LeadsTab } from './LeadsTab';
 import { AuditLogTab } from './AuditLogTab';
+import { KhoaTichHopTab } from './KhoaTichHopTab';
 import {
+  KeyRound,
   LayoutDashboard,
   FileCheck2,
   MessageSquareText,
@@ -26,6 +28,7 @@ import {
   SlidersHorizontal,
   Layers,
   ScrollText,
+  UserRound,
 } from 'lucide-react';
 
 type TabDef = {
@@ -36,21 +39,36 @@ type TabDef = {
   adminOnly?: boolean;
   /** admin + Ban quản trị (backend: SEE_ALL). */
   banQtOnly?: boolean;
+  /** Điều kiện hiện riêng khi vai không gói gọn trong hai cờ trên — phải khớp
+   *  ĐÚNG cửa backend, hiện thẻ mà máy chủ trả 403 là người dùng tưởng hỏng. */
+  visibleTo?: (user: { role?: string; can_review?: boolean } | null | undefined) => boolean;
 };
+
+/** GET /leads mở cho admin, Ban QT và trưởng bộ phận có quyền kiểm duyệt. */
+const canSeeLeads = (user: { role?: string; can_review?: boolean } | null | undefined): boolean =>
+  Boolean(
+    user &&
+      (user.role === 'admin' ||
+        user.role === 'ban_qt' ||
+        (user.role === 'truong_bph' && user.can_review))
+  );
 
 const TABS: TabDef[] = [
   { id: 'overview', label: 'Tổng quan', icon: LayoutDashboard, group: 'operate' },
   { id: 'clients_360', label: 'Hồ sơ khách 360°', icon: Users2, group: 'operate' },
   { id: 'learn', label: 'Duyệt câu trả lời bị báo cáo', icon: MessageSquareText, group: 'operate' },
+  // Khách để lại liên hệ qua khung chat website — BẬT LẠI cho nghiệm thu
+  // (F-07, 03/10/2026). Hiện đúng nhóm mà GET /leads cho phép.
+  { id: 'leads', label: 'Khách quan tâm (website)', icon: UserRound, group: 'operate', visibleTo: canSeeLeads },
   // ĐÃ GỠ KHỎI THANH 18/09/2026 (chủ dự án: "bỏ thẻ không cần thiết"):
   //   { id: 'feedback', label: 'Đánh giá của người dùng', icon: ThumbsUp, group: 'operate' },
-  //   { id: 'leads', label: 'Khách quan tâm (website)', icon: UserRound, group: 'operate', banQtOnly: true },
-  // Hai màn hình vẫn còn nguyên mã và vẫn render được (xem khối tabpanel bên
-  // dưới): 'feedback' trùng việc với "Duyệt câu trả lời bị báo cáo", 'leads'
-  // chỉ có dữ liệu khi bật khung chat nhúng trên website. Cần lại thì bỏ dấu
-  // chú thích hai dòng trên là xong, dữ liệu trong CSDL không mất.
+  // Màn hình vẫn còn nguyên mã và vẫn render được (xem khối tabpanel bên
+  // dưới): 'feedback' trùng việc với "Duyệt câu trả lời bị báo cáo". Cần lại
+  // thì bỏ dấu chú thích dòng trên là xong, dữ liệu trong CSDL không mất.
   { id: 'users', label: 'Người dùng & Phòng ban', icon: Users, group: 'operate', adminOnly: true },
   { id: 'settings', label: 'Cài đặt AI', icon: SlidersHorizontal, group: 'operate', adminOnly: true },
+  // Khoá cho hệ thống ngoài (CRM đẩy hồ sơ khách, chatbot bên thứ ba) — 28/09/2026.
+  { id: 'tich_hop', label: 'Khoá API & tích hợp', icon: KeyRound, group: 'operate', adminOnly: true },
   // Nhật ký chỉ đọc — bảng audit_log có trigger cấm sửa/xoá (kế hoạch ngày 3).
   { id: 'audit', label: 'Nhật ký hệ thống', icon: ScrollText, group: 'operate', banQtOnly: true },
 
@@ -73,7 +91,12 @@ export const AdminLayout: React.FC = () => {
   const isAdmin = currentUser?.role === 'admin';
   const isBanQt = isAdmin || currentUser?.role === 'ban_qt';
 
-  const tabs = TABS.filter((t) => (!t.adminOnly || isAdmin) && (!t.banQtOnly || isBanQt));
+  const tabs = TABS.filter(
+    (t) =>
+      (!t.adminOnly || isAdmin) &&
+      (!t.banQtOnly || isBanQt) &&
+      (!t.visibleTo || t.visibleTo(currentUser))
+  );
 
   const renderTabButton = (tab: TabDef) => {
     const Icon = tab.icon;
@@ -143,12 +166,13 @@ export const AdminLayout: React.FC = () => {
           {adminTab === 'feedback' && <FeedbackReviewTab />}
           {adminTab === 'users' && isAdmin && <UserManagementTab />}
           {adminTab === 'settings' && isAdmin && <AiSettingsTab />}
+          {adminTab === 'tich_hop' && isAdmin && <KhoaTichHopTab />}
           {adminTab === 'browse_docs' && <BrowseDocsTab />}
           {adminTab === 'review' && <DocumentReviewTab />}
           {adminTab === 'documents' && <LearnedDocsTab />}
           {adminTab === 'methods' && <MethodTemplatesTab />}
           {adminTab === 'bo_mau' && <BoMauTab />}
-          {adminTab === 'leads' && isBanQt && <LeadsTab />}
+          {adminTab === 'leads' && canSeeLeads(currentUser) && <LeadsTab />}
           {adminTab === 'audit' && isBanQt && <AuditLogTab />}
         </div>
       </div>

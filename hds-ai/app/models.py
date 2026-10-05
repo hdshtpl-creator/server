@@ -80,6 +80,21 @@ CLAUDE_PRICES = {
     "claude-haiku-4-5": (1.0, 5.0),
     "claude-fable-5": (10.0, 50.0),
 }
+# Giá THAM KHẢO của OpenAI (USD / 1 triệu token vào, ra) — để ước chi phí cho
+# tính năng ChatGPT soát / trả lời khác (app/ai_ngoai.py). OpenAI đổi giá và ra
+# model mới thường xuyên: con số thật xem ở trang giá của họ rồi sửa tại đây.
+# Tên model khớp theo TIỀN TỐ dài nhất: 'gpt-5-mini-2025-08-07' → 'gpt-5-mini'.
+OPENAI_PRICES = {
+    "gpt-5": (1.25, 10.0),
+    "gpt-5-mini": (0.25, 2.0),
+    "gpt-5-nano": (0.05, 0.40),
+    "gpt-4.1": (2.0, 8.0),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4o": (2.50, 10.0),
+    "gpt-4o-mini": (0.15, 0.60),
+    "o3": (2.0, 8.0),
+    "o4-mini": (1.10, 4.40),
+}
 
 # Cửa sổ ngữ cảnh (token) của model cloud — dùng để quy ra trần ký tự cho
 # phần tài liệu, y như num_ctx làm với Ollama. Không có tên trong bảng thì
@@ -556,10 +571,22 @@ class CloudError(RuntimeError):
     lui về local' với lỗi lập trình của chính mình."""
 
 
+def bang_gia(model: str):
+    """(giá vào, giá ra) USD / 1 triệu token, hoặc None nếu không có trong bảng.
+    Claude khớp đúng tên; OpenAI khớp theo tiền tố DÀI NHẤT (tên kèm ngày
+    phát hành như 'gpt-5-mini-2025-08-07' vẫn ra giá của 'gpt-5-mini')."""
+    ten = bare_model(model or "").lower()
+    if ten in CLAUDE_PRICES:
+        return CLAUDE_PRICES[ten]
+    khop = [k for k in OPENAI_PRICES if ten == k or ten.startswith(k + "-")
+            or ten.startswith(k + ".")]
+    return OPENAI_PRICES[max(khop, key=len)] if khop else None
+
+
 def _usd(model: str, tok_in: int, tok_out: int, cached_in: int = 0):
     """Ước chi phí một lượt (USD). Token đọc lại từ bộ đệm prompt chỉ tính 10%
     giá vào — đó là lý do đáng đặt cache_control lên system prompt."""
-    price = CLAUDE_PRICES.get(bare_model(model))
+    price = bang_gia(model)
     if not price:
         return None
     pin, pout = price
@@ -580,7 +607,8 @@ def _anthropic_client():
 
 
 def claude_stream(prompt: str, system: str = "", temperature: float = 0.2,
-                  model: str | None = None, stats: dict | None = None):
+                  model: str | None = None, stats: dict | None = None,
+                  max_tokens: int | None = None, effort: str | None = None):
     """Sinh câu trả lời THEO DÒNG qua API Anthropic.
 
     `temperature` bị BỎ QUA (xem ghi chú đầu mục). Độ sâu suy nghĩ chỉnh bằng
@@ -596,14 +624,17 @@ def claude_stream(prompt: str, system: str = "", temperature: float = 0.2,
     client = _anthropic_client()
     kw = {
         "model": name,
-        "max_tokens": max(1024, int(cfg["max_tokens"] or 8000)),
+        "max_tokens": max(1024, int(max_tokens or cfg["max_tokens"] or 8000)),
         "messages": [{"role": "user", "content": prompt}],
     }
     if system:
         kw["system"] = [{"type": "text", "text": system,
                          "cache_control": {"type": "ephemeral"}}]
+    # 'minimal' là mức riêng của OpenAI — Claude thấp nhất là 'low'.
+    muc = (effort or cfg["effort"] or "medium").strip().lower()
+    muc = "low" if muc == "minimal" else muc
     tuned = dict(kw, thinking={"type": "adaptive"},
-                 output_config={"effort": cfg["effort"] or "medium"})
+                 output_config={"effort": muc})
 
     t0 = time.time()
     try:
@@ -632,13 +663,80 @@ def claude_stream(prompt: str, system: str = "", temperature: float = 0.2,
         })
 
 
+# Model SUY LUẬN của OpenAI (gpt-5*, o1/o3/o4…) KHÔNG nhận `max_tokens` (phải
+# là `max_completion_tokens`, và trần đó tính cả token suy nghĩ) và chỉ nhận
+# temperature mặc định — gửi khuôn cũ là HTTP 400 ngay lượt đầu.
+_RE_OPENAI_SUY_LUAN = re.compile(r"^(gpt-5|o\d)", re.IGNORECASE)
+
+# Tham số TUỲ CHỌN mà nhà cung cấp có thể không hiểu. Bị từ chối (HTTP 400 nêu
+# đúng tên tham số) thì bỏ đi rồi gửi lại — nhờ vậy một adapter chạy được cho
+# cả OpenAI lẫn DashScope/DeepSeek/vLLM mà không phải khai báo từng nhà.
+_THAM_SO_BO_DUOC = ("temperature", "stream_options", "reasoning_effort",
+                    "response_format")
+
+
+def _la_openai_suy_luan(name: str) -> bool:
+    return bool(_RE_OPENAI_SUY_LUAN.match((name or "").strip()))
+
+
+def _tom_loi_http(text: str) -> str:
+    """Câu lỗi ngắn từ thân phản hồi lỗi của API (không bao giờ chứa khoá)."""
+    try:
+        err = json.loads(text or "{}").get("error") or {}
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])[:400]
+    except (ValueError, AttributeError):
+        pass
+    return (text or "").strip()[:400]
+
+
+def _sua_body_theo_loi(body: dict, text: str):
+    """Thân yêu cầu đã chỉnh theo lỗi 400, hoặc None nếu không biết chỉnh gì.
+
+    Ưu tiên trường `param` trong lỗi chuẩn OpenAI; nhà cung cấp khác không có
+    trường đó thì dò tên tham số trong câu lỗi."""
+    b = dict(body)
+    param = ""
+    try:
+        err = json.loads(text or "{}").get("error") or {}
+        param = str(err.get("param") or "") if isinstance(err, dict) else ""
+    except (ValueError, AttributeError):
+        pass
+    loi = (text or "").lower()
+    if param == "stream" or ("stream" in loi and "verif" in loi):
+        # Một số model OpenAI chỉ cho tổ chức ĐÃ XÁC MINH gọi theo dòng —
+        # lùi về một cục (vẫn có kết quả, chỉ không chảy dần).
+        b["stream"] = False
+        b.pop("stream_options", None)
+    elif param == "max_tokens" or (not param and "max_tokens" in b
+                                   and "max_tokens" in loi):
+        b["max_completion_tokens"] = b.pop("max_tokens")
+    elif param == "max_completion_tokens" or (
+            not param and "max_completion_tokens" in b
+            and "max_completion_tokens" in loi):
+        b["max_tokens"] = b.pop("max_completion_tokens")
+    elif param in _THAM_SO_BO_DUOC and param in b:
+        b.pop(param)
+    elif not param:
+        for k in _THAM_SO_BO_DUOC:
+            if k in b and k in loi:
+                b.pop(k)
+    return b if b != body else None
+
+
 def compat_stream(prompt: str, system: str = "", temperature: float = 0.2,
-                  model: str | None = None, stats: dict | None = None):
+                  model: str | None = None, stats: dict | None = None,
+                  max_tokens: int | None = None, effort: str | None = None,
+                  json_mode: bool = False):
     """Sinh câu trả lời THEO DÒNG qua endpoint TƯƠNG THÍCH OpenAI.
 
-    Một hàm cho cả nhóm: Qwen trên DashScope, DeepSeek, OpenRouter, Groq, hay
-    máy vLLM tự dựng sau này — họ nói chung giao thức POST /chat/completions
-    với SSE. Đổi nhà cung cấp chỉ là đổi COMPAT_BASE_URL + COMPAT_API_KEY.
+    Một hàm cho cả nhóm: OpenAI (ChatGPT), Qwen trên DashScope, DeepSeek,
+    OpenRouter, Groq, hay máy vLLM tự dựng sau này — họ nói chung giao thức
+    POST /chat/completions với SSE. Đổi nhà cung cấp chỉ là đổi
+    COMPAT_BASE_URL + COMPAT_API_KEY.
+
+    max_tokens/effort/json_mode: tham số riêng của lời gọi (tính năng ChatGPT
+    soát / trả lời khác); để trống thì theo cài đặt nhánh cloud như cũ.
     """
     if not COMPAT_API_KEY:
         raise CloudError("Chưa cấu hình COMPAT_API_KEY (hoặc OPENAI_API_KEY)")
@@ -646,36 +744,76 @@ def compat_stream(prompt: str, system: str = "", temperature: float = 0.2,
     if not name:
         raise CloudError("Chưa chọn model cho endpoint tương thích OpenAI")
     cfg = cloud_config()
+    tran = max(1024, int(max_tokens or cfg["max_tokens"] or 8000))
     msgs = ([{"role": "system", "content": system}] if system else [])
     msgs.append({"role": "user", "content": prompt})
     body = {"model": name, "messages": msgs, "stream": True,
-            "temperature": temperature,
-            "max_tokens": max(1024, int(cfg["max_tokens"] or 8000))}
+            # Không có cờ này thì luồng SSE của OpenAI KHÔNG gửi số token —
+            # mất luôn con số chi phí.
+            "stream_options": {"include_usage": True}}
+    if _la_openai_suy_luan(name):
+        body["max_completion_tokens"] = tran
+        if effort:
+            body["reasoning_effort"] = effort
+    else:
+        body["max_tokens"] = tran
+        body["temperature"] = temperature
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
     t0 = time.time()
     strip = StripThink()      # qwen/deepseek qua API vẫn có thể trả <think>
-    tok_in = tok_out = 0
-    r = requests.post(f"{COMPAT_BASE_URL}/chat/completions",
-                      headers={"Authorization": f"Bearer {COMPAT_API_KEY}"},
-                      json=body, timeout=600, stream=True)
+    tok_in = tok_out = cached = reasoning = 0
+    url = f"{COMPAT_BASE_URL}/chat/completions"
+    headers = {"Authorization": f"Bearer {COMPAT_API_KEY}"}
+    r = None
+    for _ in range(4):
+        r = requests.post(url, headers=headers, json=body, timeout=600,
+                          stream=bool(body.get("stream")))
+        if r.status_code != 400:
+            break
+        loi = r.text
+        r.close()
+        sua = _sua_body_theo_loi(body, loi)
+        if sua is None:
+            raise CloudError(f"API từ chối yêu cầu (HTTP 400): {_tom_loi_http(loi)}")
+        body = sua
     try:
-        r.raise_for_status()
-        for line in r.iter_lines(decode_unicode=True):
-            if not line or not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if payload == "[DONE]":
-                break
-            try:
-                data = json.loads(payload)
-            except ValueError:
-                continue
-            for ch in data.get("choices") or []:
-                piece = strip.feed((ch.get("delta") or {}).get("content") or "")
-                if piece:
-                    yield piece
-            usage = data.get("usage") or {}
+        if r.status_code >= 400:
+            raise CloudError(f"API lỗi HTTP {r.status_code}: {_tom_loi_http(r.text)}")
+
+        def _doc_usage(usage):
+            nonlocal tok_in, tok_out, cached, reasoning
+            usage = usage or {}
             tok_in = usage.get("prompt_tokens") or tok_in
             tok_out = usage.get("completion_tokens") or tok_out
+            cached = ((usage.get("prompt_tokens_details") or {})
+                      .get("cached_tokens") or cached)
+            reasoning = ((usage.get("completion_tokens_details") or {})
+                         .get("reasoning_tokens") or reasoning)
+
+        if not body.get("stream"):
+            data = r.json()
+            for ch in data.get("choices") or []:
+                piece = strip.feed((ch.get("message") or {}).get("content") or "")
+                if piece:
+                    yield piece
+            _doc_usage(data.get("usage"))
+        else:
+            for line in r.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    data = json.loads(payload)
+                except ValueError:
+                    continue
+                for ch in data.get("choices") or []:
+                    piece = strip.feed((ch.get("delta") or {}).get("content") or "")
+                    if piece:
+                        yield piece
+                _doc_usage(data.get("usage"))
         tail = strip.flush()
         if tail:
             yield tail
@@ -685,8 +823,44 @@ def compat_stream(prompt: str, system: str = "", temperature: float = 0.2,
         stats.update({
             "model": PREFIX_COMPAT + name, "provider": P_COMPAT,
             "prompt_tokens": tok_in, "gen_tokens": tok_out,
+            "cache_read_tokens": cached, "reasoning_tokens": reasoning,
+            "cost_usd": _usd(name, tok_in, tok_out, cached),
             "total_ms": int((time.time() - t0) * 1000),
         })
+
+
+def co_khoa_api(model: str) -> bool:
+    """Model này gọi được không: model API thì phải có khoá tương ứng trong
+    .env; model trên máy chủ thì luôn được."""
+    prov = provider_of(model or "")
+    if prov == P_CLAUDE:
+        return bool(ANTHROPIC_API_KEY)
+    if prov == P_COMPAT:
+        return bool(COMPAT_API_KEY)
+    return True
+
+
+def goi_dung_model(prompt: str, system: str = "", model: str | None = None, *,
+                   max_tokens: int | None = None, effort: str | None = None,
+                   json_mode: bool = False, temperature: float = 0.2,
+                   stats: dict | None = None):
+    """Gọi ĐÚNG model được chỉ định, theo dòng, KHÔNG lui về model khác.
+
+    Khác llm_stream: đó là đường trả lời chính, API hỏng thì lặng lẽ quay về
+    Qwen để người hỏi vẫn có câu trả lời. Ở đây (ChatGPT soát / câu trả lời
+    khác) mục đích chính là ý kiến của MỘT model khác — lui về Qwen là đưa
+    cho người dùng đúng thứ họ đã có mà dán nhãn ChatGPT. Hỏng thì báo hỏng.
+    """
+    prov = provider_of(model or "")
+    if prov == P_CLAUDE:
+        yield from claude_stream(prompt, system, temperature, model, stats,
+                                 max_tokens=max_tokens, effort=effort)
+    elif prov == P_COMPAT:
+        yield from compat_stream(prompt, system, temperature, model, stats,
+                                 max_tokens=max_tokens, effort=effort,
+                                 json_mode=json_mode)
+    else:
+        yield from ollama_stream(prompt, system, temperature, model, stats)
 
 
 def llm_stream(prompt: str, system: str = "", temperature: float = 0.2,

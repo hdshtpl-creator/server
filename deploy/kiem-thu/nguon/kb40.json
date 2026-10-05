@@ -1,0 +1,322 @@
+[
+ {
+  "id": "1.1",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Góp vốn bằng tài sản và thời hạn góp vốn",
+  "tinh_huong": "Công ty TNHH 2 thành viên thành lập ngày 01/01/2026. Một thành viên cam kết góp vốn bằng quyền sử dụng đất nhưng đến ngày 10/04/2026 chưa hoàn tất thủ tục chuyển quyền sở hữu.",
+  "yeu_cau": "Xác định hậu quả pháp lý về tư cách thành viên, nghĩa vụ điều chỉnh vốn điều lệ và chế tài xử phạt hành chính đối với công ty.",
+  "tieu_chi": "Dẫn chiếu chính xác quy định thời hạn góp vốn 90 ngày (Điều 47 Luật Doanh nghiệp 2020) và thủ tục chuyển quyền sở hữu tài sản góp vốn (Điều 35 Luật Doanh nghiệp 2020)."
+ },
+ {
+  "id": "1.2",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Nhà đầu tư nước ngoài mua phần vốn góp trong ngành nghề kinh doanh có điều kiện",
+  "tinh_huong": "Nhà đầu tư Hàn Quốc muốn mua lại 51% vốn góp của một công ty Việt Nam hoạt động trong lĩnh vực vận tải hàng hóa nội địa và dịch vụ kho bãi.",
+  "yeu_cau": "Xác định tỷ lệ sở hữu tối đa của nhà đầu tư nước ngoài theo Biểu cam kết WTO/Hiệp định thương mại, xác định hồ sơ phải thực hiện thủ tục đăng ký góp vốn/mua cổ phần hay không.",
+  "tieu_chi": "Dẫn chiếu chuẩn xác Điều 26 Luật Đầu tư 2020 và các điều kiện tiếp cận thị trường đối với ngành logistics."
+ },
+ {
+  "id": "1.3",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Phát hành cổ phần ưu đãi cổ tức và quyền biểu quyết",
+  "tinh_huong": "Công ty Cổ phần dự kiến phát hành Cổ phần ưu đãi cổ tức cho nhà đầu tư tài chính, nhưng nhà đầu tư yêu cầu có quyền phủ quyết đối với việc bán tài sản trên 35% tổng tài sản.",
+  "yeu_cau": "Thẩm định tính hợp pháp của yêu cầu này theo quy định pháp luật và Điều lệ mẫu.",
+  "tieu_chi": "Phân tích rõ Điều 117 Luật Doanh nghiệp 2020 (Cổ đông sở hữu cổ phần ưu đãi cổ tức không có quyền biểu quyết, dự họp ĐHĐCĐ, đề cử người vào HĐQT/BKS)."
+ },
+ {
+  "id": "1.4",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Chuyển nhượng dự án đầu tư gắn liền với quyền sử dụng đất",
+  "tinh_huong": "Doanh nghiệp A muốn chuyển nhượng toàn bộ Dự án Nhà máy may mặc (đất thuê trả tiền hàng năm) cho Doanh nghiệp B.",
+  "yeu_cau": "Rà soát điều kiện chuyển nhượng dự án đầu tư và điều kiện chuyển nhượng quyền sử dụng đất/tài sản gắn liền với đất thuê trả tiền hàng năm.",
+  "tieu_chi": "Đối chiếu Điều 46 Luật Đầu tư 2020 và quy định pháp luật Đất đai về điều kiện bán tài sản gắn liền với đất thuê trả tiền hàng năm."
+ },
+ {
+  "id": "1.5",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Chuyển đổi loại hình doanh nghiệp kết hợp tái cơ cấu nợ",
+  "tinh_huong": "Công ty Cổ phần có khoản nợ vay 10 tỷ đồng từ một chủ nợ cá nhân, muốn chuyển đổi thành Công ty TNHH 2 TV và hoán đổi toàn bộ khoản nợ này thành phần vốn góp của chủ nợ.",
+  "yeu_cau": "Lập quy trình pháp lý, hồ sơ đăng ký doanh nghiệp và rủi ro về định giá phần vốn góp hoán đổi.",
+  "tieu_chi": "Trình bày rõ các bước chuyển đổi (Điều 202 Luật Doanh nghiệp 2020), nghị quyết ĐHĐCĐ và thủ tục tăng vốn do hoán đổi nợ."
+ },
+ {
+  "id": "1.6",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Điều khoản Hạn chế Chuyển nhượng Cổ phần (Lock-up & ROFR) trong Thỏa thuận Cổ đông (SHA)",
+  "tinh_huong": "Trong Thỏa thuận Cổ đông của Công ty Cổ phần chưa đại chúng, các cổ đông sáng lập cam kết không chuyển nhượng cổ phần cho bên thứ ba trong 05 năm (kể cả sau thời hạn 03 năm theo luật).",
+  "yeu_cau": "Đánh giá hiệu lực pháp lý của điều khoản này khi đối chiếu giữa Luật Doanh nghiệp 2020 và Bộ luật Dân sự 2015.",
+  "tieu_chi": "Phân tích sự xung đột giữa nguyên tắc tự do chuyển nhượng cổ phần của CTCP (Điều 127 Luật Doanh nghiệp 2020) và nguyên tắc tự do thỏa thuận dân sự (Điều 3 BLDS 2015)."
+ },
+ {
+  "id": "1.7",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Rà soát Thẩm quyền trong Giao dịch M&A (Change of Control)",
+  "tinh_huong": "Doanh nghiệp mục tiêu có 03 Hợp đồng tín dụng với Ngân hàng. Bên mua dự kiến mua 70% cổ phần của Doanh nghiệp mục tiêu.",
+  "yeu_cau": "Phân tích rủi ro kích hoạt điều khoản \"Thay đổi quyền kiểm soát\" (Change of Control) trong hợp đồng tín dụng và đề xuất giải pháp xử lý trước khi đóng giao dịch (Closing).",
+  "tieu_chi": "Bóc tách nghĩa vụ phải xin chấp thuận trước từ ngân hàng tài trợ để tránh việc bị thu hồi nợ trước hạn."
+ },
+ {
+  "id": "1.8",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Xử lý Bất đồng trong Ban Quản trị / Deadlock Doanh nghiệp",
+  "tinh_huong": "Công ty TNHH có 02 thành viên, mỗi người sở hữu 50% vốn điều lệ. Hai bên phát sinh mâu thuẫn dẫn tới việc không thể thông qua bất kỳ Nghị quyết Hội đồng thành viên nào trong 06 tháng liên tiếp.",
+  "yeu_cau": "Đưa ra các giải pháp pháp lý để giải quyết bế tắc (Kích hoạt điều khoản Mua lại/Thoái vốn, Yêu cầu Tòa án giải thể, hay Khởi kiện yêu cầu bồi thường thiệt hại của Người đại diện theo pháp luật).",
+  "tieu_chi": "Dẫn chiếu các quy định về yêu cầu mua lại phần vốn góp (Điều 51 Luật Doanh nghiệp 2020) và điều kiện giải thể bắt buộc."
+ },
+ {
+  "id": "1.9",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Rà soát Hợp đồng Vay nước ngoài tự cân đối trả nợ",
+  "tinh_huong": "Công ty FDI tại Việt Nam vay trung - dài hạn 2 triệu USD từ công ty mẹ ở Singapore để đầu tư mở rộng nhà xưởng.",
+  "yeu_cau": "Lập danh mục điều kiện vay, thủ tục đăng ký khoản vay nước ngoài với Ngân hàng Nhà nước và kiểm tra trần chi phí vay/hạn mức vốn vay theo Giấy chứng nhận đăng ký đầu tư.",
+  "tieu_chi": "Dẫn chiếu chính xác các quy định của Ngân hàng Nhà nước về quản lý ngoại hối đối với việc vay, trả nợ nước ngoài của doanh nghiệp và quy định vốn vay không vượt quá tổng vốn đầu tư trừ vốn góp."
+ },
+ {
+  "id": "1.10",
+  "linh_vuc": "Doanh nghiệp & Đầu tư",
+  "tieu_de": "Giảm Vốn Điều Lệ và Rủi ro với Chủ Nợ",
+  "tinh_huong": "Doanh nghiệp thành lập được 2 năm, hoạt động kinh doanh liên tục có lãi, muốn hoàn trả một phần vốn góp cho thành viên theo tỷ lệ vốn góp để thu hẹp quy mô.",
+  "yeu_cau": "Đánh giá điều kiện hoàn trả vốn, nghĩa vụ cam kết thanh toán đủ các khoản nợ và thủ tục thông báo với cơ quan đăng ký kinh doanh.",
+  "tieu_chi": "Dẫn chiếu Điều 68/Điều 112 Luật Doanh nghiệp 2020 (điều kiện hoạt động kinh doanh liên tục từ 02 năm trở lên và bảo đảm thanh toán đủ các khoản nợ/nghĩa vụ tài sản khác sau khi hoàn trả)."
+ },
+ {
+  "id": "2.1",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Xung đột Điều khoản Giải quyết Tranh chấp (Trọng tài vs Tòa án)",
+  "tinh_huong": "Hợp đồng kinh tế quy định: \"Mọi tranh chấp phát sinh sẽ được giải quyết tại Trung tâm Trọng tài Quốc tế Việt Nam (VIAC) hoặc Tòa án nhân dân có thẩm quyền.\"",
+  "yeu_cau": "Đánh giá hiệu lực của thỏa thuận trọng tài này và xác định cơ quan có thẩm quyền giải quyết khi một bên nộp đơn khởi kiện ra Tòa án.",
+  "tieu_chi": "Dẫn chiếu Nghị quyết 01/2014/NQ-HĐTP của Hội đồng Thẩm phán TANDTC hướng dẫn Luật Trọng tài thương mại (trường hợp thỏa thuận trọng tài không thể thực hiện được/thỏa thuận lựa chọn nhiều cơ quan tài phán)."
+ },
+ {
+  "id": "2.2",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Giới hạn Phạt vi phạm và Bồi thường thiệt hại",
+  "tinh_huong": "Hợp đồng dịch vụ logistics giữa 2 thương nhân quy định: \"Nếu bên B giao hàng chậm trễ thì phải chịu phạt 20% giá trị phần nghĩa vụ hợp đồng bị vi phạm và bồi thường khoản tiền phạt ước tính là 500 triệu đồng mà không cần chứng minh thiệt hại thực tế.\"",
+  "yeu_cau": "Thẩm định tính hợp pháp của điều khoản phạt và điều khoản bồi thường theo Luật Thương mại 2005.",
+  "tieu_chi": "Chỉ rõ mức phạt vi phạm thương mại tối đa là 8% (Điều 301 Luật Thương mại 2005) và nguyên tắc bồi thường thiệt hại phải dựa trên tổn thất thực tế, trực tiếp (Điều 302 Luật Thương mại 2005)."
+ },
+ {
+  "id": "2.3",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Đơn phương chấm dứt Hợp đồng lao động do thay đổi cơ cấu",
+  "tinh_huong": "Doanh nghiệp cắt giảm 10 nhân sự do ứng dụng công nghệ tự động hóa. Công ty muốn ra quyết định chấm dứt HĐLĐ ngay sau khi thông báo trước 30 ngày.",
+  "yeu_cau": "Rà soát quy trình: xây dựng phương án sử dụng lao động, trao đổi với tổ chức đại diện người lao động tại cơ sở, thông báo cho Sở LĐ-TB&XH và nghĩa vụ chi trả trợ cấp mất việc làm.",
+  "tieu_chi": "Dẫn chiếu Điều 42, 44, 47 Bộ luật Lao động 2019; phân biệt rạch ròi giữa Trợ cấp mất việc làm và Trợ cấp thôi việc."
+ },
+ {
+  "id": "2.4",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Áp dụng Biện pháp Khẩn cấp Tạm thời (Kê biên / Phong tỏa tài khoản)",
+  "tinh_huong": "Nguyên đơn khởi kiện đòi nợ 5 tỷ đồng. Phát hiện Bị đơn đang tiến hành tẩu tán nhà xưởng và rút tiền khỏi tài khoản ngân hàng.",
+  "yeu_cau": "Lập hồ sơ yêu cầu Tòa án áp dụng Biện pháp khẩn cấp tạm thời (Phong tỏa tài khoản, Phong tỏa tài sản của người có nghĩa vụ); xác định nghĩa vụ thực hiện biện pháp bảo đảm tài chính.",
+  "tieu_chi": "Dẫn chiếu Điều 111, Điều 124, 125, Điều 136 Bộ luật Tố tụng Dân sự 2015 (yêu cầu gửi khoản tiền bảo đảm tương đương với nghĩa vụ tài sản hoặc bảo lãnh ngân hàng)."
+ },
+ {
+  "id": "2.5",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Thỏa thuận Bảo mật Thông tin (NDA) và Cam kết Không cạnh tranh (NCA) của Nhân sự cấp cao",
+  "tinh_huong": "Giám đốc R&D ký cam kết không làm việc cho các đối thủ cạnh tranh trong vòng 02 năm sau khi nghỉ việc, nếu vi phạm bồi thường 1 tỷ đồng. Sau khi nghỉ việc, nhân sự này sang làm cho công ty đối thủ.",
+  "yeu_cau": "Đánh giá khả năng khởi kiện đòi bồi thường vi phạm NCA theo thực tiễn xét xử tại Tòa án và Trọng tài (VIAC) tại Việt Nam.",
+  "tieu_chi": "Phân tích hai luồng quan điểm thực tiễn: Quyền tự do làm việc theo Hiến pháp/BLLĐ và Thỏa thuận dân sự hợp pháp theo BLDS (dẫn chiếu các Phán quyết trọng tài hoặc Án lệ liên quan nếu có)."
+ },
+ {
+  "id": "2.6",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Hủy bỏ Hợp đồng do Vi phạm Cơ bản",
+  "tinh_huong": "Bên B chậm tiến độ thi công công trình 45 ngày so với mốc tiến độ chính (hợp đồng quy định chậm quá 30 ngày là vi phạm cơ bản). Bên A gửi thông báo hủy bỏ ngay hợp đồng và tịch thu toàn bộ bảo lãnh thực hiện hợp đồng.",
+  "yeu_cau": "Đánh giá điều kiện hủy bỏ hợp đồng, thủ tục thông báo và hệ quả pháp lý của việc hủy bỏ hợp đồng theo BLDS 2015.",
+  "tieu_chi": "Dẫn chiếu Điều 423, Điều 424, Điều 427 BLDS 2015 (hợp đồng không có hiệu lực từ thời điểm giao kết, các bên hoàn trả cho nhau những gì đã nhận)."
+ },
+ {
+  "id": "2.7",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Xác định Tư cách Đương sự và Người đại diện theo Ủy quyền tại Tòa",
+  "tinh_huong": "Chi nhánh của Công ty X ký hợp đồng kinh tế và phát sinh tranh chấp. Khách hàng muốn khởi kiện trực tiếp Chi nhánh đó ra Tòa án.",
+  "yeu_cau": "Thẩm định tư cách bị đơn và hướng dẫn xác định đúng chủ thể tham gia tố tụng.",
+  "tieu_chi": "Dẫn chiếu Điều 74, 84 BLDS 2015 và Điều 68 BLTTDS 2015 (Chi nhánh không có tư cách pháp nhân, Bị đơn phải là Pháp nhân Công ty X, người đứng đầu chi nhánh chỉ có thể tham gia với tư cách đại diện theo ủy quyền)."
+ },
+ {
+  "id": "2.8",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Bẫy Miễn trách nhiệm do Sự kiện Bất khả kháng (Force Majeure)",
+  "tinh_huong": "Nhà cung cấp viện dẫn lý do gián đoạn chuỗi cung ứng toàn cầu và biến động giá nguyên vật liệu tăng 40% để tuyên bố là \"Sự kiện bất khả kháng\" nhằm từ chối giao hàng và không chịu phạt hợp đồng.",
+  "yeu_cau": "Đánh giá tính hợp pháp của lý do bất khả kháng và tư vấn cho bên mua phương án bác bỏ lập luận.",
+  "tieu_chi": "Dẫn chiếu Điều 156 BLDS 2015 và Điều 294 Luật Thương mại 2005 (Biến động giá và khó khăn kinh tế thuần túy không được coi là sự kiện bất khả kháng mà chỉ có thể là thực hiện hợp đồng khi hoàn cảnh thay đổi cơ bản theo Điều 420 BLDS)."
+ },
+ {
+  "id": "2.9",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Chiến lược Hỏi cung & Bẻ gãy Lời khai tại Phiên tòa",
+  "tinh_huong": "Trong vụ án tranh chấp hợp đồng vay tài sản không lập văn bản, Bị đơn nộp giấy biên nhận tiền nhưng khai rằng \"đây là tiền Nguyên đơn thanh toán tiền mua đất trước đó chứ không phải tiền vay\".",
+  "yeu_cau": "Xây dựng bộ câu hỏi chất vấn chéo (Cross-examination) 05 câu tại phiên tòa để làm rõ mâu thuẫn về thời điểm lập giấy, quan hệ mua bán đất thực tế, và nghĩa vụ nộp thuế giao dịch.",
+  "tieu_chi": "Bộ câu hỏi logic, bám sát các yếu tố bắt buộc của hợp đồng chuyển nhượng quyền sử dụng đất để chỉ ra việc bị đơn ngụy tạo lý do vay tiền."
+ },
+ {
+  "id": "2.10",
+  "linh_vuc": "Tư vấn thường xuyên & Tranh tụng",
+  "tieu_de": "Rà soát Căn cứ Kháng cáo Bản án Dân sự Sơ thẩm",
+  "tinh_huong": "Bản án sơ thẩm tuyên buộc Công ty A phải thanh toán tiền hàng và tiền phạt vi phạm, nhưng trong quá trình xét xử, Tòa án cấp sơ thẩm không triệu tập Người có quyền lợi, nghĩa vụ liên quan (Bên bảo lãnh thanh toán) tham gia phiên tòa.",
+  "yeu_cau": "Soạn thảo Đơn kháng cáo và xây dựng luận cứ yêu cầu Tòa án cấp phúc thẩm hủy bản án sơ thẩm để giải quyết lại.",
+  "tieu_chi": "Dẫn chiếu Điều 310 BLTTDS 2015 (Hủy bản án sơ thẩm do vi phạm nghiêm trọng thủ tục tố tụng làm ảnh hưởng đến quyền và lợi ích hợp pháp của đương sự)."
+ },
+ {
+  "id": "3.1",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Đánh giá Tương tự Gây nhầm lẫn của Nhãn hiệu Chữ (Trademark Similarity)",
+  "tinh_huong": "Khách hàng muốn nộp đơn đăng ký nhãn hiệu chữ \"VINAPEST\" cho dịch vụ diệt côn trùng (Nhóm 37). Đã có nhãn hiệu đối chứng \"VINAPEST CONTROL\" đã được cấp bằng bảo hộ cho cùng nhóm dịch vụ.",
+  "yeu_cau": "Đánh giá khả năng bị từ chối cấp văn bằng bảo hộ theo Điều 74 Luật Sở hữu trí tuệ (sửa đổi, bổ sung 2022).",
+  "tieu_chi": "Phân tích chi tiết về cấu trúc từ ngữ, ý nghĩa, cách phát âm và phạm vi dịch vụ trùng lặp dẫn đến nguy cơ nhầm lẫn cho người tiêu dùng."
+ },
+ {
+  "id": "3.2",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Phản đối Cấp Văn bằng Bảo hộ Nhãn hiệu (Trademark Opposition)",
+  "tinh_huong": "Phát hiện nhãn hiệu của đối thủ cạnh tranh đang được công bố trên Công báo Sở hữu công nghiệp có dấu hiệu sao chép nhãn hiệu nổi tiếng của khách hàng ở nước ngoài (chưa đăng ký tại Việt Nam).",
+  "yeu_cau": "Soạn thảo Đơn ý kiến của bên thứ ba / Phản đối đơn hợp thức gửi Cục Sở hữu trí tuệ; hướng dẫn các tài liệu chứng minh nhãn hiệu nổi tiếng.",
+  "tieu_chi": "Dẫn chiếu Điều 112, 112a và tiêu chí công nhận nhãn hiệu nổi tiếng theo Điều 75 Luật Sở hữu trí tuệ."
+ },
+ {
+  "id": "3.3",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Chấm dứt Hiệu lực Văn bằng Bảo hộ do Không sử dụng (Non-use Cancellation)",
+  "tinh_huong": "Chủ văn bằng bảo hộ Nhãn hiệu A tại Việt Nam không sử dụng nhãn hiệu này trong hoạt động thương mại liên tục 05 năm. Khách hàng muốn yêu cầu hủy bỏ/chấm dứt hiệu lực để đăng ký nhãn hiệu tương tự.",
+  "yeu_cau": "Xây dựng căn cứ pháp lý, lập hồ sơ yêu cầu chấm dứt hiệu lực và kế hoạch thu thập chứng cứ chứng minh chủ văn bằng không sử dụng.",
+  "tieu_chi": "Dẫn chiếu Điểm d Khoản 1 Điều 95 Luật Sở hữu trí tuệ và quy định về nghĩa vụ chứng minh việc sử dụng nhãn hiệu."
+ },
+ {
+  "id": "3.4",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Tranh chấp Quyền Tác giả đối với Mã nguồn Phần mềm (Software Copyright)",
+  "tinh_huong": "Cựu Trưởng nhóm lập trình của Công ty Công nghệ sao chép mã nguồn của phần mềm kế toán do công ty phát triển trong thời gian làm việc để mở công ty riêng kinh doanh phần mềm tương tự.",
+  "yeu_cau": "Xác định Chủ sở hữu quyền tác giả đối với tác phẩm tạo ra theo nhiệm vụ/hợp đồng lao động và lập kế hoạch thu thập chứng cứ để khởi kiện hành vi xâm phạm.",
+  "tieu_chi": "Dẫn chiếu Điều 19, 20, Điều 39 Luật Sở hữu trí tuệ (Tổ chức giao nhiệm vụ là chủ sở hữu quyền tài sản và quyền công bố tác phẩm)."
+ },
+ {
+  "id": "3.5",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Xử lý Xâm phạm Quyền Sở hữu Công nghiệp qua Biện pháp Hành chính",
+  "tinh_huong": "Khách hàng phát hiện một chuỗi cửa hàng đang bày bán sản phẩm túi xách gắn nhãn hiệu giả mạo nhãn hiệu đã được bảo hộ của khách hàng tại Hà Nội.",
+  "yeu_cau": "Lập hồ sơ yêu cầu xử lý vi phạm gửi lực lượng Quản lý Thị trường hoặc Thanh tra Bộ Khoa học & Công nghệ; tư vấn thủ tục giám định sở hữu công nghiệp tại Viện Khoa học Sở hữu trí tuệ (VIPRI).",
+  "tieu_chi": "Dẫn chiếu Nghị định về xử phạt vi phạm hành chính trong lĩnh vực sở hữu công nghiệp và quy trình lấy kết luận giám định làm căn cứ xử lý."
+ },
+ {
+  "id": "3.6",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Soát xét Hợp đồng Nhượng quyền Thương mại (Franchise Agreement)",
+  "tinh_huong": "Chuỗi trà sữa nước ngoài muốn nhượng quyền độc quyền tổng thể (Master Franchise) vào Việt Nam cho Công ty B.",
+  "yeu_cau": "Rà soát điều kiện nhượng quyền (thời gian hoạt động của hệ thống nhượng quyền), thủ tục đăng ký hoạt động nhượng quyền thương mại với Bộ Công Thương và các điều khoản hạn chế cạnh tranh/kiểm soát chất lượng.",
+  "tieu_chi": "Dẫn chiếu Luật Thương mại 2005 (Mục 8 - Nhượng quyền thương mại) và các Nghị định hướng dẫn về điều kiện nhượng quyền thương mại từ nước ngoài vào Việt Nam."
+ },
+ {
+  "id": "3.7",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Li-xăng Nhãn hiệu (Trademark Licensing) và Rủi ro Kiểm soát Chất lượng",
+  "tinh_huong": "Chủ sở hữu nhãn hiệu cấp quyền sử dụng nhãn hiệu (Li-xăng không độc quyền) cho 03 nhà máy gia công nhưng không đưa điều khoản kiểm tra chất lượng hàng hóa vào hợp đồng.",
+  "yeu_cau": "Đánh giá rủi ro đối với giá trị nhãn hiệu và nghĩa vụ của Bên giao li-xăng theo quy định pháp luật SHTT.",
+  "tieu_chi": "Dẫn chiếu Điều 142 Luật Sở hữu trí tuệ (Nghĩa vụ của bên giao quyền phải bảo đảm chất lượng hàng hóa mang nhãn hiệu không thua kém chất lượng của bên giao quyền)."
+ },
+ {
+  "id": "3.8",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Tranh chấp Kiểu dáng Công nghiệp (Industrial Design Infringement)",
+  "tinh_huong": "Doanh nghiệp A có Bằng độc quyền kiểu dáng công nghiệp chai đựng nước giải khát. Doanh nghiệp B sản xuất mẫu chai có hình dáng tổng thể tương tự, chỉ khác phần gân nổi ở đáy chai.",
+  "yeu_cau": "Phân tích các yếu tố tạo dáng cơ bản, đánh giá khả năng xâm phạm kiểu dáng theo yếu tố nhận biết của người tiêu dùng có hiểu biết trung bình.",
+  "tieu_chi": "Dẫn chiếu các quy định pháp luật SHTT về phạm vi bảo hộ kiểu dáng công nghiệp và phương pháp so sánh tập hợp các đặc điểm tạo dáng cơ bản."
+ },
+ {
+  "id": "3.9",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Xử lý Hành vi Cạnh tranh Không lành mạnh liên quan đến Tên miền (Cybersquatting)",
+  "tinh_huong": "Một cá nhân đăng ký tên miền .vn trùng hoàn toàn với nhãn hiệu nổi tiếng của Khách hàng, sau đó rao bán lại cho Khách hàng với giá 500 triệu đồng hoặc dọa chuyển hướng tên miền sang trang web đối thủ.",
+  "yeu_cau": "Xây dựng phương án xử lý (Thủ tục giải quyết tranh chấp tên miền tại VNNIC/Trung tâm trọng tài hoặc Khởi kiện hành vi cạnh tranh không lành mạnh tại Tòa án).",
+  "tieu_chi": "Dẫn chiếu Điều 130 Luật Sở hữu trí tuệ (Hành vi cạnh tranh không lành mạnh về chiếm giữ, sử dụng tên miền) và Thông tư hướng dẫn giải quyết tranh chấp tên miền quốc gia .vn."
+ },
+ {
+  "id": "3.10",
+  "linh_vuc": "Sở hữu trí tuệ & Nhượng quyền",
+  "tieu_de": "Đăng ký Sáng chế và Đánh giá Tính Mới (Novelty of Patent)",
+  "tinh_huong": "Nhà sáng chế đã công bố công trình nghiên cứu về cơ chế lọc nước mới trong một hội thảo khoa học quốc tế có xuất bản kỷ yếu trước ngày nộp đơn đăng ký sáng chế 04 tháng.",
+  "yeu_cau": "Đánh giá sáng chế có bị mất \"Tính mới\" hay không và điều kiện áp dụng ngoại lệ không bị coi là mất tính mới (Ân hạn tính mới).",
+  "tieu_chi": "Dẫn chiếu Điều 60 Luật Sở hữu trí tuệ (Quy định về thời hạn ân hạn 12 tháng kể từ ngày công bố công khai mà không làm mất tính mới của sáng chế). Dưới đây là 10 kịch bản kiểm thử chuyên sâu tập trung trực tiếp vào nghiệp vụ Thành lập doanh nghiệp, Thay đổi nội dung đăng ký doanh nghiệp và Thủ tục đăng ký/điều chỉnh dự án đầu tư: 1. Nhóm Kịch bản: Thành lập Doanh nghiệp & Đăng ký Ngành nghề Kinh doanh"
+ },
+ {
+  "id": "4.1",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Đặt tên doanh nghiệp có yếu tố gây nhầm lẫn/trùng lặp và quyền SHTT",
+  "tinh_huong": "Khách hàng muốn thành lập Công ty Cổ phần với tên dự kiến là \"Công ty CP Tập đoàn Bất động sản Vinhomes Center\". Trong khi đó, \"Vinhomes\" là nhãn hiệu nổi tiếng đã được bảo hộ.",
+  "yeu_cau": "Thẩm định tính hợp pháp của tên doanh nghiệp dự kiến theo quy định đăng ký kinh doanh và rủi ro bị xử lý xâm phạm quyền sở hữu công nghiệp.",
+  "tieu_chi": "Dẫn chiếu Điều 38, 39, 41 Luật Doanh nghiệp 2020 và Điều 19 Nghị định 01/2021/NĐ-CP (Tên trùng và tên gây nhầm lẫn; xử lý tên doanh nghiệp xâm phạm quyền sở hữu công nghiệp)."
+ },
+ {
+  "id": "4.2",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Thành lập doanh nghiệp có thành viên là Cán bộ/Công chức/Viên chức",
+  "tinh_huong": "Một Giám đốc Bệnh viện công lập tuyến tỉnh muốn cùng 02 bác sĩ khác góp vốn thành lập Công ty TNHH Phòng khám Đa khoa tư nhân và trực tiếp làm Người đại diện theo pháp luật kiêm Chủ tịch Hội đồng thành viên.",
+  "yeu_cau": "Đánh giá quyền thành lập, góp vốn và quản lý doanh nghiệp của các cá nhân này.",
+  "tieu_chi": "Dẫn chiếu Điều 17 Luật Doanh nghiệp 2020, Luật Cán bộ, công chức, Luật Viên chức và Luật Phòng, chống tham nhũng (Cán bộ, công chức, viên chức quản lý không được thành lập, quản trị, điều hành doanh nghiệp)."
+ },
+ {
+  "id": "4.3",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Lựa chọn mã ngành VSIC & Xử lý ngành nghề kinh doanh có điều kiện",
+  "tinh_huong": "Khách hàng thành lập doanh nghiệp cung cấp dịch vụ: \"Sàn giao dịch thương mại điện tử kết hợp ví điện tử và dịch vụ trung gian thanh toán\".",
+  "yeu_cau": "Phân tách và tra cứu mã ngành kinh tế Việt Nam (VSIC cấp 4); xác định các điều kiện đầu tư kinh doanh, giấy phép con và vốn pháp định bắt buộc trước khi chính thức hoạt động.",
+  "tieu_chi": "Dẫn chiếu Quyết định 27/2018/QĐ-TTg về Hệ thống ngành kinh tế Việt Nam, Nghị định về quản lý hoạt động thương mại điện tử và các quy định của Ngân hàng Nhà nước về dịch vụ trung gian thanh toán. 2. Nhóm Kịch bản: Thay đổi Nội dung Đăng ký Doanh nghiệp"
+ },
+ {
+  "id": "4.4",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Thay đổi Người đại diện theo pháp luật khi có tranh chấp nội bộ/Người cũ bất hợp tác",
+  "tinh_huong": "Công ty TNHH 2 thành viên (Thành viên A nắm 60%, Thành viên B kiêm Giám đốc/Đại diện pháp luật nắm 40%). Thành viên B không chịu triệu tập họp, không ký hồ sơ thay đổi Người đại diện theo pháp luật sang cho A.",
+  "yeu_cau": "Xây dựng quy trình triệu tập họp Hội đồng thành viên hợp lệ và bộ hồ sơ đăng ký thay đổi Người đại diện theo pháp luật nộp lên Phòng Đăng ký kinh doanh mà không cần chữ ký của Người đại diện cũ.",
+  "tieu_chi": "Dẫn chiếu Điều 57, 58 Luật Doanh nghiệp 2020 và Nghị định 01/2021/NĐ-CP về quyền triệu tập của nhóm thành viên sở hữu từ 50% trở lên và quy định về việc ký hồ sơ đăng ký thay đổi khi Người đại diện cũ không hợp tác."
+ },
+ {
+  "id": "4.5",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Thay đổi địa chỉ trụ sở chính khác quận/tỉnh và thủ tục Chốt thuế",
+  "tinh_huong": "Công ty chuyển trụ sở chính từ Quận Cầu Giấy (TP. Hà Nội) sang TP. Dĩ An (Tỉnh Bình Dương), đang trong quá trình bị cơ quan thuế Quận Cầu Giấy ra quyết định kiểm tra thuế tại trụ sở.",
+  "yeu_cau": "Lập trình tự thực hiện thủ tục thay đổi địa chỉ: Quy trình chốt nghĩa vụ thuế tại nơi đi (Mẫu 09-MST), thủ tục nộp hồ sơ tại Sở Kế hoạch và Đầu tư nơi đến, và cách xử lý việc chuyển quận khi đang có quyết định kiểm tra thuế.",
+  "tieu_chi": "Dẫn chiếu Luật Quản lý thuế, Thông tư hướng dẫn về đăng ký thuế và Điều 47 Nghị định 01/2021/NĐ-CP."
+ },
+ {
+  "id": "4.6",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Tăng vốn điều lệ do có Nhà đầu tư mới và Rủi ro pha loãng tỷ lệ",
+  "tinh_huong": "Công ty Cổ phần có vốn điều lệ 10 tỷ đồng, dự kiến phát hành thêm cổ phần trị giá 20 tỷ đồng cho một nhà đầu tư chiến lược bên ngoài, trong khi có 01 cổ đông sáng lập (nắm 15%) bỏ phiếu không tán thành vì sợ bị pha loãng tỷ lệ.",
+  "yeu_cau": "Thẩm định thẩm quyền thông qua việc chào bán cổ phần riêng lẻ của ĐHĐCĐ, tỷ lệ biểu quyết cần thiết, quyền ưu tiên mua của cổ đông hiện hữu và hồ sơ thay đổi vốn điều lệ.",
+  "tieu_chi": "Dẫn chiếu Điều 123, 125, 148 Luật Doanh nghiệp 2020 (Thẩm quyền chào bán cổ phần riêng lẻ, tỷ lệ thông qua nghị quyết ĐHĐCĐ và quyền ưu tiên mua cổ phần của cổ đông). 3. Nhóm Kịch bản: Đăng ký & Điều chỉnh Dự án Đầu tư (FDI & Dự án ngoài Khu công nghiệp)"
+ },
+ {
+  "id": "4.7",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Cấp Giấy chứng nhận đăng ký đầu tư (IRC) kết hợp Thành lập Tổ chức kinh tế (ERC)",
+  "tinh_huong": "Một nhà đầu tư Nhật Bản lần đầu đầu tư vào Việt Nam dự kiến thành lập công ty 100% vốn FDI để mở nhà máy sản xuất linh kiện điện tử tại tỉnh Bắc Ninh (ngoài Khu công nghiệp).",
+  "yeu_cau": "Lập lộ trình pháp lý 02 bước (Xin cấp IRC -> Xin cấp ERC), danh mục tài liệu giải trình năng lực tài chính, địa điểm thực hiện dự án và đánh giá sơ bộ tác động môi trường.",
+  "tieu_chi": "Dẫn chiếu Điều 22, 37, 38 Luật Đầu tư 2020 và Nghị định 31/2021/NĐ-CP hướng dẫn thi hành Luật Đầu tư."
+ },
+ {
+  "id": "4.8",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Thủ tục Chấp thuận chủ trương đầu tư đối với Dự án có giao đất/cho thuê đất",
+  "tinh_huong": "Doanh nghiệp trong nước xin cấp phép Dự án Khu nghỉ dưỡng sinh thái diện tích 15 ha tại Phú Quốc, có đề xuất chuyển mục đích sử dụng đất rừng sản xuất sang đất thương mại dịch vụ.",
+  "yeu_cau": "Xác định thẩm quyền Chấp thuận chủ trương đầu tư (Thủ tướng Chính phủ hay UBND cấp tỉnh), hình thức lựa chọn nhà đầu tư (Đấu thầu dự án có sử dụng đất hay Đấu giá quyền sử dụng đất).",
+  "tieu_chi": "Dẫn chiếu Điều 30, 31, 32, Điều 29 Luật Đầu tư 2020 và các quy định của Luật Đất đai."
+ },
+ {
+  "id": "4.9",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Điều chỉnh Dự án Đầu tư: Tăng vốn, Thay đổi mục tiêu và Kéo dài tiến độ (Extension)",
+  "tinh_huong": "Dự án Nhà máy chế biến thực phẩm FDI đã được cấp Giấy chứng nhận đăng ký đầu tư từ năm 2023, dự kiến hoàn thành vào 06/2025 nhưng bị chậm tiến độ. Nay nhà đầu tư muốn điều chỉnh: Tăng vốn thêm 5 triệu USD, bổ sung mục tiêu \"xuất khẩu nông sản thô\" và xin giãn tiến độ thực hiện thêm 18 tháng.",
+  "yeu_cau": "Rà soát điều kiện giãn tiến độ (không quá 24 tháng), hồ sơ giải trình lý do chậm tiến độ, thủ tục thẩm định điều kiện xuất khẩu nông sản và quy trình điều chỉnh IRC.",
+  "tieu_chi": "Dẫn chiếu Điều 41, 44 Luật Đầu tư 2020 và các điều kiện ràng buộc đối với việc kéo dài tiến độ dự án."
+ },
+ {
+  "id": "4.10",
+  "linh_vuc": "Thành lập / thay đổi ĐKDN & Dự án đầu tư",
+  "tieu_de": "Nhà đầu tư nước ngoài Mua lại Vốn góp / Cổ phần (Thủ tục M&A Approval)",
+  "tinh_huong": "Nhà đầu tư Trung Quốc mua lại 65% vốn góp của một công ty Việt Nam sở hữu 03 khách sạn ven biển tại TP. Đà Nẵng và Nha Trang (khu vực biên giới biển).",
+  "yeu_cau": "Thẩm định hồ sơ xin Chấp thuận góp vốn/mua cổ phần (M&A Approval) tại Sở Kế hoạch và Đầu tư; xác định yêu cầu lấy ý kiến Bộ Quốc phòng/Bộ Công an về bảo đảm quốc phòng, an ninh đối với đất ven biển.",
+  "tieu_chi": "Dẫn chiếu Điểm b Khoản 2 Điều 26 Luật Đầu tư 2020 và Nghị định 31/2021/NĐ-CP (Điều kiện quốc phòng, an ninh khi nhà đầu tư nước ngoài góp vốn vào doanh nghiệp có quyền sử dụng đất tại khu vực biên giới biển, hải đảo)."
+ }
+]

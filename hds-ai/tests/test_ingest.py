@@ -542,6 +542,15 @@ class AutoLearnSafetyTests(unittest.TestCase):
                         path, labels, "drive-id", "checksum", diagnostics=diagnostics)
 
         self.assertTrue(learned)
+        # 03/10/2026: khoá drive_file_id đang bị bản ghi ĐÃ GỠ giữ phải được nhả
+        # TRƯỚC khi INSERT — không thì tải lại đúng tệp vào đúng chỗ là
+        # UniqueViolation. Chỉ đụng bản ghi active=false.
+        sqls = [c[0] for c in cursor.calls]
+        nha = next(i for i, q in enumerate(sqls) if "'da_go:'" in q)
+        them = next(i for i, q in enumerate(sqls) if "INSERT INTO documents" in q)
+        self.assertLess(nha, them)
+        self.assertIn("NOT coalesce(active, true)", sqls[nha])
+        self.assertEqual(cursor.calls[nha][1], ("drive-id",))
         chunk_call = next(call for call in cursor.calls if "INSERT INTO chunks" in call[0])
         self.assertIn("page_number", chunk_call[0])
         self.assertEqual("Nhân sự", chunk_call[1][4])

@@ -1,0 +1,14 @@
+SERVICE AGREEMENT (FICTITIOUS DATA FOR TESTING ONLY)
+No. EN01/2026
+
+Between: ALPHA TESTING COMPANY LIMITED, enterprise code 0109999001, Hanoi, Vietnam (the "Client"); and
+BETA TESTING JOINT STOCK COMPANY, enterprise code 0108888002, Ho Chi Minh City, Vietnam (the "Provider").
+
+Article 1. Services. The Provider shall develop and maintain the Client's accounting software.
+Article 2. Fees. The total fee is VND 600,000,000, payable in two instalments.
+Article 3. Late payment. Overdue amounts bear interest at 2% per month.
+Article 4. Liquidated damages. A party in breach shall pay liquidated damages equal to 15% of the contract value.
+Article 5. Termination. The Provider may terminate this Agreement at any time without notice; the Client may not terminate.
+Article 6. Indemnity. The Client shall indemnify the Provider against all losses of any kind.
+Article 7. Governing law. This Agreement is governed by the laws of England and Wales.
+Article 8. Disputes. Any dispute shall be finally settled by arbitration in Singapore.

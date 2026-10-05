@@ -56,6 +56,10 @@ export const TRANG_THAI: Record<KhoTrangThai, { label: string; cls: string }> = 
     label: 'Không hỗ trợ',
     cls: 'bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
   },
+  dang_hoc: {
+    label: 'Đang học',
+    cls: 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950 dark:text-sky-300 dark:border-sky-900',
+  },
 };
 
 const TRANG = 200;
@@ -173,6 +177,10 @@ export const KhoTaiLieuCard: React.FC = () => {
     taiTang(path, locTenApDung, offset);
     if (path !== '') api.getKhoTang({ path: '', limit: 1 }).then((d) => setGoc(d.thu_muc)).catch(() => {});
   };
+  // Hẹn giờ làm mới phải gọi bản lamMoi MỚI NHẤT — người dùng có thể đã sang
+  // thư mục khác trong lúc chờ.
+  const lamMoiRef = useRef(lamMoi);
+  lamMoiRef.current = lamMoi;
 
   const batTatNut = async (tm: KhoThuMuc) => {
     const dangMo = moRong.has(tm.path);
@@ -281,27 +289,35 @@ export const KhoTaiLieuCard: React.FC = () => {
 
   const chonFile = () => fileInput.current?.click();
 
-  const taiLen = async (files: FileList | null) => {
-    if (!files || files.length === 0 || !path) return;
+  const taiLen = async (files: File[]) => {
+    if (files.length === 0 || !path) return;
     setDangTaiLen(true);
     setTienDo(0);
     setKetQuaTaiLen(null);
     try {
       const r = await api.taiLenKho({ path, files, auto_approve: duyetLuon, onProgress: setTienDo });
       setKetQuaTaiLen(r.ket_qua);
-      const ok = r.ket_qua.filter((k) => k.ok).length;
+      const tong = r.ket_qua.length;
+      const loi = r.ket_qua.filter((k) => !k.ok).length;
+      const dangHoc = r.ket_qua.filter((k) => k.ok && k.trang_thai === 'dang_hoc').length;
+      const xong = tong - loi - dangHoc;
+      const phan = [
+        xong ? `${xong} đã học` : '',
+        dangHoc ? `${dangHoc} đang học nền` : '',
+        loi ? `${loi} lỗi` : '',
+      ].filter(Boolean).join(', ');
       showToast(
-        ok === r.ket_qua.length
-          ? `Đã tải lên và học ${ok} file.`
-          : `Học được ${ok}/${r.ket_qua.length} file — xem chi tiết bên dưới.`,
-        ok === r.ket_qua.length ? 'success' : 'info'
+        `Tải lên ${tong} file: ${phan}${loi || dangHoc ? ' — xem chi tiết bên dưới.' : '.'}`,
+        loi ? 'info' : 'success'
       );
       lamMoi();
+      // Tệp còn đang học nền: tự làm mới cây một lần nữa để nhãn đổi mà không
+      // phải bấm Tải lại (luồng nền học tiếp sau khi API đã trả lời).
+      if (dangHoc) window.setTimeout(() => lamMoiRef.current(), 60000);
     } catch (err: any) {
       showToast(err?.message || 'Tải lên thất bại.', 'error');
     } finally {
       setDangTaiLen(false);
-      if (fileInput.current) fileInput.current.value = '';
     }
   };
 
@@ -587,7 +603,13 @@ export const KhoTaiLieuCard: React.FC = () => {
                   <button type="button" onClick={lamMoi} className={NUT_XANH} title="Tải lại">
                     <RefreshCw className={`w-3 h-3 ${dangTai ? 'animate-spin' : ''}`} />
                   </button>
-                  <input ref={fileInput} type="file" multiple className="hidden" onChange={(e) => taiLen(e.target.files)} />
+                  <input ref={fileInput} type="file" multiple className="hidden" onChange={(e) => {
+                    // Chụp danh sách TRƯỚC khi xoá ô chọn: FileList là đối
+                    // tượng sống, đặt value='' là nó rỗng theo.
+                    const ds = Array.from(e.target.files || []);
+                    e.target.value = '';
+                    taiLen(ds);
+                  }} />
                 </div>
               </div>
 

@@ -698,7 +698,12 @@ class ChatDraftTests(unittest.TestCase):
                "for_name": "ngan", "like_name": None}
         text = chat_draft._missing_template_answer(req)["answer"]
         self.assertIn("chưa có mẫu hợp đồng lao động", text)
-        self.assertIn("4. HỢP ĐỒNG MẪU", text)
+        self.assertIn("3. HỢP ĐỒNG MẪU", text)
+        self.assertIn("5. THƯ MẪU - BIỂU MẪU", text)
+        # 02/10/2026 (F-14): kho nằm trên máy chủ, quét mỗi 3 phút — không còn Drive.
+        self.assertNotIn("Drive", text)
+        self.assertNotIn("15 phút", text)
+        self.assertIn("3 phút", text)
         self.assertIn("Soạn tài liệu", text)
 
     DOCS = [
@@ -741,6 +746,8 @@ class ChatDraftTests(unittest.TestCase):
         text = chat_draft._missing_answer(req)["answer"]
         self.assertIn("chưa có hợp đồng lao động", text)
         self.assertIn("8. HỒ SƠ NHÂN SỰ/Tuan/", text)
+        self.assertNotIn("Drive", text)
+        self.assertNotIn("15 phút", text)
         self.assertIn("Soạn tài liệu", text)
 
 

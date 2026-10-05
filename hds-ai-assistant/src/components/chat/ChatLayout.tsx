@@ -5,7 +5,7 @@ import { ChatMessageItem } from './ChatMessageItem';
 import { BoMauPicker } from './BoMauPicker';
 import * as api from '../../api';
 import type { BoMau, BrowseDocument, MatterAlerts, MethodTemplate, TempAttachment } from '../../types';
-import { isClientRole, ATTACH_ACCEPT_FALLBACK, canAccessAdmin } from '../../constants';
+import { isClientRole, ATTACH_ACCEPT_FALLBACK, canAccessAdmin, coTinhNang } from '../../constants';
 import { BUILD_ID } from '../../banMoi';
 import {
   Send,
@@ -28,6 +28,13 @@ import {
 
 const nowLabel = () =>
   new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+
+/** Lời chào cho tài khoản KHÔNG được đính kèm (khách chưa được bật 'dinh_kem').
+ *  Lời chào mặc định ở AppContext mời "kéo thả tài liệu" — nói vậy với người
+ *  không có nút đính kèm là hứa một thứ màn hình không có. */
+const WELCOME_KHONG_DINH_KEM =
+  'Xin chào! Tôi là Trợ lý AI của HDS Law Firm. Hãy đặt câu hỏi pháp lý — mô tả càng rõ ' +
+  'tình huống (bên nào, việc gì, thời điểm nào) thì câu trả lời càng sát.';
 
 /**
  * Tay cầm cắt lượt trả lời đang chạy — để Ở MỨC MODULE, không phải useRef.
@@ -145,8 +152,12 @@ export const ChatLayout: React.FC = () => {
   };
   const serverConvId = activeConversation?.server_id;
   const attachments = activeConversation?.attachments ?? [];
-  // Chỉ nhân viên nội bộ: /upload/extract nằm sau require(INTERNAL_ROLES).
-  const canUpload = !isClient;
+  // Theo chức năng 'dinh_kem' (F-06): nội bộ mặc định có đủ chức năng nên hành
+  // vi nhân viên không đổi; khách chỉ thấy nút đính kèm khi quản trị đã tick.
+  // Máy chủ mở cho khách có 'dinh_kem' các cửa POST /conversations?kind=chat,
+  // /upload/extract, GET /conversations/{id}/temp-files, DELETE /temp-files/{id}
+  // và đọc file qua /chat/stream với use_temp=true — đúng các đường dưới đây.
+  const canUpload = coTinhNang(currentUser, 'dinh_kem');
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -161,7 +172,7 @@ export const ChatLayout: React.FC = () => {
   }, [serverConvId, activeConvId]);
 
   useEffect(() => {
-    if (isClient) return;
+    if (!canUpload) return;
     api
       .getUploadFormats()
       .then((res) => {
@@ -171,7 +182,7 @@ export const ChatLayout: React.FC = () => {
       .catch(() => {
         /* im lặng — đã có danh sách dự phòng, máy chủ vẫn là chốt cuối */
       });
-  }, [isClient]);
+  }, [canUpload]);
 
   const openSourcePicker = async () => {
     setShowSourcePicker(true);
@@ -694,7 +705,7 @@ export const ChatLayout: React.FC = () => {
               </button>
             )}
 
-            {!isClient && (
+            {canUpload && (
               <button
                 id="chat-upload-btn"
                 type="button"
@@ -782,7 +793,18 @@ export const ChatLayout: React.FC = () => {
         {/* Danh sách tin nhắn */}
         <div className="flex-1 overflow-y-auto min-h-0">
           {hasConversation ? (
-            messages.map((msg) => <ChatMessageItem key={msg.id} message={msg} />)
+            messages.map((msg) => (
+              <ChatMessageItem
+                key={msg.id}
+                message={
+                  // Lời chào dựng sẵn ở AppContext mời kéo thả tài liệu — đổi
+                  // sang bản không nhắc đính kèm khi tài khoản không có 'dinh_kem'.
+                  !canUpload && msg.id.startsWith('welcome-')
+                    ? { ...msg, text: WELCOME_KHONG_DINH_KEM }
+                    : msg
+                }
+              />
+            ))
           ) : (
             <div className="h-full flex flex-col items-center justify-center p-8 text-center">
               <Sparkles className="w-12 h-12 text-hds-navy dark:text-blue-400 mb-3 opacity-40" />
@@ -790,8 +812,9 @@ export const ChatLayout: React.FC = () => {
                 Trợ lý AI Pháp lý HDS
               </h3>
               <p className="text-xs max-w-sm mt-1 text-slate-500 dark:text-slate-400">
-                Đặt câu hỏi pháp lý hoặc kéo thả tài liệu vào đây để tra cứu điều khoản, hợp
-                đồng và tiền lệ tư vấn của HDS.
+                {canUpload
+                  ? 'Đặt câu hỏi pháp lý hoặc kéo thả tài liệu vào đây để tra cứu điều khoản, hợp đồng và tiền lệ tư vấn của HDS.'
+                  : 'Đặt câu hỏi pháp lý để tra cứu điều khoản, hợp đồng và tiền lệ tư vấn của HDS.'}
               </p>
             </div>
           )}
@@ -913,7 +936,7 @@ export const ChatLayout: React.FC = () => {
               />
 
               <div className="flex items-center gap-1 shrink-0 pb-0.5">
-                {!isClient && (
+                {canUpload && (
                   <>
                     <button
                       type="button"
@@ -1011,7 +1034,9 @@ export const ChatLayout: React.FC = () => {
                   <span className="shrink-0">Chế độ:</span>
                   {attachments.length > 0 ? (
                     <span className="text-blue-700 dark:text-blue-300 font-semibold bg-blue-50 dark:bg-blue-950/60 px-1.5 py-0.5 rounded border border-blue-200 dark:border-blue-800 truncate">
-                      Đọc {attachments.length} file đính kèm + kho nội bộ
+                      {isClient
+                        ? `Đọc ${attachments.length} file đính kèm`
+                        : `Đọc ${attachments.length} file đính kèm + kho nội bộ`}
                     </span>
                   ) : (
                     <span className="truncate">

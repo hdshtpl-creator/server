@@ -139,16 +139,27 @@ class VanDangNhapTests(unittest.TestCase):
         return types.SimpleNamespace(headers={}, client=types.SimpleNamespace(host=ip))
 
     def test_qua_so_lan_thi_429(self):
+        """Từ 03/10/2026 (F-12) chỉ lượt SAI bị đếm: _login_rate_check chỉ
+        kiểm, _login_that_bai mới ghi."""
         with mock.patch.object(api, "_login_hits", {}), \
              mock.patch.object(api, "_login_hits_lock", threading.Lock()), \
              mock.patch.object(api, "LOGIN_RATE_MAX", 3):
             for _ in range(3):
                 api._login_rate_check(self._request())
+                api._login_that_bai(self._request())
             with self.assertRaises(HTTPException) as ctx:
                 api._login_rate_check(self._request())
             self.assertEqual(ctx.exception.status_code, 429)
             # IP khác không bị vạ lây
             api._login_rate_check(self._request(ip="198.51.100.2"))
+
+    def test_dang_nhap_dung_khong_bi_dem(self):
+        """Cả văn phòng chung một IP đăng nhập ĐÚNG dồn đầu giờ không bị khoá."""
+        with mock.patch.object(api, "_login_hits", {}), \
+             mock.patch.object(api, "_login_hits_lock", threading.Lock()), \
+             mock.patch.object(api, "LOGIN_RATE_MAX", 3):
+            for _ in range(20):
+                api._login_rate_check(self._request())   # không lượt nào sai
 
     def test_mac_dinh_khong_tat(self):
         self.assertGreater(api.LOGIN_RATE_MAX, 0)

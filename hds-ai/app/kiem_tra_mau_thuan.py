@@ -78,7 +78,32 @@ def _gap_giu_do_dai(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Số kiểu Việt: 1.500.000 | 1.500.000,50 | 2,5 | 2.5 | 12 ; kiểu Anh 1,000,000.
 _SO = r"(?<![\d/.,])(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d{1,3}(?:,\d{3}){2,}|\d+(?:[.,]\d+)?)"
-_KHONG_XUONG_DONG = r"[^\n]"
+
+# Khoảng nối TỪ KHOÁ với CON SỐ phải nằm trong CÙNG MỘT MỆNH ĐỀ: không vượt
+# xuống dòng, dấu ";" hay dấu chấm kết câu (". " / chấm cuối văn bản). Dấu chấm
+# DÍNH chữ/số phía sau vẫn đi qua được — đó là dấu nghìn "1.500.000" hay số
+# điều "Điều 5.2", không phải hết câu.
+# Ca thật (kiểm thử 02/10/2026, KTMT01): "bổ sung điều khoản thử việc 90 ngày
+# …; thời hạn hợp đồng 48 tháng; …" — khoảng cũ [^\n] cho từ khoá "thử việc"
+# ở đầu câu với tới "48 tháng" của mệnh đề sau, ra mục thử việc 1.440 ngày
+# thay vì thời hạn hợp đồng 48 tháng.
+_TRONG_MENH_DE = r"(?:[^\n;.]|\.(?=\S))"
+
+
+def _khoang(toi_da: int, chan: str | None = None) -> str:
+    """Khoảng lười ≤ toi_da ký tự trong cùng mệnh đề. ``chan``: regex mà khoảng
+    KHÔNG được chứa — từ khoá của loại khác đứng gần con số hơn thì con số
+    thuộc về loại đó (để mẫu sau trong _MAU lấy), không thuộc từ khoá xa."""
+    tok = _TRONG_MENH_DE if not chan else rf"(?:(?!{chan}){_TRONG_MENH_DE})"
+    return tok + "{0,%d}?" % toi_da
+
+
+# Từ khoá "thời hạn hợp đồng" / "báo trước": nằm giữa "thử việc" và con số thì
+# con số là của thời hạn hợp đồng / thời hạn báo trước, không phải thử việc
+# ("…có thử việc, thời hạn hợp đồng 48 tháng", "trong thời gian thử việc phải
+# báo trước 3 ngày").
+_CHAN_THU_VIEC = (r"thoi\s*han[^\n;.]{0,20}?hop\s*dong|hop\s*dong[^\n;.]{0,30}?thoi\s*han"
+                  r"|bao[^\n;.]{0,25}?truoc")
 
 
 def _doc_so(s: str) -> float | None:
@@ -115,23 +140,23 @@ _DV_ = r"(?P<dv>%s)"
 
 _MAU: list[_Mau] = [
     _Mau("lai_suat", re.compile(
-        r"lai\s*suat" + _KHONG_XUONG_DONG + r"{0,60}?" + _SO_ +
+        r"lai\s*suat" + _khoang(60) + _SO_ +
         r"\s*%\s*(?:/|moi|mot|hang|tren|theo|trong)?\s*(?:0?1\s+)?" + _DV_ % r"nam|thang" + r"\b"), 1, "%/nam"),
     _Mau("lai_suat", re.compile(
         _SO_ + r"\s*%\s*/\s*(?:0?1\s+)?" + _DV_ % r"nam|thang" + r"\b"), 1, "%/nam"),
     _Mau("phat_vi_pham", re.compile(
-        r"phat" + _KHONG_XUONG_DONG + r"{0,60}?" + _SO_ + r"\s*%"), 2, "%"),
+        r"phat" + _khoang(60) + _SO_ + r"\s*%"), 2, "%"),
     _Mau("luong_thu_viec", re.compile(
-        r"thu\s*viec" + _KHONG_XUONG_DONG + r"{0,80}?" + _SO_ + r"\s*%" +
-        _KHONG_XUONG_DONG + r"{0,30}?luong"), 3, "%"),
+        r"thu\s*viec" + _khoang(80) + _SO_ + r"\s*%" +
+        _khoang(30) + r"luong"), 3, "%"),
     _Mau("luong_thu_viec", re.compile(
-        _SO_ + r"\s*%\s*(?:muc\s+|tien\s+)?luong" + _KHONG_XUONG_DONG + r"{0,60}?thu\s*viec"), 3, "%"),
+        _SO_ + r"\s*%\s*(?:muc\s+|tien\s+)?luong" + _khoang(60) + r"thu\s*viec"), 3, "%"),
     _Mau("thu_viec", re.compile(
-        r"thu\s*viec" + _KHONG_XUONG_DONG + r"{0,60}?" + _SO_ + r"\s*" +
+        r"thu\s*viec" + _khoang(60, _CHAN_THU_VIEC) + _SO_ + r"\s*" +
         _DV_ % r"ngay|thang|tuan" + r"\b"), 4, "ngay"),
     _Mau("thoi_han_hop_dong", re.compile(
-        r"(?:thoi\s*han" + _KHONG_XUONG_DONG + r"{0,20}?hop\s*dong|hop\s*dong" +
-        _KHONG_XUONG_DONG + r"{0,30}?thoi\s*han)" + _KHONG_XUONG_DONG + r"{0,50}?" + _SO_ +
+        r"(?:thoi\s*han" + _khoang(20) + r"hop\s*dong|hop\s*dong" +
+        _khoang(30) + r"thoi\s*han)" + _khoang(50) + _SO_ +
         r"\s*" + _DV_ % r"thang|nam" + r"\b"), 5, "thang"),
     _Mau("gio_lam_viec_ngay", re.compile(
         _SO_ + r"\s*(?:gio|h)\s*(?:/|moi|mot|trong|hang|tren)?\s*(?:0?1\s+)?ngay\b"), 6, "gio/ngay"),
@@ -142,10 +167,10 @@ _MAU: list[_Mau] = [
     _Mau("lam_them_nam", re.compile(
         _SO_ + r"\s*(?:gio|h)\s*(?:/|moi|mot|trong|hang|tren)?\s*(?:0?1\s+)?nam\b"), 7, "gio/nam"),
     _Mau("bao_truoc", re.compile(
-        r"bao" + _KHONG_XUONG_DONG + r"{0,25}?truoc" + _KHONG_XUONG_DONG + r"{0,25}?" + _SO_ +
+        r"bao" + _khoang(25) + r"truoc" + _khoang(25) + _SO_ +
         r"\s*" + _DV_ % r"ngay|thang|tuan" + r"\b"), 8, "ngay"),
     _Mau("dat_coc", re.compile(
-        r"(?:dat\s*coc|tien\s*coc)" + _KHONG_XUONG_DONG + r"{0,60}?" + _SO_ +
+        r"(?:dat\s*coc|tien\s*coc)" + _khoang(60) + _SO_ +
         # "%" không có \b phía sau (hai bên đều không phải ký tự chữ) — chỉ ràng \b cho từ.
         r"\s*(?P<dv>%|(?:trieu|ty|nghin|ngan)?\s*(?:dong|vnd|usd)\b|(?:trieu|ty)\b)"), 9, None),
     _Mau("so_tien", re.compile(
@@ -153,7 +178,7 @@ _MAU: list[_Mau] = [
     _Mau("ty_le", re.compile(_SO_ + r"\s*%"), 11, "%"),
     _Mau("thoi_han", re.compile(
         r"(?:trong\s*vong|thoi\s*han|cham\s*nhat|toi\s*da|khong\s*qua|it\s*nhat|toi\s*thieu|sau|truoc)" +
-        _KHONG_XUONG_DONG + r"{0,30}?" + _SO_ + r"\s*" + _DV_ % r"ngay|thang|nam|tuan" + r"\b"), 12, None),
+        _khoang(30) + _SO_ + r"\s*" + _DV_ % r"ngay|thang|nam|tuan" + r"\b"), 12, None),
 ]
 
 # Ngày: dd/mm/yyyy, dd-mm-yyyy, "ngày d tháng m năm y".

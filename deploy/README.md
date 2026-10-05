@@ -14,7 +14,7 @@ Vì giao diện và API cùng một tên miền nên **không cần CORS, không
 ## Yêu cầu máy chủ
 
 - **Ubuntu 22.04 / 24.04**, quyền `sudo`.
-- **RAM ≥ 24 GB** nếu chạy Ollama cùng máy (mặc định `qwen3:14b` + `bge-m3`). Máy 16 GB nên đổi sang `qwen3:8b` trong `.env`.
+- **RAM ≥ 24 GB** nếu chạy Ollama cùng máy (mặc định `qwen3:14b` + `bge-m3`). Máy 16 GB nên đổi sang `qwen3:8b` ở Quản trị → Cài đặt AI (biến `.env` chỉ là giá trị khởi đầu).
 - Đặt mã nguồn ở `/home/<user>/` hoặc `/opt/` — **đừng** đặt trong `/root/` (nginx không đọc được).
 - Cổng 80/443 mở ra Internet nếu dùng tên miền + HTTPS.
 
@@ -39,7 +39,7 @@ sudo bash deploy/setup.sh
 
 Xong, script tự làm hết: sinh mật khẩu ngẫu nhiên, dựng CSDL, nạp schema, tạo tài khoản
 đăng nhập, chạy backend bằng systemd, build giao diện, cấu hình nginx, và cấp HTTPS nếu
-có tên miền. Cuối cùng nó in ra địa chỉ truy cập và danh sách tài khoản demo.
+có tên miền. Cuối cùng nó in ra địa chỉ truy cập và tài khoản admin (mật khẩu tạm, bắt đổi lần đầu).
 
 ## Đưa ra Internet ngay — không cần sửa gì ở Namecheap
 
@@ -191,11 +191,17 @@ Bot tự học **mỗi file mới thả vào Google Drive** theo cấu trúc th�
 | [LUU_TRU_DU_LIEU.md](LUU_TRU_DU_LIEU.md) | Sơ đồ luồng dữ liệu, dữ liệu AI nằm ở đâu, sao lưu |
 | [API_KHACH_HANG.md](API_KHACH_HANG.md) | Cấp khoá API cho khách, phạm vi 3 gói Free/Plus/Pro |
 
+> Từ 27/08/2026 kho nằm trên máy chủ (`hds-ai/data/raw/`), không dùng Google Drive —
+> cây thư mục ở CAU_TRUC_DRIVE.md vẫn đúng; TRAIN_DRIVE.md đã lỗi thời.
+
 ```bash
-bash deploy/auto-learn.sh --dry-run              # xem sẽ học gì
-bash deploy/auto-learn.sh                          # học một lần
-sudo bash deploy/auto-learn.sh --install-timer     # tự học mỗi 15 phút
+bash deploy/hoc-tu-thu-muc.sh --dry-run          # xem sẽ học gì
+bash deploy/hoc-tu-thu-muc.sh                    # học một lượt
+bash deploy/hoc-tu-thu-muc.sh --install-cron     # tự quét mỗi 3 phút (không cần root)
 ```
+
+Kiểm thử nghiệm thu cho tester: [kiem-thu/KICH_BAN_KIEM_THU.md](kiem-thu/KICH_BAN_KIEM_THU.md)
+(+ sổ ghi kết quả `kiem-thu/KICH_BAN_KIEM_THU.xlsx`, file đầu vào mẫu `kiem-thu/du-lieu-mau/`).
 
 ### Kiểm tra kho đã học có ổn không
 
@@ -256,7 +262,7 @@ kho lớn có thể mất hàng giờ (mỗi đoạn tạo lại vector, bản s
 
 Bộ đọc hiện tại dùng 400 dpi kèm xám hoá + kéo giãn tương phản, thường cứu được
 phần lớn bản scan kém. Nếu vẫn hỏng thì bản gốc quá mờ: thay bản scan rõ hơn
-trên Drive, hoặc vào Quản trị → Kiểm duyệt → "Xem & sửa nội dung trích xuất"
+vào kho, hoặc vào Quản trị → Duyệt nhãn tài liệu → "Đối chiếu bản gốc ↔ AI đọc"
 gõ tay phần quan trọng.
 
 ### Tài liệu có trong Drive nhưng bot không đọc được

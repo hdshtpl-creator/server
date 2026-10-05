@@ -50,6 +50,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from app import db, settings, van_ban
+from app.chat_luong import ty_le_rac
 from app.ingest import (ExtractionError, MAX_SOURCE_BYTES, SUPPORTED_EXTENSIONS,
                         apply_context_headers, client_display_name,
                         extract_text_with_metadata, safe_path_component,
@@ -487,6 +488,53 @@ def decide_approval(suffix: str, extraction_ok: bool, prev_approved: bool,
     return (auto_approve or prev_approved) and extraction_ok
 
 
+_TU_CAI_DAT = object()
+
+
+def nguong_tu_duyet():
+    """Ngưỡng tỉ lệ rác để TỰ DUYỆT (cài đặt `tu_duyet_nguong_rac`, admin đổi
+    trên web). None = tắt chính sách mới, dùng decide_approval (chính sách cũ)."""
+    raw = str(settings.get("tu_duyet_nguong_rac", "0.2") or "").strip().lower()
+    if raw in ("", "off", "tat", "tắt", "cu", "cũ", "none"):
+        return None
+    try:
+        v = float(raw)
+    except ValueError:
+        return 0.2
+    return None if v < 0 else min(v, 1.0)
+
+
+def quyet_dinh_duyet(text, suffix, extraction_ok, prev_approved, force_pending=False,
+                     nguong=_TU_CAI_DAT):
+    """→ (tự duyệt?, tỉ lệ rác, lý do).
+
+    CHÍNH SÁCH 28/09/2026 (chủ dự án): tài liệu mới — nhân viên tải lên, thả
+    vào kho hay CRM gửi sang — MẶC ĐỊNH TỰ DUYỆT; chỉ tài liệu đọc lỗi quá
+    ngưỡng (tỉ lệ token rác > 20%, đo bằng app/chat_luong.ty_le_rac trên chính
+    văn bản đã trích xuất) mới vào hàng chờ người duyệt. Thay cho chính sách
+    20/08 "PDF luôn chờ duyệt": hàng chờ đã lên hàng nghìn tài liệu scan mà
+    không ai duyệt nổi, trong khi số thật sự đọc hỏng chỉ vài phần trăm.
+
+    Ngưỡng đổi được trên web; đặt 'off' là quay về chính sách cũ nguyên vẹn
+    (AUTO_LEARN_AUTO_APPROVE + PDF chờ duyệt) — đường lùi không cần sửa mã.
+    `force_pending` (tài liệu bộ quét web tải về) vẫn thắng mọi cấu hình.
+    Văn bản rỗng không bao giờ tự duyệt (ty_le_rac('') = 1.0).
+    """
+    ty_le = ty_le_rac(text)
+    if force_pending:
+        return False, ty_le, "bat_buoc_duyet"
+    if nguong is _TU_CAI_DAT:
+        nguong = nguong_tu_duyet()
+    if nguong is None:
+        ok = decide_approval(suffix, extraction_ok, prev_approved, AUTO_APPROVE, APPROVE_PDF)
+        if not ok and (suffix or "").lower() == ".pdf":
+            return False, ty_le, "pdf_cho_duyet"
+        return bool(ok), ty_le, "chinh_sach_cu"
+    if ty_le <= nguong:
+        return True, ty_le, f"rac_{ty_le:.0%}_duoi_nguong"
+    return False, ty_le, f"rac_{ty_le:.0%}_qua_nguong"
+
+
 def compose_title(stem: str, title_context=None) -> str:
     """Tiêu đề hiển thị: 'Ngân — Sơ yếu lý lịch' khi biết thư mục con tên người.
 
@@ -543,17 +591,17 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
     pieces = apply_context_headers(pieces, title, labels["doc_type"],
                                    client_display_name(labels.get("client_id")))
     checksum = drive_md5 or hashlib.md5(text.encode()).hexdigest()
-    # Bản cũ ĐÃ DUYỆT thì bản thay thế kế thừa trạng thái duyệt — miễn là lần
-    # trích xuất này sạch (ca 19/08: file sửa trên Drive làm tài liệu đang
-    # phục vụ lặng lẽ biến mất). RIÊNG PDF: luôn chờ người duyệt — xem
-    # decide_approval. Caller sẽ báo to "tài liệu đang dùng bị gỡ" khi một bản
-    # đã duyệt rơi lại hàng chờ, thay vì im lặng.
-    should_approve = (False if force_pending
-                      else decide_approval(path.suffix, extraction.status == "ok",
-                                           prev_approved, AUTO_APPROVE, APPROVE_PDF))
+    # Tự duyệt hay chờ người duyệt — xem quyet_dinh_duyet (chính sách 28/09:
+    # theo tỉ lệ rác của chính văn bản này; 'off' = chính sách cũ 20/08).
+    # Bản cũ ĐÃ DUYỆT mà bản mới rơi lại hàng chờ thì caller báo to "tài liệu
+    # đang dùng bị gỡ" (was_live) thay vì im lặng — bài học 19/08.
+    should_approve, ty_le, ly_do_duyet = quyet_dinh_duyet(
+        text, path.suffix, extraction.status == "ok", prev_approved, force_pending)
     diagnostics["approved"] = should_approve
     diagnostics["was_live"] = bool(prev_approved)
-    diagnostics["forced_review"] = (path.suffix.lower() == ".pdf")
+    diagnostics["ty_le_rac"] = round(ty_le, 4)
+    diagnostics["ly_do_duyet"] = ly_do_duyet
+    diagnostics["forced_review"] = ly_do_duyet in ("bat_buoc_duyet", "pdf_cho_duyet")
     vecs = embed([piece.content for piece in pieces])
     summary = "" if BO_TOM_TAT else summarize(text, title)
     # Danh tính văn bản pháp lý (số hiệu/loại/trích yếu/ngày) — bóc trượt trả
@@ -579,14 +627,25 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
                 if version_row and version_row[1] == "con_hieu_luc":
                     trang_thai_cu = version_row[1]
                 cur.execute("DELETE FROM documents WHERE id=%s", (replace_id,))
+            # Đường dẫn này đang bị một bản ghi ĐÃ GỠ (active=false) giữ: gỡ chỉ
+            # tắt bản ghi chứ không nhả khoá duy nhất drive_file_id, nên thả /
+            # tải lại đúng tệp vào đúng chỗ thì INSERT dưới đây hỏng
+            # UniqueViolation — và bộ quét thử lại mãi vẫn hỏng (kiểm thử
+            # 03/10/2026). Nhả khoá cho bản mới; bản cũ giữ dấu vết
+            # "da_go:<id>:<khoá cũ>" để còn tra lịch sử.
+            if drive_id:
+                cur.execute("""UPDATE documents
+                                  SET drive_file_id = 'da_go:' || id || ':' || drive_file_id
+                                WHERE drive_file_id = %s AND NOT coalesce(active, true)""",
+                            (drive_id,))
             cur.execute("""INSERT INTO documents
                 (title, source_path, drive_file_id, checksum, doc_type, access_level,
                  client_id, department_id, matter_id, approved, label_verified, source_kind, summary,
                  extraction_status,extraction_error,source_version,person_folder,
                  so_hieu,loai_van_ban,trich_yeu,ngay_ban_hanh,ngay_hieu_luc,
-                 trang_thai_hieu_luc)
+                 trang_thai_hieu_luc, ty_le_rac)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                        coalesce(%s,'chua_ro')) RETURNING id""",
+                        coalesce(%s,'chua_ro'), %s) RETURNING id""",
                 (title, str(path), drive_id, checksum,
                  labels["doc_type"], labels["access_level"],
                  labels["client_id"], labels["department_id"], labels.get("matter_id"),
@@ -596,7 +655,7 @@ def learn_one(path, labels, drive_id, drive_md5, replace_id=None, diagnostics=No
                  source_version, labels.get("title_context"),
                  vb_meta.get("so_hieu"), vb_meta.get("loai_van_ban"),
                  vb_meta.get("trich_yeu"), vb_meta.get("ngay_ban_hanh"),
-                 vb_meta.get("ngay_hieu_luc"), trang_thai_cu))
+                 vb_meta.get("ngay_hieu_luc"), trang_thai_cu, round(ty_le, 4)))
             doc_id = cur.fetchone()[0]
             n_qh, n_ha = van_ban.xu_ly_sau_hoc(cur, labels["doc_type"], text, vb_meta)
             if n_qh or n_ha:

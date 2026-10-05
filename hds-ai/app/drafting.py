@@ -178,6 +178,13 @@ DỮ LIỆU ĐÃ XÁC MINH (JSON):
 
 KHUNG TÀI LIỆU:
 {body_template or '(tự tạo các mục phù hợp, nhưng không thêm dữ kiện)'}
+
+CÁCH DÙNG KHUNG: khung chỉ là BỐ CỤC các mục. Mỗi ô [CẦN BỔ SUNG: …] có sẵn
+trong khung là chỗ bạn phải VIẾT nội dung thật từ YÊU CẦU và BẰNG CHỨNG — mục
+nội dung phải trình bày quy định / điều kiện / phân tích liên quan kèm [Nn].
+Chỉ để lại [CẦN BỔ SUNG: …] cho dữ kiện mà bằng chứng và dữ liệu thật sự không
+có (tên khách, ngày, số tiền…). Trả lại khung còn nguyên các ô trống là chưa
+làm việc được giao.
 """
     if previous_content:
         prompt += f"\nBẢN TRƯỚC CẦN SỬA:\n{previous_content}\n"
@@ -264,6 +271,14 @@ def clean_and_score(content: str, evidence: list[dict]) -> tuple[str, str, int]:
     return text, status, placeholders
 
 
+def _chu_that(text: str) -> int:
+    """Số ký tự NỘI DUNG THẬT: bỏ dòng tiêu đề, ô [CẦN BỔ SUNG: …], mã [Nn]."""
+    t = PLACEHOLDER_RE.sub("", text or "")
+    t = "\n".join(line for line in t.splitlines() if not line.lstrip().startswith(("#", ">")))
+    t = re.sub(r"\[N\d+\]", "", t)
+    return len(re.sub(r"\s+", " ", t).strip())
+
+
 def generate_content(*, title: str, instructions: str, input_data: dict[str, Any],
                      body_template: str, template_instructions: str,
                      evidence: list[dict], missing_fields: list[str] | None = None,
@@ -298,6 +313,17 @@ def generate_content(*, title: str, instructions: str, input_data: dict[str, Any
     content, latency = models.llm(
         prompt, system=system, temperature=0.1, model=chosen_model
     )
+    # Model 14B đôi khi chép nguyên KHUNG (toàn ô [CẦN BỔ SUNG]) dù có 6 đoạn
+    # bằng chứng — kiểm thử 03/10/2026, ST-03: 190 ký tự sau 4 giây. Có bằng
+    # chứng mà gần như không có chữ thật thì nhắc thẳng một lần nữa.
+    if evidence and _chu_that(content) < 200:
+        lai, latency2 = models.llm(
+            prompt + "\nLƯỢT TRƯỚC BẠN CHỈ CHÉP LẠI KHUNG TRỐNG. Viết nội dung "
+            "thật cho từng mục từ BẰNG CHỨNG ở trên, có [Nn] sau mỗi nhận định.\n",
+            system=system, temperature=0.2, model=chosen_model)
+        latency = (latency or 0) + (latency2 or 0)
+        if _chu_that(lai) > _chu_that(content):
+            content = lai
     content, status, placeholders = clean_and_score(content, evidence)
     return {
         "content_markdown": content,

@@ -44,6 +44,22 @@ const MainContent: React.FC = () => {
     );
   }
 
+  // Đang dùng mật khẩu tạm do quản trị cấp (vừa tạo / vừa đặt lại): máy chủ
+  // trả 403 cho MỌI cửa trừ GET /auth/me và POST /auth/change-password. Dựng
+  // khung chat / Quản trị phía sau hộp đổi mật khẩu là kéo theo cả loạt lời
+  // gọi nạp dữ liệu (hội thoại, model, mẫu phương pháp, bộ mẫu, thống kê…) —
+  // cái nào cũng 403 và bắn toast đỏ chồng lên hộp. Nên chỉ dựng nền trống +
+  // hộp đổi mật khẩu. Hộp không đóng được cho tới khi đổi xong — refreshMe()
+  // sau đó tắt cờ, trang dựng lại đầy đủ và nạp dữ liệu như thường.
+  if (currentUser?.must_change_password) {
+    return (
+      <div className="min-h-screen bg-hds-navy flex flex-col text-slate-900 dark:text-slate-100 font-sans antialiased">
+        <ToastContainer />
+        <ChangePasswordModal isOpen forced onClose={() => {}} />
+      </div>
+    );
+  }
+
   // Chặn ở tầng giao diện luôn, khớp với require_reviewer / require(admin) của backend
   const showAdmin = activeView === 'admin' && canAccessAdmin(currentUser);
   // Khách VÀO ĐƯỢC hai khu này nếu quản trị đã bật chức năng tương ứng
@@ -84,12 +100,6 @@ const MainContent: React.FC = () => {
         )}
       </div>
       <ToastContainer />
-      {/* Đang dùng mật khẩu tạm do quản trị cấp (vừa tạo / vừa đặt lại):
-          bắt đổi trước khi làm việc. Hộp này không đóng được cho tới khi đổi
-          xong — refreshMe() sau đó tắt cờ và hộp tự biến mất. */}
-      {currentUser?.must_change_password && (
-        <ChangePasswordModal isOpen forced onClose={() => {}} />
-      )}
     </div>
   );
 };

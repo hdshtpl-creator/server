@@ -584,6 +584,33 @@ def _ten_dich_trong(doan: str):
     return re.sub(r"\s+", " ", m.group(1)).strip() if m else None
 
 
+def _ds_sau_hai_cham(doan: str, so_hieu_minh=None) -> list:
+    """Số hiệu ĐẦU của từng mục trong danh sách "…: a) Nghị định số X …; b) …".
+
+    Danh sách khai tử của nghị định hướng dẫn có khi 10–20 mục dài cả nghìn ký
+    tự (Nghị định 145/2020/NĐ-CP khai tử 9 nghị định, NĐ 27/2014 ở mục h) — cửa
+    sổ cố định 600 ký tự chỉ đọc được vài mục đầu (05/10/2026). Đọc tới hết
+    khoản (đoạn trống, "Điều N." hoặc khoản số kế tiếp), mỗi mục lấy số hiệu
+    đầu tiên có tên loại văn bản đứng trước — số hiệu nhắc trong phần mô tả
+    của mục ("… sửa đổi Nghị định số Y") không phải chủ ngữ."""
+    het = re.search(r"\n\s*\n|\bĐiều\s+\d+[a-z]?\.|(?:^|\s)\d{1,2}\.\s+[A-ZĐ]", doan[:6000])
+    ds = doan[:het.start()] if het else doan[:6000]
+    ra = []
+    for muc in re.split(r";|\n", ds):
+        lm = re.search(_LOAI_THUONG_RX, muc, re.IGNORECASE)
+        so_m = RE_SO_HIEU.search(muc, lm.end()) if lm else None
+        if not so_m or so_m.start() - lm.end() > 150:
+            continue
+        # "b) Điều 1 Nghị định số 41/2022/NĐ-CP …" — chỉ một phần hết hiệu lực.
+        if re.search(r"\b(?:Điều|khoản|điểm|Chương|Mục|Phụ\s+lục)\s+\d", muc[:lm.start()],
+                     re.IGNORECASE):
+            continue
+        so = chuan_hoa_so_hieu(so_m.group(1))
+        if so and so != chuan_hoa_so_hieu(so_hieu_minh or "") and so not in ra:
+            ra.append(so)
+    return ra
+
+
 def boc_quan_he(text: str, so_hieu_minh=None) -> list:
     """Quan hệ mà VĂN BẢN NÀY tuyên bố với văn bản khác, bóc từ chính lời văn.
 
@@ -620,9 +647,26 @@ def boc_quan_he(text: str, so_hieu_minh=None) -> list:
         # thế khi vào kho sẽ tự khai "thay thế X" theo chiều đúng.
         if re.search(r"(được|bị)\s*$", truoc):
             continue
+        # "… thay thế / bãi bỏ các văn bản sau: a) …; b) …" — đọc trọn danh sách.
+        m_ds = re.match(r"[^.:;\n]{0,120}:", text[m.end():m.end() + 130])
+        if m_ds and not re.search(r"\b(?:Điều|khoản|điểm|cụm\s+từ|phù\s+hợp)\b",
+                                  m_ds.group(0), re.IGNORECASE):
+            for so in _ds_sau_hai_cham(text[m.end() + m_ds.end():], so_hieu_minh):
+                them(loai, so_dich=so)
+            continue
         cua_so = _cat_cau(text[m.end():m.end() + _CUA_SO])
         dau_so = RE_SO_HIEU.search(cua_so)
         if not dau_so:
+            continue
+        # CÂU CHƯƠNG TRÌNH, không phải mệnh lệnh: "rà soát … để bãi bỏ, sửa đổi,
+        # bổ sung, ban hành văn bản mới PHÙ HỢP VỚI quy định của Bộ luật tố tụng
+        # dân sự số 92/2015/QH13" (Nghị quyết 103/2015/QH13) từng được ghi thành
+        # "bãi bỏ BLTTDS" và khai tử một bộ luật đang có hiệu lực (05/10/2026).
+        if (re.match(r"\s*,\s*(?:sửa\s+đổi|bổ\s+sung|ban\s+hành|thay\s+thế|bãi\s+bỏ)",
+                     text[m.end():m.end() + 40], re.IGNORECASE)
+                or re.search(r"phù\s+hợp\s+với|ban\s+hành\s+văn\s+bản|văn\s+bản\s+mới|"
+                             r"theo\s+quy\s+định\s+của|đề\s+nghị|kiến\s+nghị",
+                             cua_so[:dau_so.start()], re.IGNORECASE)):
             continue
         # "bãi bỏ Điều 5 của Nghị định X", "thay thế cụm từ … tại khoản 2 Điều 3
         # Nghị định X" = sửa MỘT PHẦN, không phải khai tử. Soi cả đoạn từ động
@@ -638,6 +682,59 @@ def boc_quan_he(text: str, so_hieu_minh=None) -> list:
         for so in _so_hieu_trong(cua_so, bo_qua=so_hieu_minh):
             them(loai, so_dich=so)
 
+    # --- 1b. "<Văn bản X số Y> hết hiệu lực kể từ ngày …" — cách điều khoản thi
+    # hành của LUẬT khai tử luật cũ (Điều 689 BLDS 2015, Điều 217 LDN 2020, Luật
+    # Đất đai 2024…). Trước 05/10/2026 không bóc dạng này: 3.834 văn bản luật có
+    # câu đó mà cả kho chỉ 11 văn bản mang nhãn "hết hiệu lực" — Luật Đất đai
+    # 2013 vẫn hiện "còn hiệu lực". Chủ ngữ đứng TRƯỚC cụm, lấy số hiệu ĐẦU TIÊN
+    # của câu (các luật sửa đổi kể sau "đã được sửa đổi, bổ sung theo…" không
+    # chết theo). Danh sách đứng SAU ("… hết hiệu lực: a) Nghị định số …") thì
+    # nhặt cả danh sách.
+    for m in re.finditer(r"hết\s+hiệu\s+lực(?!\s+(?:một\s+phần|thi\s+hành\s+một\s+phần))",
+                         text, re.IGNORECASE):
+        dau_cau = max(text.rfind(". ", 0, m.start()), text.rfind("\n", 0, m.start()),
+                      text.rfind(";", 0, m.start()), text.rfind(":", 0, m.start()))
+        # TRỌN câu (tối đa 1.500 ký tự): danh sách luật sửa đổi "đã được sửa
+        # đổi, bổ sung theo Luật số A, Luật số B, …" có khi dài hơn 400 ký tự —
+        # cắt ngắn là mất chủ ngữ thật và nhặt nhầm một luật sửa đổi (Luật Đầu
+        # tư 2025 từng "thay thế" Luật Bảo vệ môi trường 72/2020/QH14).
+        truoc = text[dau_cau + 1:m.start()][-1500:]
+        sau = text[m.end():m.end() + 600]
+        # "Luật này có hiệu lực từ ngày Nghị quyết số X hết hiệu lực" — X chỉ
+        # là mốc thời gian; "không / chưa / vẫn chưa hết hiệu lực" — phủ định.
+        if (re.search(r"từ\s+ngày[^,;]{0,160}$", truoc, re.IGNORECASE)
+                or re.search(r"(?:không|chưa)\s*$", _c(truoc[-20:]))):
+            continue
+        # Chủ ngữ = tên loại văn bản ĐẦU TIÊN không phải "<loại> này", có số
+        # hiệu theo sát (≤ 150 ký tự) và không có mốc Điều/khoản xen giữa —
+        # "Kể từ ngày Thông tư này có hiệu lực, Quyết định số X hết hiệu lực".
+        chu_ngu = None
+        for lm in re.finditer(_LOAI_THUONG_RX, truoc, re.IGNORECASE):
+            if re.match(r"\s+này\b", truoc[lm.end():], re.IGNORECASE):
+                continue
+            # "… theo Luật số X", "… bởi Nghị định số Y" — văn bản sửa đổi, không
+            # phải văn bản hết hiệu lực.
+            if re.search(r"\b(?:theo|bởi|tại)\s*$", truoc[max(0, lm.start() - 15):lm.start()],
+                         re.IGNORECASE):
+                continue
+            so_m = RE_SO_HIEU.search(truoc, lm.end())
+            if not so_m or so_m.start() - lm.end() > 150:
+                continue
+            if re.search(r"\b(?:Điều|khoản|điểm|Chương|Mục|Phụ\s+lục)\s+\d",
+                         truoc[max(0, lm.start() - 60):so_m.start()], re.IGNORECASE):
+                break          # "Điều 5 của Nghị định X hết hiệu lực" — một phần
+            chu_ngu = (lm, so_m)
+            break
+        if chu_ngu:
+            lm, so_m = chu_ngu
+            them("thay_the", so_dich=chuan_hoa_so_hieu(so_m.group(1)),
+                 ten=_ten_dich_trong(truoc[lm.start():]))
+            continue
+        m_ds = re.match(r"[^.:;\n]{0,120}:", sau)
+        if m_ds:
+            for so in _ds_sau_hai_cham(text[m.end() + m_ds.end():], so_hieu_minh):
+                them("thay_the", so_dich=so)
+
     # --- 2. sửa đổi, bổ sung — thường nằm ngay TIÊU ĐỀ văn bản sửa đổi ---
     for m in re.finditer(r"sửa\s+đổi,?\s+bổ\s+sung\s+(?:một\s+số\s+điều\s+của\s+)?",
                          head, re.IGNORECASE):
@@ -645,6 +742,12 @@ def boc_quan_he(text: str, so_hieu_minh=None) -> list:
         if re.search(r"(được|bị)\s*$", _c(head[max(0, m.start() - 30):m.start()])):
             continue
         cua_so = _cat_cau(head[m.end():m.end() + _CUA_SO])
+        # Câu chương trình ("… bãi bỏ, sửa đổi, bổ sung, ban hành văn bản mới phù
+        # hợp với quy định của Bộ luật …") — xem chú thích ở mục 1.
+        if re.search(r"^\s*,|ban\s+hành\s+văn\s+bản|văn\s+bản\s+mới|phù\s+hợp\s+với|đề\s+nghị",
+                     cua_so[:(RE_SO_HIEU.search(cua_so).start() if RE_SO_HIEU.search(cua_so)
+                              else len(cua_so))], re.IGNORECASE):
+            continue
         cac_so = _so_hieu_trong(cua_so, bo_qua=so_hieu_minh)
         if cac_so:
             if re.search(_LOAI_THUONG_RX, cua_so[:RE_SO_HIEU.search(cua_so).start()],
@@ -686,7 +789,48 @@ def boc_quan_he(text: str, so_hieu_minh=None) -> list:
                                          flags=re.IGNORECASE))
             if ten:
                 them("can_cu", ten=ten)
-    return ra
+    return _loc_thu_bac(ra, so_hieu_minh)
+
+
+def cap_van_ban(so_hieu):
+    """Thứ bậc pháp lý suy từ số hiệu: 1 Quốc hội · 2 UBTVQH · 3 Chính phủ /
+    Thủ tướng · 4 bộ, ngành · 5 HĐND / UBND · None không rõ (kể cả VBHN)."""
+    s = (so_hieu or "").upper()
+    if not s or "VBHN" in s:
+        return None
+    if "UBTVQH" in s:
+        return 2
+    if re.search(r"/QH\d*$|/NQ-QH|QH\d+$", s):
+        return 1
+    if re.search(r"NĐ-CP|/CP$|NQ-CP|QĐ-TTG|QĐ-TT$|CT-TTG|/TTG$", s):
+        return 3
+    if "HĐND" in s or "UBND" in s:
+        return 5
+    if re.search(r"/TT(?:LT)?-|/QĐ-B|/QĐ-NHNN|/TT-NHNN|/CT-B", s):
+        return 4
+    return None
+
+
+def _loc_thu_bac(ra, so_hieu_minh):
+    """Bỏ quan hệ thay thế / bãi bỏ KHÔNG THỂ có thật (05/10/2026):
+      · văn bản hợp nhất không có hiệu lực bãi bỏ — chú thích của nó trích lại
+        điều khoản thi hành của luật khác ("… hết hiệu lực"), nhặt từ đó là
+        khai tử nhầm (06/VBHN-VPQH từng "thay thế" Luật Đầu tư 61/2020/QH14);
+      · văn bản cấp dưới không khai tử văn bản cấp trên — một quyết định UBND
+        từng được ghi "bãi bỏ" Luật Đất đai 31/2024/QH15."""
+    minh = (so_hieu_minh or "").upper()
+    if "VBHN" in minh:
+        return [q for q in ra if q["loai"] not in ("thay_the", "bai_bo")]
+    cap_minh = cap_van_ban(minh)
+    if not cap_minh:
+        return ra
+    giu = []
+    for q in ra:
+        cap_dich = cap_van_ban(q.get("so_hieu_dich"))
+        if q["loai"] in ("thay_the", "bai_bo") and cap_dich and cap_dich < cap_minh:
+            continue
+        giu.append(q)
+    return giu
 
 
 # ---------------------------------------------------------------------------

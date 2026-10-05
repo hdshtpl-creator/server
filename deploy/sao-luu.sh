@@ -29,13 +29,30 @@ if [ -f "$ENV_FILE" ]; then
   DB_USER="${DB_USER:-$(_env DB_USER)}"
   HDS_BACKUP_DIR="${HDS_BACKUP_DIR:-$(_env HDS_BACKUP_DIR)}"
   DATA_LIB="${DATA_LIB:-$(_env DATA_LIB)}"
+  HDS_BACKUP_KEEP="${HDS_BACKUP_KEEP:-$(_env HDS_BACKUP_KEEP)}"
+  DATA_DA_GO="${DATA_DA_GO:-$(_env DATA_DA_GO)}"
+  DATA_PHIEN_BAN="${DATA_PHIEN_BAN:-$(_env DATA_PHIEN_BAN)}"
 fi
+# Đường dẫn tương đối trong .env (DATA_LIB=./data/raw) là tương đối với thư
+# mục backend — cron chạy ở $HOME, không đổi thì "./data/raw" trỏ nhầm chỗ.
+_tuyet_doi() { case "$1" in ""|/*) echo "$1" ;; *) echo "$BACKEND_DIR/${1#./}" ;; esac; }
+DATA_LIB="$(_tuyet_doi "${DATA_LIB:-}")"
+DATA_DA_GO="$(_tuyet_doi "${DATA_DA_GO:-}")"
+DATA_PHIEN_BAN="$(_tuyet_doi "${DATA_PHIEN_BAN:-}")"
 DB_NAME="${DB_NAME:-hdsai}"
 DB_USER="${DB_USER:-hds}"
 CONTAINER="${PG_CONTAINER:-hds-postgres}"
 BACKUP_DIR="${HDS_BACKUP_DIR:-$HOME/hds-backup}"
 KHO_DIR="${DATA_LIB:-$BACKEND_DIR/data/raw}"
-GIU_BAN="${HDS_BACKUP_KEEP:-14}"        # số bản dump giữ lại
+# Từ 29/09/2026 máy chủ là nơi giữ bản gốc DUY NHẤT (CRM chỉ là đầu cầu):
+# bản đã gỡ và các phiên bản cũ cũng là dữ liệu gốc, phải sao lưu cùng.
+DA_GO_DIR="${DATA_DA_GO:-$(dirname "$KHO_DIR")/_da_go}"
+PHIEN_BAN_DIR="${DATA_PHIEN_BAN:-$(dirname "$KHO_DIR")/_phien_ban}"
+# Số bản dump CSDL giữ lại. 01/10/2026 chủ dự án chốt 3 (mỗi bản ~11 GB, giữ 14
+# là ~154 GB — ổ còn 162 GB thì giữa tháng đầy). Đổi bằng HDS_BACKUP_KEEP trong
+# hds-ai/.env; lịch cron không nạp biến môi trường nên phải đọc từ .env.
+GIU_BAN="${HDS_BACKUP_KEEP:-3}"
+case "$GIU_BAN" in ""|*[!0-9]*|0) GIU_BAN=3 ;; esac
 LOG="$BACKEND_DIR/data/sao_luu.log"      # lượt gần nhất (ghi đè)
 HIST="$BACKEND_DIR/data/sao_luu_lich_su.log"  # một dòng mỗi lượt
 CRON_MARK="sao-luu.sh' --cron"
@@ -44,6 +61,29 @@ CRON_LINE="30 2 * * * /usr/bin/env bash '$SCRIPT_DIR/sao-luu.sh' --cron  # hds-a
 cron_cmd() { if [ "$(id -u)" = 0 ] && [ "$1" != root ]; then crontab -u "$1" "${@:2}"; else crontab "${@:2}"; fi; }
 go_cron_line() { cron_cmd "$1" -l 2>/dev/null | grep -vF "$CRON_MARK" || true; }
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
+
+# Bản sao nằm CÙNG Ổ với dữ liệu gốc thì hỏng ổ là mất cả hai (kiểm thử
+# 02/10/2026, F-01: mặc định $HOME/hds-backup nằm ngay trên ổ chứa kho). So mã
+# thiết bị (stat -c %d) của thư mục sao lưu với thư mục kho; thư mục chưa tạo
+# thì lấy thư mục cha gần nhất đang có. Không xác định được thì im lặng —
+# hàm chỉ để CẢNH BÁO, không bao giờ làm hỏng lượt sao lưu.
+_thiet_bi() {  # in "<mã thiết bị> <tên thiết bị theo df>"
+  local d="$1"
+  while [ -n "$d" ] && [ ! -e "$d" ]; do d="$(dirname "$d")"; done
+  [ -n "$d" ] || return 0
+  printf '%s %s\n' "$(stat -c %d "$d" 2>/dev/null || echo '?')" \
+    "$(df -P "$d" 2>/dev/null | awk 'NR==2{print $1}' || true)"
+}
+canh_bao_cung_o() {
+  local a b
+  a="$(_thiet_bi "$BACKUP_DIR")"
+  b="$(_thiet_bi "$KHO_DIR")"
+  [ -n "$a" ] && [ -n "$b" ] || return 0
+  if [ "${a%% *}" != "?" ] && [ "${a%% *}" = "${b%% *}" ]; then
+    echo "⚠ CẢNH BÁO: bản sao lưu đang nằm CÙNG Ổ với dữ liệu gốc (${b#* }) — hỏng ổ là mất cả hai. Gắn ổ ngoài rồi đặt HDS_BACKUP_DIR trong hds-ai/.env."
+  fi
+  return 0
+}
 
 sao_luu() {  # $1 = "db" | "all"
   mkdir -p "$BACKUP_DIR/db" "$BACKUP_DIR/kho" "$BACKEND_DIR/data"
@@ -81,9 +121,24 @@ sao_luu() {  # $1 = "db" | "all"
       echo "[$(ts)] Không thấy thư mục kho $KHO_DIR — bỏ qua phần kho" >&2
       kho_msg="kho không thấy"
     fi
+    # Bản đã gỡ + phiên bản cũ: KHÔNG --delete — chỉ cộng dồn, một bản đã
+    # vào bản sao thì không mất vì bên gốc bị dọn.
+    local ten thu_muc
+    for ten in _da_go _phien_ban; do
+      thu_muc="$DA_GO_DIR"; [ "$ten" = _phien_ban ] && thu_muc="$PHIEN_BAN_DIR"
+      [ -d "$thu_muc" ] || continue
+      mkdir -p "$BACKUP_DIR/$ten"
+      if rsync -a "$thu_muc/" "$BACKUP_DIR/$ten/"; then
+        kho_msg="$kho_msg $ten $(du -sh "$BACKUP_DIR/$ten" 2>/dev/null | cut -f1)"
+      else
+        rc=1; kho_msg="$kho_msg $ten LỖI rsync"
+      fi
+    done
+    echo "[$(ts)] $kho_msg"
   fi
   local giay=$(( $(date +%s) - start ))
   echo "$(date -d @"$start" '+%Y-%m-%d %H:%M:%S') → $(date '+%H:%M:%S') rc=$rc db=${size:-LỖI} ${kho_msg} (${giay}s) đích=$BACKUP_DIR" >> "$HIST"
+  canh_bao_cung_o
   return "$rc"
 }
 
@@ -127,6 +182,7 @@ case "${1:-}" in
     echo "Dung lượng   : $(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1 || echo '?')"
     echo "Lịch cron    : $(crontab -l 2>/dev/null | grep -F "$CRON_MARK" || echo '(chưa đặt — chạy --install-cron)')"
     echo "Lượt gần nhất: $(tail -n1 "$HIST" 2>/dev/null || echo '(chưa chạy lượt nào)')"
+    canh_bao_cung_o
     ;;
   --install-cron)
     command -v crontab >/dev/null || { echo "Máy không có crontab."; exit 1; }

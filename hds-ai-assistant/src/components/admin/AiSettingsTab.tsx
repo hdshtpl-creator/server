@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
+import { LichChayCard } from './LichChayCard';
+import { AiNgoaiCard } from './AiNgoaiCard';
 import type { ModelInfo, BenchmarkResult } from '../../types';
 import {
   RefreshCw,
@@ -14,6 +16,7 @@ import {
   Gauge,
   CircleCheck,
   CircleAlert,
+  Tags,
 } from 'lucide-react';
 
 /**
@@ -318,6 +321,24 @@ const PROMPT_FIELDS: FieldDef[] = [
     hint: 'Áp dụng khi nhân viên tải hồ sơ lên tab Kiểm tra pháp lý và hỏi. Quyết định bố cục bài rà soát: tóm tắt hồ sơ → từng điểm ĐÚNG/CẦN LƯU Ý/TRÁI QUY ĐỊNH kèm căn cứ → rủi ro và khuyến nghị.',
     kind: 'textarea',
   },
+  {
+    key: 'prompt_du_bao_tranh_tung',
+    label: 'Khung trả lời — nút Dự báo tranh tụng',
+    hint: 'Tab Kiểm tra pháp lý → Dự báo tranh tụng. Bố cục: vụ việc → vấn đề cốt lõi → đối chiếu bản án/án lệ tương tự → dự báo 3 mức (không đưa % giả tạo) → rủi ro, việc nên làm.',
+    kind: 'textarea',
+  },
+  {
+    key: 'prompt_chuan_bi_phien_toa',
+    label: 'Khung trả lời — nút Chuẩn bị phiên toà',
+    hint: 'AI đóng vai luật sư đối phương: luận cứ bên mình, câu hỏi phía bên kia + cách trả lời, chứng cứ còn yếu, kịch bản phiên toà.',
+    kind: 'textarea',
+  },
+  {
+    key: 'prompt_dich_ban_dia_hoa',
+    label: 'Khung trả lời — nút Dịch & bản địa hoá',
+    hint: 'Dịch hợp đồng theo từng điều, bảng thuật ngữ, điểm cần sửa cho hợp pháp luật Việt Nam kèm câu chữ đề xuất.',
+    kind: 'textarea',
+  },
 ];
 
 const PARAM_FIELDS: FieldDef[] = [
@@ -436,6 +457,28 @@ const PARAM_FIELDS: FieldDef[] = [
     max: 500,
   },
   {
+    key: 'tu_duyet_nguong_rac',
+    label: 'Tự duyệt tài liệu mới — ngưỡng tỉ lệ chữ rác',
+    hint: 'Chính sách 28/09/2026: tài liệu mới (tải lên web, thả vào kho, CRM gửi sang) TỰ DUYỆT, trợ lý dùng ngay; chỉ tài liệu đọc lỗi quá ngưỡng này (scan mờ, OCR hỏng) mới vào hàng chờ duyệt. Chọn "Tắt" để quay về chính sách cũ: PDF luôn chờ người duyệt.',
+    kind: 'select',
+    options: [
+      { value: '0.1', label: '10% — khắt khe, nhiều tài liệu scan phải duyệt tay' },
+      { value: '0.2', label: '20% — mặc định (rác OCR thật ~50%, văn bản sạch <2%)' },
+      { value: '0.35', label: '35% — dễ dãi' },
+      { value: 'off', label: 'Tắt — chính sách cũ: PDF luôn chờ người duyệt' },
+    ],
+  },
+  {
+    key: 'kho_khach_chi_doc',
+    label: 'Khoá ghi ngăn Hồ sơ khách hàng từ web (CRM là nơi duy nhất ghi)',
+    hint: 'Bật khi CRM đã vận hành: nút Tải lên / Thư mục con trong ngăn Hồ sơ khách hàng trên web bị chặn, API tích hợp vẫn ghi được. Ổ mạng Samba phải đặt chỉ đọc riêng (xem HUONG_DAN_IT.md mục 4.9).',
+    kind: 'select',
+    options: [
+      { value: 'false', label: 'Mở — nhân viên vẫn tải hồ sơ khách lên từ web (mặc định)' },
+      { value: 'true', label: 'Khoá — chỉ CRM ghi qua API tích hợp' },
+    ],
+  },
+  {
     key: 'llm_num_predict',
     label: 'Trần độ dài câu trả lời (token)',
     hint: '-1 = KHÔNG chặn độ dài (mặc định hiện tại). Đặt số dương để ép trần thời gian, 700 token ≈ 450 từ.',
@@ -466,10 +509,10 @@ const PARAM_FIELDS: FieldDef[] = [
   {
     key: 'cloud_scope',
     label: 'API ngoài — dữ liệu nào được phép gửi ra',
-    hint: 'Câu hỏi chạm dữ liệu ngoài phạm vi này KHÔNG bị cắt xén — nó tự chạy bằng model trên máy chủ. Công nợ/tài chính bị chặn cứng ở mọi mức.',
+    hint: 'Câu hỏi chạm dữ liệu ngoài phạm vi này KHÔNG bị cắt xén — nó tự chạy bằng model trên máy chủ. Công nợ/tài chính bị chặn cứng ở mọi mức. Dùng chung cho tính năng ChatGPT soát / câu trả lời khác.',
     kind: 'select',
     options: [
-      { value: 'law_only', label: 'Chỉ văn bản luật, án lệ, quan điểm (an toàn nhất)' },
+      { value: 'law_only', label: 'Chỉ văn bản pháp luật, án lệ, bản án (an toàn nhất)' },
       { value: 'plus_attachments', label: 'Thêm file nhân viên tự đính kèm (cho tab Kiểm tra pháp lý)' },
       { value: 'all_but_finance', label: 'Mọi thứ trừ công nợ/tài chính' },
     ],
@@ -635,6 +678,9 @@ export const AiSettingsTab: React.FC = () => {
   const [original, setOriginal] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  // Khoá máy chủ cho sửa — thẻ nào gắn với khoá mới (vd. bảng giá) chỉ hiện khi
+  // backend đã có khoá đó, tránh bấm Lưu rồi nhận 400 "Khoá cài đặt không hợp lệ".
+  const [editableKeys, setEditableKeys] = useState<string[]>([]);
 
   const load = async () => {
     setIsLoading(true);
@@ -642,6 +688,7 @@ export const AiSettingsTab: React.FC = () => {
       const res = await api.getSettings();
       setValues({ ...res.settings });
       setOriginal({ ...res.settings });
+      setEditableKeys(Array.isArray(res.editable_keys) ? res.editable_keys : []);
     } catch (err: any) {
       showToast(err?.message || 'Không tải được cài đặt.', 'error');
     } finally {
@@ -700,6 +747,10 @@ export const AiSettingsTab: React.FC = () => {
   const paramDirty = PARAM_FIELDS.some((f) => dirty(f.key));
   const driveDirty = dirty('drive_map');
   const webDirty = dirty('web_sources');
+  // Bảng giá có thể chưa có dòng nào trong CSDL (mặc định rỗng) — so như chuỗi
+  // để ô trống không bị coi là "chưa lưu".
+  const coBangGia = editableKeys.includes('bang_gia_dich_vu');
+  const giaDirty = (values.bang_gia_dich_vu ?? '') !== (original.bang_gia_dich_vu ?? '');
 
   return (
     <div className="space-y-6">
@@ -727,8 +778,22 @@ export const AiSettingsTab: React.FC = () => {
         </p>
       </div>
 
+      {/* Bật/tắt các việc định kỳ của máy chủ (cron) */}
+      <LichChayCard />
+
       {/* Chọn model AI đang chạy trên máy chủ */}
       <ModelSection />
+
+      {/* ChatGPT làm việc song song — chỉ hiện khi backend đã có các khoá ai_* */}
+      {editableKeys.includes('ai_soat_che_do') && (
+        <AiNgoaiCard
+          values={values}
+          dirty={dirty}
+          patch={patch}
+          save={save}
+          savingKey={savingKey}
+        />
+      )}
 
       {/* Phong cách tư vấn */}
       <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
@@ -883,6 +948,66 @@ export const AiSettingsTab: React.FC = () => {
           </button>
         </div>
       </section>
+
+      {/* Bảng giá dịch vụ công khai — khung chat website đọc khi khách hỏi giá */}
+      {coBangGia && (
+        <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-3">
+          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-2">
+              <Tags className="w-4 h-4 text-hds-gold" />
+              <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                Bảng giá dịch vụ công khai (kênh website)
+              </h3>
+            </div>
+            {giaDirty && (
+              <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 px-1.5 py-0.5 rounded">
+                chưa lưu
+              </span>
+            )}
+          </div>
+          <div className="flex items-start gap-2 text-[11px] text-slate-500 dark:text-slate-400 bg-hds-soft dark:bg-slate-800/60 border border-blue-100 dark:border-slate-700 rounded-lg p-2.5">
+            <Info className="w-3.5 h-3.5 shrink-0 mt-px text-hds-blue" />
+            <span>
+              Mỗi dòng một dịch vụ, ví dụ: Thành lập công ty TNHH — từ 3.000.000 đồng (chưa gồm lệ
+              phí nhà nước). Để trống: khung chat website trả lời &apos;liên hệ để được báo giá&apos;
+              và mời để lại thông tin.
+            </span>
+          </div>
+          <textarea
+            id="setting-bang-gia-dich-vu"
+            rows={8}
+            value={values.bang_gia_dich_vu ?? ''}
+            onChange={(e) => patch('bang_gia_dich_vu', e.target.value)}
+            aria-label="Bảng giá dịch vụ công khai"
+            placeholder="Thành lập công ty TNHH — từ 3.000.000 đồng (chưa gồm lệ phí nhà nước)"
+            className={`w-full p-3 border rounded-xl text-xs leading-relaxed focus:ring-2 focus:ring-hds-blue focus:outline-none resize-y dark:bg-slate-800 dark:text-slate-100 placeholder-slate-400 ${
+              giaDirty ? 'border-amber-400 dark:border-amber-700' : 'border-slate-300 dark:border-slate-700'
+            }`}
+          />
+          <div className="flex justify-between items-center">
+            <button
+              onClick={() => reset('bang_gia_dich_vu')}
+              disabled={savingKey !== null}
+              className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 hover:text-hds-navy dark:hover:text-blue-300 transition-colors disabled:opacity-50"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Về mặc định
+            </button>
+            <button
+              onClick={() => save(['bang_gia_dich_vu'])}
+              disabled={!giaDirty || savingKey !== null}
+              className="px-4 py-2 rounded-xl font-bold text-xs text-white shadow-sm flex items-center gap-1.5 bg-hds-navy hover:bg-hds-navy-light disabled:bg-slate-300 dark:disabled:bg-slate-700 disabled:cursor-not-allowed transition-colors"
+            >
+              {savingKey === 'bang_gia_dich_vu' ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              <span>Lưu bảng giá</span>
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Bản đồ thư mục kho tài liệu */}
       <JsonSection

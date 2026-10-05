@@ -225,6 +225,21 @@ DOC_SCOPE_WORDS = {
     # của khách, câu luật về hợp đồng…)
     "mau hop dong": ("mau_hd",), "hop dong mau": ("mau_hd",),
     "dieu khoan mau": ("mau_hd",), "soan hop dong": ("mau_hd",),
+    # Lô 2.304 hợp đồng Hoa Kỳ – SEC (tiếng Anh, 28/09/2026) cũng nằm ở ngăn
+    # này. Thiếu các cụm dưới thì câu "cho tôi MẪU ĐIỀU KHOẢN bất khả kháng
+    # trong HỢP ĐỒNG MỸ" và mọi câu hỏi bằng tiếng Anh tìm toàn kho, vớ bản án
+    # và quyết định UBND (đo bộ câu mẫu 05/10/2026: 0/6 câu ra mẫu SEC ở đầu).
+    "mau dieu khoan": ("mau_hd",), "dieu khoan tieng anh": ("mau_hd",),
+    "hop dong tieng anh": ("mau_hd",), "hop dong my": ("mau_hd",),
+    "hop dong hoa ky": ("mau_hd",), "hop dong cua my": ("mau_hd",),
+    "clause": ("mau_hd",), "agreement": ("mau_hd",),
+    "contract template": ("mau_hd",),
+    # Thuật ngữ hợp đồng Anh – Mỹ: hỏi nghĩa của chúng là muốn thấy chúng
+    # trong hợp đồng thật — chỉ kho SEC có (EN-D1 05/10: ví dụ ở [Nguồn 35+]).
+    # "force majeure" KHÔNG vào đây: luật sư dùng nó cho cả câu hỏi BLDS.
+    "hold harmless": ("mau_hd",), "consequential damages": ("mau_hd",),
+    "jury trial": ("mau_hd",), "forum non conveniens": ("mau_hd",),
+    "indemnif": ("mau_hd",), "liquidated damages": ("mau_hd",),
     # Ngăn 4 — QUAN ĐIỂM PHÁP LÝ
     "quan diem phap ly": ("advisory",), "y kien phap ly": ("advisory",),
     "huong dan nghiep vu": ("advisory",),
@@ -279,6 +294,14 @@ STAFF_WORDS = {
     "bao nhieu nv", "may nv", "danh sach nv", "cty toi co may nguoi",
     "cong ty toi co may nguoi", "hds co may nguoi", "hds co bao nhieu nguoi",
 }
+
+# Hai cụm "yếu" của STAFF_WORDS — xem _staff_intent.
+_STAFF_WORDS_YEU = {"nguoi lao dong", "hop dong lao dong"}
+_NGU_CANH_NHAN_SU = (
+    "hds", "cong ty", "cty", "noi bo", "ben minh", "cua minh", "trong hds",
+    "bao nhieu", "may nguoi", "danh sach", "liet ke", "gom nhung ai", "nhung ai",
+    "ai dang", "ai la", "con han", "het han", "sap het", "dang lam",
+)
 
 # Phân biệt tài khoản phần mềm với người lao động. Đây là hai khái niệm dữ liệu
 # khác nhau; trộn chúng là nguyên nhân trực tiếp khiến bot báo "5 người" khi
@@ -429,7 +452,17 @@ def _staff_intent(q_folded: str) -> bool:
     # vớ phải Điều lệ công ty rồi kết luận công ty có 01 người.
     if re.search(r"(?:^|\s)nhan (?:su|vien)(?:$|\s)", q_folded):
         return True
-    return any(w in q_folded for w in STAFF_WORDS)
+    trung = {w for w in STAFF_WORDS if w in q_folded}
+    if not trung:
+        return False
+    # "người lao động" / "hợp đồng lao động" ĐỨNG MỘT MÌNH là thuật ngữ luật,
+    # không phải câu hỏi về người của HDS: "Thỏa thuận bảo vệ bí mật kinh doanh
+    # với người lao động cần có những nội dung gì?" từng được trả "3 bộ hồ sơ =
+    # 3 nhân sự" (đo bộ câu mẫu 05/10/2026, M11.6). Hai cụm này chỉ tính khi
+    # câu có thêm dấu hiệu đang hỏi về chính công ty mình hoặc đang đếm/liệt kê.
+    if trung <= _STAFF_WORDS_YEU:
+        return any(m in q_folded for m in _NGU_CANH_NHAN_SU)
+    return True
 
 
 def _account_intent(q_folded: str) -> bool:
@@ -445,6 +478,12 @@ def _doc_inventory_intent(q_folded: str) -> bool:
     phải đếm kho, nên có ' ve ' là bỏ qua.
     """
     if " ve " in f" {q_folded} ":
+        return False
+    # "Kho có những mẫu hợp đồng THUÊ BẤT ĐỘNG SẢN bằng TIẾNG ANH nào?" hỏi một
+    # LOẠI CỤ THỂ — liệt kê 4.700 tên mẫu hợp đồng không trả lời được câu đó.
+    if re.search(r"\b(?:mau hop dong|hop dong mau)\s+(?!nao\b|gi\b|trong\b|tren\b|da\b|"
+                 r"dang\b|hien\b|cua\b|co\b|duoc\b)\w+", q_folded) \
+            or re.search(r"\b(tieng anh|hoa ky)\b", q_folded):
         return False
     counting = bool(re.search(
         r"\b(bao nhieu|co may|dang co may|may|danh sach|liet ke|thong ke)\b",
@@ -996,7 +1035,9 @@ _SCENARIO_MARKERS = (
 # Câu hỏi thật sự về dữ liệu HDS luôn gọi tên công ty mình.
 _NOI_BO_MARKERS = ("hds", "cong ty toi", "cty toi", "cong ty minh", "cty minh",
                    "cua minh", "ben minh", "noi bo", "dang phu trach",
-                   "trong kho", "kho tai lieu")
+                   # "Kho DỮ LIỆU đang có bao nhiêu tài liệu bản án?" (bài B10)
+                   # thiếu cụm này nên chữ "bản án" kéo câu sang luồng luật.
+                   "trong kho", "kho tai lieu", "kho du lieu")
 # Câu hỏi về MỘT QUY PHẠM (mức, thời hạn, điều kiện luật định) — kiểm thử vai
 # thực tập sinh 18/09/2026: "thời gian THỬ VIỆC tối đa đối với NGƯỜI LAO ĐỘNG
 # có trình độ cao đẳng là bao nhiêu ngày?" bị trả lời bằng danh sách 3 nhân sự
@@ -1106,7 +1147,9 @@ def infer_intent(question, history=None, state=None):
 
 # Số tên tối đa liệt kê cho MỖI loại khi đếm kho. Nhiều hơn thì nêu con số và
 # mời thu hẹp — đổ trăm dòng tên không ai đọc.
-INVENTORY_LIST_MAX = 0   # 0 = liệt kê đủ tên, không cắt danh sách
+# 100 (05/10/2026): kho đã 61 nghìn văn bản luật, 26 nghìn bản án — "kho có bao
+# nhiêu văn bản luật?" từng in đủ 61.479 tên vào một tin nhắn. Đủ trọn án lệ (93).
+INVENTORY_LIST_MAX = 100
 
 
 def _inventory_lines(wanted, counts_rows, titles_by_type, unlearned=0):
@@ -1625,12 +1668,20 @@ def structured_answer(question, channel, client_id=None, dept_ids=None,
                 if wanted:
                     # Hỏi đích danh một loại thì phải THẤY TÊN từng bộ — con số
                     # trần bắt người ta hỏi thêm một lượt vô ích.
-                    cur.execute("""SELECT coalesce(doc_type,'other'), title
-                                     FROM documents
-                                    WHERE approved AND label_verified
-                                      AND coalesce(active,true)
-                                      AND coalesce(doc_type,'other')=ANY(%s)
-                                    ORDER BY title""", (wanted,))
+                    # Chỉ kéo tối đa INVENTORY_LIST_MAX tên mỗi loại (mới nhất
+                    # trước) — đếm vẫn lấy từ `rows`, đủ con số thật.
+                    cur.execute("""SELECT dt, title FROM (
+                                     SELECT coalesce(doc_type,'other') AS dt, title,
+                                            row_number() OVER (
+                                              PARTITION BY coalesce(doc_type,'other')
+                                              ORDER BY created_at DESC, title) AS rn
+                                       FROM documents
+                                      WHERE approved AND label_verified
+                                        AND coalesce(active,true)
+                                        AND coalesce(doc_type,'other')=ANY(%s)) x
+                                    WHERE %s <= 0 OR rn <= %s
+                                    ORDER BY dt, title""",
+                                (wanted, INVENTORY_LIST_MAX, INVENTORY_LIST_MAX))
                     for dt, title in cur.fetchall():
                         titles.setdefault(dt, []).append(title)
                 unlearned = 0

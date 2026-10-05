@@ -61,6 +61,51 @@ def _get_jwt_secret() -> str:
     return secret
 
 
+# ---------- Mật khẩu: sinh tạm + chính sách (22/09/2026, đưa vào vận hành) ----------
+# Trước đây mọi tài khoản mới đều nhận cùng một mật khẩu "hds12345" ghi thẳng
+# trong mã nguồn và trong sổ tay nhân viên — ai cũng biết, tài khoản vừa tạo
+# mà người dùng chưa kịp đổi là cửa mở. Nay mỗi tài khoản nhận một mật khẩu
+# tạm ngẫu nhiên, hiện đúng MỘT LẦN cho quản trị, và bị bắt đổi ngay lần đăng
+# nhập đầu tiên (cột users.must_change_password).
+MIN_PASSWORD_LEN = 8
+TEMP_PASSWORD_LEN = 10
+# Bỏ các ký tự dễ đọc nhầm khi chép tay / đọc qua điện thoại: 0/O, 1/l/I.
+_TEMP_PW_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+# Mật khẩu từng ghi trong mã / tài liệu — cấm đặt lại, và app/ra_soat_tai_khoan
+# dùng danh sách này để tìm tài khoản chưa đổi.
+MAT_KHAU_MAC_DINH_CU = ("hds12345", "admin123", "demo123")
+
+
+def new_temp_password(n: int = TEMP_PASSWORD_LEN) -> str:
+    """Mật khẩu tạm ngẫu nhiên, luôn có cả chữ lẫn số để qua được chính sách."""
+    while True:
+        pw = "".join(secrets.choice(_TEMP_PW_ALPHABET) for _ in range(n))
+        if any(c.isdigit() for c in pw) and any(c.isalpha() for c in pw):
+            return pw
+
+
+def kiem_tra_mat_khau_moi(pw: str, *, cu: str | None = None,
+                          email: str | None = None) -> str | None:
+    """Trả về câu báo lỗi (tiếng Việt) nếu mật khẩu mới không đạt, None nếu đạt.
+
+    Dùng chung cho đổi mật khẩu, tạo tài khoản và đặt lại mật khẩu — một
+    chính sách, một chỗ; giao diện chỉ lặp lại câu này chứ không tự kiểm."""
+    pw = pw or ""
+    if len(pw) < MIN_PASSWORD_LEN:
+        return f"Mật khẩu tối thiểu {MIN_PASSWORD_LEN} ký tự"
+    if not any(c.isdigit() for c in pw) or not any(c.isalpha() for c in pw):
+        return "Mật khẩu phải có cả chữ và số"
+    if pw.lower() in MAT_KHAU_MAC_DINH_CU:
+        return "Mật khẩu này từng là mật khẩu mặc định, không được dùng lại"
+    if cu is not None and pw == cu:
+        return "Mật khẩu mới phải khác mật khẩu hiện tại"
+    if email:
+        local = email.split("@")[0].strip().lower()
+        if len(local) >= 4 and local in pw.lower():
+            return "Mật khẩu không được chứa phần tên trong email"
+    return None
+
+
 def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 

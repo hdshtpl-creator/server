@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { MessageMarkdown, CITE_RE } from './MessageMarkdown';
 import { SourcePanel } from './SourcePanel';
+import { AiNgoaiPanel } from './AiNgoaiPanel';
 import type { ChatMessage, ChatTimings } from '../../types';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
@@ -511,6 +512,12 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({ message }) => 
               onPreview={previewSource}
               onDownload={downloadSource}
             />
+          )}
+
+          {/* ChatGPT song song: soát câu trả lời + "Xem câu trả lời khác". Chỉ
+              câu trả lời đã lưu (có mã máy chủ) — cả hai việc đọc lại từ CSDL. */}
+          {!isUser && !isError && !message.isStreaming && typeof message.serverMessageId === 'number' && (
+            <AiNgoaiPanel message={message} onPreview={previewSource} onDownload={downloadSource} />
           )}
 
           {/* Hàng thao tác: lưu ghi chú + báo cáo chất lượng — mỗi cái có Hoàn tác */}

@@ -18,7 +18,7 @@ khi hết chỗ, và mất gì nếu ổ cứng hỏng.
 
 Ngoài ra `data/work/` chứa hàng tạm tự sinh lại được: `preview/` (bản PDF xem trước
 của file Office, sinh khi người dùng bấm Xem trước), `template_fills/` (file tạo từ
-chat — điền mẫu / tạo bộ file, tự dọn sau 24 giờ) và `chat_uploads/` (bản .docx gốc
+chat — điền mẫu / tạo bộ file, tự dọn sau 7 ngày) và `chat_uploads/` (bản .docx gốc
 của file đính kèm hội thoại, làm khuôn cho "Tạo bộ file", xoá theo file tạm).
 Xoá cả thư mục cũng không mất gì.
 
@@ -34,7 +34,7 @@ flowchart TB
         FB["Hội thoại chat<br/><i>+ nút báo cáo chất lượng</i>"]
     end
 
-    DRV -->|"auto_learn.py<br/>quét mỗi 15 phút<br/>chỉ file mới/đã sửa"| EXT
+    DRV -->|"hoc-tu-thu-muc.sh<br/>quét mỗi 3 phút<br/>chỉ file mới/đã sửa"| EXT
     UPL -->|"lưu vào<br/>data/raw/uploads/"| EXT
     FB -->|"admin duyệt<br/>POST /feedback/{id}/review"| PROMO
 
@@ -54,8 +54,9 @@ flowchart TB
 ```
 
 **Điểm cần nhớ:** bản gốc tệp ở hệ tệp, còn *tri thức* mà AI dùng để trả lời nằm ở
-bảng `chunks` trong PostgreSQL. Xoá `data/raw/` thì AI **vẫn trả lời được** (chỉ mất
-chức năng tải bản gốc về). Mất PostgreSQL là **mất toàn bộ tri thức**.
+bảng `chunks` trong PostgreSQL. Mất PostgreSQL là **mất toàn bộ tri thức**.
+**Từ 27/08/2026 (bỏ Google Drive) `data/raw/` là BẢN GỐC DUY NHẤT của mọi tài liệu**
+— tuyệt đối không xoá: mất nó là mất hồ sơ thật của khách, AI chỉ còn các đoạn trích.
 
 ---
 
@@ -77,7 +78,7 @@ flowchart LR
     TMP[("temp_files<br/><i>file dùng xong bỏ</i>")] -.->|"khi bật use_temp"| BUILD
 
     BUILD["<b>Dựng prompt</b><br/>tài liệu tham khảo + phong cách"]
-    BUILD --> LLM["<b>Ollama qwen3:8b</b>"]
+    BUILD --> LLM["<b>Ollama qwen3:14b</b>"]
     LLM --> ANS["Câu trả lời<br/>+ nguồn trích dẫn"]
     ANS --> MSG[("messages<br/><i>lưu lịch sử</i>")]
 ```
@@ -124,7 +125,10 @@ tri thức đều qua tay admin. Đây là chỗ chất lượng bot tăng dần
 
 ## 5. Sao lưu
 
-Chỉ **PostgreSQL** là không thể tạo lại. Tài liệu gốc còn trên Drive, mô hình tải lại được.
+Phải sao lưu **cả PostgreSQL lẫn kho `data/raw/`** — từ 27/08/2026 không còn bản trên
+Drive. Công cụ chính thức: `bash deploy/sao-luu.sh --install-cron` (02:30 hằng đêm, giữ 3
+bản CSDL + đồng bộ kho, `--status` để xem, `--restore-test` để thử phục hồi) — xem
+HUONG_DAN_IT.md. Hai lệnh dưới đây chỉ là cách làm tay khi cần.
 
 ```bash
 # Sao lưu (đặt lịch cron hằng đêm)
@@ -139,5 +143,6 @@ docker exec -i hds-postgres pg_restore -U hds -d hdsai --clean --if-exists < bac
 > Bản dump **chứa toàn bộ hồ sơ khách hàng**. Đặt ở thư mục quyền 700, không đưa lên
 > GitHub (`.gitignore` đã chặn `*.dump`), và cân nhắc mã hoá nếu chép ra ổ ngoài.
 
-**Hết chỗ đĩa?** Xoá được: `data/work/` (file tạm), `data/raw/` (nếu Drive vẫn còn bản gốc —
-nhưng sẽ mất chức năng tải về). **Không bao giờ** xoá volume `pgdata`.
+**Hết chỗ đĩa?** Xoá được: `data/work/` (file tạm). **Không bao giờ** xoá `data/raw/`
+(bản gốc duy nhất) hay volume `pgdata`. Thư mục sao lưu `~/hds-backup` đang nằm cùng ổ —
+chuyển sang ổ ngoài (đặt `HDS_BACKUP_DIR`) thay vì xoá bớt bản sao.

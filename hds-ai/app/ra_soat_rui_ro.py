@@ -105,6 +105,37 @@ MUC_CHUNG = [
 # ---------------------------------------------------------------------------
 # Ngưỡng dùng chung cho hợp đồng thương mại / dân sự (phạt, lãi chậm)
 # ---------------------------------------------------------------------------
+# Từ khoá LÃI DO CHẬM TRẢ. Ba cách viết hay gặp nêu tường minh trước ("lãi chậm
+# trả", "lãi suất chậm trả", "lãi do chậm thanh toán", "lãi phạt chậm trả",
+# "lãi quá hạn" — cách gọi quen của hợp đồng vay), hai nhánh rộng giữ nguyên
+# như cũ ("lãi … chậm", "chậm … lãi" trong cùng câu).
+_RX_LAI_CHAM = (r"(?:(?:lai|lai suat)(?: do| phat)? cham (?:tra|thanh toan)"
+                r"|(?:lai|lai suat) (?:tren )?(?:no )?(?:goc )?qua han"
+                r"|(?:lai|lai suat)[^.\n]{0,40}?cham|cham[^.\n]{0,40}?lai)")
+# Nhánh "lãi suất vay" không được bắt câu lãi chậm trả / quá hạn — số đó thuộc
+# mục lãi chậm trả, không phải lãi suất vay thoả thuận.
+_RX_LAI_SUAT_VAY = r"lai suat(?! (?:do |phat )?(?:cham|qua han|tren no))"
+
+
+def _nguong_lai_cham(can_cu: str, canh_bao_nam: str, goi_y_nam: str,
+                     can_cu_thang: str) -> list[dict]:
+    return [
+        {"ma": "lai_cham_nam", "ten": "Lãi chậm thanh toán (theo năm)",
+         "regex": _RX_LAI_CHAM + r"[^.\n]{0,60}?"
+                  r"(\d{1,3}(?:[.,]\d+)?)\s*%\s*(?:/|moi|mot|tren|trong mot)?\s*nam",
+         "kieu": "max", "gia_tri": 20, "don_vi": "%/năm",
+         "can_cu": can_cu, "canh_bao": canh_bao_nam, "goi_y": goi_y_nam},
+        {"ma": "lai_cham_thang", "ten": "Lãi chậm thanh toán (theo tháng)",
+         "regex": _RX_LAI_CHAM + r"[^.\n]{0,60}?"
+                  r"(\d{1,2}(?:[.,]\d+)?)\s*%\s*(?:/|moi|mot|tren|trong mot)\s*thang",
+         "kieu": "max", "gia_tri": 1.67, "don_vi": "%/tháng",
+         "can_cu": can_cu_thang,
+         "canh_bao": "Quy đổi theo năm vượt trần 20%/năm (≈1,67%/tháng) của Điều 468 "
+                     "BLDS 2015.",
+         "goi_y": "Đưa lãi chậm thanh toán về ≤ 1,67%/tháng (20%/năm)."},
+    ]
+
+
 def _nguong_phat_va_lai():
     return [
         {"ma": "phat_vi_pham_pct", "ten": "Mức phạt vi phạm",
@@ -117,24 +148,13 @@ def _nguong_phat_va_lai():
                      "thoả thuận (Điều 418 BLDS 2015).",
          "goi_y": "Hạ mức phạt về tối đa 8% giá trị phần nghĩa vụ bị vi phạm, hoặc tách "
                   "riêng phạt và bồi thường thiệt hại."},
-        {"ma": "lai_cham_nam", "ten": "Lãi chậm thanh toán (theo năm)",
-         "regex": r"(?:(?:lai|lai suat)[^.\n]{0,40}?cham|cham[^.\n]{0,40}?lai)[^.\n]{0,60}?"
-                  r"(\d{1,3}(?:[.,]\d+)?)\s*%\s*(?:/|moi|mot|tren|trong mot)?\s*nam",
-         "kieu": "max", "gia_tri": 20, "don_vi": "%/năm",
-         "can_cu": "Điều 357, 468 Bộ luật Dân sự 2015; Điều 306 Luật Thương mại 2005",
-         "canh_bao": "Lãi do chậm thanh toán theo thoả thuận không được vượt 20%/năm "
-                     "(Điều 357 dẫn chiếu Điều 468 BLDS 2015); phần vượt vô hiệu.",
-         "goi_y": "Đưa lãi chậm thanh toán về ≤ 20%/năm hoặc theo lãi suất nợ quá hạn "
-                  "trung bình trên thị trường (Điều 306 LTM 2005)."},
-        {"ma": "lai_cham_thang", "ten": "Lãi chậm thanh toán (theo tháng)",
-         "regex": r"(?:(?:lai|lai suat)[^.\n]{0,40}?cham|cham[^.\n]{0,40}?lai)[^.\n]{0,60}?"
-                  r"(\d{1,2}(?:[.,]\d+)?)\s*%\s*(?:/|moi|mot|tren|trong mot)\s*thang",
-         "kieu": "max", "gia_tri": 1.67, "don_vi": "%/tháng",
-         "can_cu": "Điều 357, 468 Bộ luật Dân sự 2015",
-         "canh_bao": "Quy đổi theo năm vượt trần 20%/năm (≈1,67%/tháng) của Điều 468 "
-                     "BLDS 2015.",
-         "goi_y": "Đưa lãi chậm thanh toán về ≤ 1,67%/tháng (20%/năm)."},
-    ]
+    ] + _nguong_lai_cham(
+        "Điều 357, 468 Bộ luật Dân sự 2015; Điều 306 Luật Thương mại 2005",
+        "Lãi do chậm thanh toán theo thoả thuận không được vượt 20%/năm "
+        "(Điều 357 dẫn chiếu Điều 468 BLDS 2015); phần vượt vô hiệu.",
+        "Đưa lãi chậm thanh toán về ≤ 20%/năm hoặc theo lãi suất nợ quá hạn "
+        "trung bình trên thị trường (Điều 306 LTM 2005).",
+        "Điều 357, 468 Bộ luật Dân sự 2015")
 
 
 def _dk(ma, ten, tu_khoa, bat_buoc, can_cu, goi_y, **them):
@@ -182,9 +202,14 @@ _MOT_CHIEU_CHAM_DUT = _dk(
     giai_thich_co="Điều khoản chấm dứt chỉ trói MỘT bên (bên kia chấm dứt lúc nào cũng "
                   "được / bên này không được chấm dứt trong mọi trường hợp) — bất lợi "
                   "rõ cho bên bị trói, dễ bị coi là trái nguyên tắc bình đẳng, thiện chí.")
+# Đối tượng không chỉ là "thông tin": kiểm thử 02/10/2026 (F-11) — "Bên A được
+# sử dụng toàn bộ dữ liệu của Bên B mà không cần sự chấp thuận…" lọt vì chỉ
+# khớp chữ "thông tin". Vẫn bắt buộc có "không cần/không phải … chấp thuận/đồng
+# ý/xin phép" nên câu bảo mật bình thường ("giữ bí mật thông tin…") không dính.
 _DUNG_THONG_TIN_KHONG_CHAP_THUAN = _dk(
     "dung_thong_tin_khong_chap_thuan", "Dùng / tiết lộ thông tin bên kia không cần chấp thuận",
-    [r"(su dung|dung|cong bo|tiet lo|chia se|khai thac)[^.\n]{0,80}thong tin[^.\n]{0,80}"
+    [r"(su dung|dung|cong bo|tiet lo|chia se|khai thac)[^.\n]{0,80}"
+     r"(thong tin|du lieu|tai lieu|ho so|bi mat)[^.\n]{0,80}"
      r"(khong can|ma khong can|khong phai)[^.\n]{0,20}(su )?(chap thuan|dong y|xin phep)"],
     False, "Điều 38 Bộ luật Dân sự 2015; Luật Bảo vệ dữ liệu cá nhân; Điều 517 BLDS 2015",
     "Bỏ quyền tự ý dùng/tiết lộ thông tin; quy định rõ mục đích, phạm vi, và phải có "
@@ -507,7 +532,7 @@ LOAI_HOP_DONG["hop_dong_vay"] = {
     ],
     "nguong": [
         {"ma": "lai_suat_nam", "ten": "Lãi suất vay (theo năm)",
-         "regex": r"lai suat[^.\n]{0,60}?(\d{1,3}(?:[.,]\d+)?)\s*%\s*"
+         "regex": _RX_LAI_SUAT_VAY + r"[^.\n]{0,60}?(\d{1,3}(?:[.,]\d+)?)\s*%\s*"
                   r"(?:/|moi|mot|tren|trong mot)?\s*nam",
          "kieu": "max", "gia_tri": 20, "don_vi": "%/năm",
          "can_cu": "Điều 468 Bộ luật Dân sự 2015",
@@ -516,14 +541,28 @@ LOAI_HOP_DONG["hop_dong_vay"] = {
                      "(Điều 201 Bộ luật Hình sự 2015).",
          "goi_y": "Đưa lãi suất về ≤ 20%/năm."},
         {"ma": "lai_suat_thang", "ten": "Lãi suất vay (theo tháng)",
-         "regex": r"lai suat[^.\n]{0,60}?(\d{1,2}(?:[.,]\d+)?)\s*%\s*"
+         "regex": _RX_LAI_SUAT_VAY + r"[^.\n]{0,60}?(\d{1,2}(?:[.,]\d+)?)\s*%\s*"
                   r"(?:/|moi|mot|tren|trong mot)\s*thang",
          "kieu": "max", "gia_tri": 1.67, "don_vi": "%/tháng",
          "can_cu": "Điều 468 Bộ luật Dân sự 2015",
          "canh_bao": "Quy đổi theo năm vượt trần 20%/năm (≈1,67%/tháng) của Điều 468 "
                      "BLDS 2015.",
          "goi_y": "Đưa lãi suất về ≤ 1,67%/tháng (20%/năm)."},
-    ],
+    # Lãi chậm trả trong HĐ vay (kiểm thử 02/10/2026, RR01: "lãi chậm trả
+    # 30%/năm" lọt vì loại vay chưa có ngưỡng này). Mốc 20%/năm là mốc RÀ SOÁT
+    # thận trọng, cùng mốc với các loại hợp đồng khác; luật riêng của HĐ vay
+    # (Điều 466 khoản 5 BLDS) tính theo lãi suất vay đã thoả thuận nên lời cảnh
+    # báo nói rõ để luật sư đối chiếu, không khẳng định "vô hiệu".
+    ] + _nguong_lai_cham(
+        "Điều 466, 468 Bộ luật Dân sự 2015",
+        "Với hợp đồng vay, lãi do chậm trả tính theo Điều 466 khoản 5 BLDS 2015: lãi "
+        "trên nợ gốc quá hạn bằng 150% lãi suất vay đã thoả thuận nếu không có thoả "
+        "thuận khác (mà lãi suất vay không được quá 20%/năm — Điều 468), lãi trên "
+        "tiền lãi chậm trả theo khoản 2 Điều 468 (10%/năm). Mức trên 20%/năm cần luật sư đối chiếu với lãi suất vay "
+        "của chính hợp đồng; phần vượt mức luật cho phép không được Toà án chấp nhận.",
+        "Ghi rõ lãi chậm trả tách theo nợ gốc quá hạn (≤ 150% lãi suất vay) và nợ lãi "
+        "chậm trả (≤ 10%/năm); không ghi một mức chung trên 20%/năm.",
+        "Điều 466, 468 Bộ luật Dân sự 2015"),
 }
 
 LOAI_HOP_DONG["hop_dong_hop_tac"] = {

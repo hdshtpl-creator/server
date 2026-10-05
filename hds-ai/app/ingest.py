@@ -172,6 +172,13 @@ def safe_path_component(value: str, max_length=180) -> str:
 
 
 def _decode_text(raw: bytes):
+    # UTF-16 có BOM (Word "Lưu dạng trang web" hay xuất vậy): không chặn ở đây
+    # thì cp1258 bên dưới "giải mã được" thành chuỗi rác xen ký tự NUL.
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return raw.decode("utf-16"), "utf-16", []
+        except UnicodeDecodeError:
+            pass
     for encoding in ("utf-8-sig", "utf-8", "cp1258"):
         try:
             return raw.decode(encoding), encoding, []
@@ -463,11 +470,28 @@ def _docx_xml_fallback(path):
     return "\n".join(paragraphs)
 
 
+def _zip_sua_gach_nguoc(path):
+    """Gói DOCX do công cụ Windows nén ghi tên mục kiểu 'word\\document.xml'
+    (chuẩn ZIP bắt buộc '/'). Word vẫn mở được nhưng python-docx báo KeyError —
+    27 nghị định/thông tư 2026 trong kho hỏng vì vậy (29/09/2026). Đóng gói lại
+    trong bộ nhớ với tên đúng chuẩn; gói bình thường trả None."""
+    with zipfile.ZipFile(path) as archive:
+        if not any("\\" in name for name in archive.namelist()):
+            return None
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as out:
+            for info in archive.infolist():
+                out.writestr(info.filename.replace("\\", "/"), archive.read(info))
+    buf.seek(0)
+    return buf
+
+
 def _extract_docx(path):
     try:
         _validate_office_archive(path, "invalid_docx")
         from docx import Document as Docx
-        document = Docx(str(path))
+        sua = _zip_sua_gach_nguoc(path)
+        document = Docx(sua if sua is not None else str(path))
     except ExtractionError:
         raise
     except Exception as exc:
@@ -496,7 +520,9 @@ def _extract_docx(path):
     warnings = []
     method = "python-docx"
     if len(clean(text)) < 20:
-        fallback = _docx_xml_fallback(path)
+        if sua is not None:
+            sua.seek(0)
+        fallback = _docx_xml_fallback(sua if sua is not None else path)
         if len(clean(fallback)) > len(clean(text)):
             text = fallback
             method = "docx-xml"
@@ -647,6 +673,114 @@ def _extract_html(path):
     raw = path.read_bytes()
     decoded, encoding, warnings = _decode_text(raw)
     return html_to_text(decoded), "html", warnings, {"encoding": encoding}
+
+
+# Nhận dạng tệp Word theo NỘI DUNG chứ không theo đuôi (29/09/2026): 1.427 tệp
+# .doc trong ngăn văn bản luật là bản "tải Word" của trang văn bản — thực chất
+# là HTML kiểu Word, chỉ mang đuôi .doc. LibreOffice mở chúng bằng Writer/Web
+# rồi không xuất được DOCX, cả nghìn tệp báo doc_conversion_failed.
+_HTML_DAU_TEP = re.compile(rb"<\s*(?:!doctype|html|head|body|meta|table|div|p|script)\b", re.I)
+# MHTML (gói MIME nhiều phần): Word "Lưu dạng trang web một tệp" và Confluence
+# "Export to Word" đều ghi ra dạng này rồi đặt đuôi .doc. Bắt đầu bằng các dòng
+# đầu mục kiểu thư ("Date:", "MIME-Version:"), phần HTML mã hoá quoted-printable.
+_MIME_DAU_TEP = re.compile(rb"(?im)^(?:MIME-Version:|Content-Type:\s*multipart/)")
+_DONG_DAU_MUC = re.compile(rb"\s*[!-9;-~]+:")
+
+
+def _loai_noi_dung_word(path) -> str:
+    """'zip' (DOCX) · 'ole' (Word 97) · 'rtf' · 'mhtml' · 'html' · 'pdf' ·
+    'khac' theo byte đầu tệp."""
+    with open(path, "rb") as fh:
+        head = fh.read(4096)
+    if head.startswith(b"PK\x03\x04"):
+        return "zip"
+    if head.startswith(b"\xd0\xcf\x11\xe0"):
+        return "ole"
+    if head.startswith(b"%PDF-"):
+        return "pdf"
+    if head.startswith((b"\xff\xfe", b"\xfe\xff")):
+        head = head.decode("utf-16", errors="ignore").encode("utf-8")
+    if head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"{\\rtf"):
+        return "rtf"
+    # MHTML xét TRƯỚC html: trong 4 KB đầu của gói MHTML đã có thẻ <html>.
+    if _DONG_DAU_MUC.match(head) and _MIME_DAU_TEP.search(head):
+        return "mhtml"
+    if _HTML_DAU_TEP.search(head):
+        return "html"
+    return "khac"
+
+
+_HANG_BANG = re.compile(r"<tr\b.*?</tr\s*>", re.IGNORECASE | re.DOTALL)
+_MO_O_BANG = re.compile(r"<t[dh]\b", re.IGNORECASE)
+_HET_O_BANG = re.compile(r"</t[dh]\s*>", re.IGNORECASE)
+_NGAT_TRONG_O = re.compile(r"</(?:p|div|li|h[1-6])\s*>|<br\s*/?>", re.IGNORECASE)
+
+
+def _hang_bang_mot_dong(m) -> str:
+    """Một hàng bảng ≥ 2 ô → một dòng, ô ngăn bằng " | ", GIỮ cả ô trống: bảng
+    tiến độ hồ sơ khách (Nộp đơn / Thông báo / Nhận văn bằng…) chỉ có ngày ở
+    vài ô — gộp ô bằng dấu cách là mất luôn ngày đó thuộc giai đoạn nào; để
+    ngắt đoạn trong ô thì cột nào ra dòng nấy, cũng mất thẳng hàng.
+    Hàng MỘT ô giữ nguyên: đó là khung dàn trang bọc cả văn bản, dồn nó thành
+    một dòng là các dòng "Điều N." không còn đứng đầu dòng để tách."""
+    hang = m.group(0)
+    if len(_MO_O_BANG.findall(hang)) < 2:
+        return hang
+    return _HET_O_BANG.sub(" | ", _NGAT_TRONG_O.sub(" ", hang))
+
+
+def _html_word_sang_chu(decoded: str) -> str:
+    """HTML xuất từ Word/Confluence bẻ dòng mã nguồn ~76 ký tự ngay giữa câu
+    ("ỦY BAN NHÂN\\nDÂN"); xuống dòng trong mã nguồn chỉ là khoảng trắng — ranh
+    giới đoạn thật do thẻ </p>, <br>, </tr> dựng lại trong html_to_text."""
+    html = _HANG_BANG.sub(_hang_bang_mot_dong, re.sub(r"[\r\n]+", " ", decoded))
+    dong = (re.sub(r"(?:\s*\|)+\s*$", "", d).strip() for d in html_to_text(html).splitlines())
+    return "\n".join(d for d in dong if d)
+
+
+def _extract_word_html(path):
+    """Tệp .doc/.docx mà nội dung là HTML. Trang báo lỗi / trang rỗng của web
+    (tải về hỏng) KHÔNG được học thành tài liệu — báo lỗi rõ để tải lại."""
+    raw = path.read_bytes()
+    decoded, encoding, warnings = _decode_text(raw)
+    text = _html_word_sang_chu(decoded)
+    metadata = {"encoding": encoding}
+    if b"RegisterSod(" in raw or not any(ch.isalnum() for ch in text):
+        raise ExtractionError("web_error_page",
+                              "Tệp là trang web báo lỗi hoặc trang trống (tải về hỏng), không phải văn bản.",
+                              "Tải lại bản gốc từ nguồn rồi thay tệp này.")
+    return text, "html-word", warnings, {**metadata, "noi_dung_that": "html"}
+
+
+def _extract_mhtml(path):
+    """Tệp .doc/.docx là gói MHTML. Trước 29/09/2026 bộ đọc coi nó là văn bản
+    thuần: tài liệu "học xong" với nội dung là "MIME-Version: 1.0", CSS và thẻ
+    HTML — hồ sơ khách xuất từ Confluence (913 Bee Art…) đều như vậy. Đọc bằng
+    mô-đun email: giải mã quoted-printable/base64 + bảng mã từng phần, lấy các
+    phần text/html (ảnh nhúng bỏ qua) rồi gỡ thẻ như HTML thường."""
+    from email import message_from_bytes, policy
+
+    msg = message_from_bytes(path.read_bytes(), policy=policy.default)
+    html_parts, text_parts = [], []
+    for part in (msg.walk() if msg.is_multipart() else [msg]):
+        if part.is_multipart():
+            continue
+        kieu = part.get_content_type()
+        if kieu not in ("text/html", "text/plain"):
+            continue
+        try:
+            noi_dung = part.get_content()
+        except Exception:  # noqa: BLE001 — bảng mã khai sai/thiếu: giải mã dự phòng
+            noi_dung = _decode_text(part.get_payload(decode=True) or b"")[0]
+        (html_parts if kieu == "text/html" else text_parts).append(noi_dung)
+    if html_parts:
+        text = "\n".join(_html_word_sang_chu(h) for h in html_parts)
+    else:
+        text = "\n".join(text_parts)
+    if not any(ch.isalnum() for ch in text):
+        raise ExtractionError("mhtml_empty", "Gói MHTML không có phần văn bản đọc được.",
+                              "Mở tệp bằng Word rồi lưu lại thành .docx.")
+    return text, "mhtml-word", [], {"noi_dung_that": "mhtml", "phan_html": len(html_parts)}
 
 
 def _extract_eml(path):
@@ -816,11 +950,22 @@ def extract_text_with_metadata(path: Path, allowed=None) -> ExtractionResult:
             text, method, warnings, metadata = _extract_csv(path)
         elif ext in SPREADSHEET_EXTENSIONS:
             text, method, warnings, metadata = _extract_xlsx(path)
-        elif ext == ".docx":
-            text, method, warnings, metadata = _extract_docx(path)
-        elif ext == ".doc":
-            text = _extract_doc_strict(path)
-            method, warnings, metadata = "libreoffice", [], {}
+        elif ext in (".doc", ".docx"):
+            # Theo NỘI DUNG, không theo đuôi: kho có .doc là HTML, MHTML, PDF,
+            # cả DOCX đổi đuôi — mỗi loại một bộ đọc, LibreOffice chỉ còn cho
+            # Word 97 thật.
+            loai = _loai_noi_dung_word(path)
+            if loai == "html":
+                text, method, warnings, metadata = _extract_word_html(path)
+            elif loai == "mhtml":
+                text, method, warnings, metadata = _extract_mhtml(path)
+            elif loai == "pdf":
+                text, method, warnings, metadata = _extract_pdf(path)
+            elif ext == ".docx" or loai == "zip":
+                text, method, warnings, metadata = _extract_docx(path)
+            else:
+                text = _extract_doc_strict(path)
+                method, warnings, metadata = "libreoffice", [], {}
         elif ext in LIBREOFFICE_BRIDGE:
             text, method, warnings, metadata = _extract_via_libreoffice(
                 path, LIBREOFFICE_BRIDGE[ext])
@@ -880,8 +1025,13 @@ def _extract_doc_strict(path: Path) -> str:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             out = Path(tmp) / (path.stem + ".docx")
             if not out.exists():
-                raise ExtractionError("doc_conversion_failed", "LibreOffice không tạo được file DOCX.",
-                                      "Mở file .doc và lưu lại thủ công thành .docx.")
+                # Tên có ký tự lạ thì LibreOffice đặt tên khác — lấy file .docx
+                # duy nhất trong thư mục tạm (cùng cách _convert_via_libreoffice).
+                found = [f for f in Path(tmp).glob("*.docx") if f.is_file()]
+                if not found:
+                    raise ExtractionError("doc_conversion_failed", "LibreOffice không tạo được file DOCX.",
+                                          "Mở file .doc và lưu lại thủ công thành .docx.")
+                out = found[0]
             return _extract_docx(out)[0]
     except ExtractionError:
         raise

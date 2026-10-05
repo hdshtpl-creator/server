@@ -14,6 +14,8 @@ Tải lên / học ngay đi ĐÚNG đường của bộ quét (auto_learn.resolv
 thư mục + learn_one) nên tài liệu nhận nhãn y như khi thả file vào thư mục và
 đợi quét; chỉ khác là thấy kết quả ngay.
 """
+import concurrent.futures
+import contextlib
 import os
 import re
 import shutil
@@ -21,10 +23,11 @@ import subprocess
 import sys
 import time
 import unicodedata
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app import auto_learn, db
+from app import auto_learn, db, settings
 from app.local_learn import (ALLOWED, LOCAL_PREFIX, SKIP_DIRS, SKIP_NAMES,
                              SKIP_PREFIXES, allowed_roots, file_md5,
                              is_skippable, library_root, local_key)
@@ -73,6 +76,45 @@ def rel_tu_khoa(khoa: str | None) -> str | None:
     if khoa and khoa.startswith(LOCAL_PREFIX):
         return khoa[len(LOCAL_PREFIX):]
     return None
+
+
+def vi_tri_trong_kho(drive_file_id: str | None, source_path: str | None,
+                     root: Path | None = None) -> dict:
+    """VỊ TRÍ của một tài liệu trong cây thư mục kho, để hiện cho người duyệt.
+
+    Người duyệt nhãn nhìn tiêu đề thôi thì không biết tệp nằm ở ngăn nào —
+    mà ngăn chính là căn cứ gán nhãn (thư mục "9. HỒ SƠ KHÁCH HÀNG" thì là hồ
+    sơ khách, "1. VĂN BẢN PHÁP LUẬT" thì là luật). Hàm thuần, không chạm CSDL.
+
+    Ưu tiên danh tính bộ quét ('local:<đường dẫn tương đối>') vì nó luôn là
+    đường dẫn TRONG kho; không có thì thử rút gọn source_path theo gốc kho.
+    Tài liệu nạp từ chat/web không có tệp trên đĩa → trong_kho=False.
+    """
+    rel = rel_tu_khoa(drive_file_id)
+    if rel is None and source_path:
+        p = Path(str(source_path).replace("\\", "/"))
+        goc = (root or library_root())
+        try:
+            goc = Path(goc).resolve()
+            abs_p = p if p.is_absolute() else Path.cwd() / p
+            rel = abs_p.resolve(strict=False).relative_to(goc).as_posix()
+        except (ValueError, OSError):
+            rel = None
+    ten_tep = None
+    if rel:
+        rel = rel.replace("\\", "/").strip("/")
+        parts = [x for x in rel.split("/") if x]
+        ten_tep = parts[-1] if parts else None
+        thu_muc = "/".join(parts[:-1])
+        return {"trong_kho": True, "duong_dan": rel, "thu_muc": thu_muc or None,
+                "ngan": parts[0] if len(parts) > 1 else None,
+                "ten_tep": ten_tep,
+                "duoi": Path(ten_tep).suffix.lower() if ten_tep else None}
+    if source_path:
+        ten_tep = Path(str(source_path).replace("\\", "/")).name or None
+    return {"trong_kho": False, "duong_dan": None, "thu_muc": None, "ngan": None,
+            "ten_tep": ten_tep,
+            "duoi": Path(ten_tep).suffix.lower() if ten_tep else None}
 
 
 def ten_thu_muc_hop_le(ten: str) -> str:
@@ -370,10 +412,13 @@ def go_tai_lieu(doc_id: int, user_id) -> dict:
     return {"ok": True, "document_id": doc_id, "title": row[1], "da_chuyen_toi": da_chuyen}
 
 
-def hoc_file(rel: str, user_id, auto_approve: bool = False) -> dict:
+def hoc_file(rel: str, user_id, auto_approve: bool = False,
+             ep_hoc_lai: bool = False) -> dict:
     """Học (hoặc học lại nếu nội dung đổi) MỘT file trong kho, đúng đường của
     bộ quét. `auto_approve`: người có quyền duyệt cho dùng ngay — chỉ khi trích
-    xuất sạch, cùng luật với /files/upload."""
+    xuất sạch, cùng luật với /files/upload. `ep_hoc_lai`: học lại dù md5 không
+    đổi — cho lượt sửa bộ đọc (app/hoc_lai_ma_nguon.py), khi tệp vẫn thế mà
+    nội dung đọc ra phải khác."""
     root = library_root()
     path = duong_dan_kho(rel, root)
     if not path.is_file():
@@ -389,7 +434,7 @@ def hoc_file(rel: str, user_id, auto_approve: bool = False) -> dict:
     key = local_key(root, path)
     fp = file_md5(path)
     cu = _tai_lieu_theo_khoa([key]).get(key)
-    if cu and cu.get("checksum") == fp:
+    if cu and cu.get("checksum") == fp and not ep_hoc_lai:
         return {"ok": True, "document_id": cu["id"], "title": cu["title"],
                 "trang_thai": trang_thai_file(cu, path.suffix), "warnings": [],
                 "note": "Nội dung không đổi so với bản đã học — không học lại."}
@@ -422,7 +467,7 @@ def hoc_file(rel: str, user_id, auto_approve: bool = False) -> dict:
         moi["approved"] = moi["label_verified"] = True
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user_id, "kho_hoc", "documents", moi["id"],
-                 {"key": key, "auto_approve": auto_approve,
+                 {"key": key, "auto_approve": auto_approve, "ep_hoc_lai": ep_hoc_lai,
                   "warnings": (diag.get("warnings") or [])[:5]})
     quen_dem()
     trang_thai = trang_thai_file(moi, path.suffix)
@@ -431,6 +476,160 @@ def hoc_file(rel: str, user_id, auto_approve: bool = False) -> dict:
             "cho_duyet": "Đã học, đang chờ duyệt nhãn trước khi bot dùng."}.get(trang_thai, "")
     return {"ok": True, "document_id": moi["id"], "title": moi["title"],
             "trang_thai": trang_thai, "warnings": diag.get("warnings") or [], "note": note}
+
+
+# ---------------------------------------------------------------------------
+# Học từ web: một luồng riêng, giữ cùng khoá tệp với bộ quét cron (29/09/2026)
+# ---------------------------------------------------------------------------
+# Trước đây /kho/tai-len gọi hoc_file THẲNG trong hàm async: OCR một bản scan
+# chiếm event loop hàng phút, cả trang web đứng theo; lượt tải nhiều tệp vượt
+# 100 giây của Cloudflare thì trình duyệt nhận trang lỗi HTML thay vì kết quả.
+# Nay mọi lượt "học ngay" xếp vào MỘT luồng nền; API chỉ chờ tới một mốc rồi
+# trả "đang học", việc học vẫn chạy tiếp. Khoá tệp chung với
+# deploy/hoc-tu-thu-muc.sh (flock -n): cron thấy web đang học thì nhường lượt,
+# web thấy cron đang quét thì chờ — hai bộ học không đọc chồng một tệp.
+KHOA_QUET = Path(os.getenv("HDS_KHOA_QUET_KHO", "/tmp/hds-ai-quet-kho.lock"))
+_LUONG_HOC = concurrent.futures.ThreadPoolExecutor(max_workers=1,
+                                                   thread_name_prefix="kho-hoc")
+
+
+@contextlib.contextmanager
+def giu_khoa_quet():
+    """Chờ rồi giữ khoá tệp của bộ quét cron trong lúc học. Máy không có
+    fcntl (Windows) hay không mở được tệp khoá thì học không khoá."""
+    fh = None
+    fcntl = None
+    try:
+        import fcntl as _fcntl
+        fcntl = _fcntl
+        fh = open(KHOA_QUET, "a")
+        fcntl.flock(fh, fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        if fh:
+            fh.close()
+        fh = None
+    try:
+        yield
+    finally:
+        if fh is not None:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            fh.close()
+
+
+def _hoc_co_khoa(rel: str, user_id, auto_approve: bool) -> dict:
+    with giu_khoa_quet():
+        return hoc_file(rel, user_id, auto_approve=auto_approve)
+
+
+def _bao_loi_nen(fut: concurrent.futures.Future):
+    # Lượt học đã quá mốc chờ thì không còn ai đọc kết quả — lỗi lạ phải để lại
+    # dấu trong nhật ký dịch vụ. LoiKho đã có chỗ hiện (ingest_failures / cây).
+    if fut.cancelled():
+        return
+    e = fut.exception()
+    if e is not None and not isinstance(e, LoiKho):
+        print(f"[kho] lỗi học nền: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+def gui_hoc(rel: str, user_id, auto_approve: bool = False) -> concurrent.futures.Future:
+    """Xếp một tệp vào luồng học nền; trả Future của kết quả hoc_file."""
+    fut = _LUONG_HOC.submit(_hoc_co_khoa, rel, user_id, bool(auto_approve))
+    fut.add_done_callback(_bao_loi_nen)
+    return fut
+
+
+def ly_do_thu_muc_khong_hoc(parts, ban_do=None) -> str | None:
+    """Lý do bộ quét sẽ KHÔNG xếp được loại cho tệp nằm trong thư mục `parts`
+    (các đoạn tính từ gốc kho, không gồm tên tệp), hoặc None nếu học được.
+
+    Cùng luật với auto_learn.resolve_labels nhưng không chạm CSDL, không tạo
+    khách — để tải lên từ chối TRƯỚC khi ghi tệp nào xuống đĩa. Trước đây tệp
+    được ghi rồi mới học hỏng: tệp nằm lại với nhãn "lỗi", không có bản ghi để
+    gỡ, tải lại thì bị chặn vì "đã có file tên…"."""
+    parts = list(parts)
+    if not parts:
+        return "Không tải thẳng vào gốc kho — chọn một ngăn (thư mục) để bộ quét biết loại tài liệu"
+    cats, subs, roots = ban_do or _ban_do_nhan()
+    if auto_learn._norm(parts[0]) in roots:
+        if len(parts) < 2:
+            return ("Đang đứng ngay trong ngăn hồ sơ khách — mở (hoặc tạo) thư mục của "
+                    "từng khách, dạng '1729. Tên công ty', rồi tải tệp vào đó")
+        return ly_do_thu_muc_khach(parts[1], (cats, subs, roots))[2]
+    if any(auto_learn._norm(s) in cats for s in parts):
+        return None
+    return (f"Thư mục '{parts[0]}' chưa có trong bản đồ nhãn nên bộ quét không biết "
+            f"xếp loại (thêm ở Cài đặt AI → Bản đồ thư mục)")
+
+
+def thu_muc_tai_len(rel_thu_muc: str) -> Path:
+    """Kiểm MỘT lần cho cả lượt tải: thư mục có thật, không khoá ghi, và bộ
+    quét xếp được loại cho tệp trong đó."""
+    root = library_root()
+    folder = duong_dan_kho(rel_thu_muc, root)
+    if not folder.is_dir():
+        raise LoiKho("Không có thư mục này trong kho")
+    _chan_ghi_ngan_khach(folder, root)
+    ly_do = ly_do_thu_muc_khong_hoc(folder.relative_to(root).parts)
+    if ly_do:
+        raise LoiKho(ly_do)
+    return folder
+
+
+def tep_tam_cho(dest: Path) -> Path:
+    """Tên tạm cùng thư mục, bắt đầu bằng '.' nên bộ quét và cây đều bỏ qua:
+    lượt quét cron chạy giữa lúc đang ghi không đọc phải tệp mới ghi một nửa."""
+    return dest.with_name(f".dang-tai-{uuid.uuid4().hex[:8]}-{dest.name}")
+
+
+def dat_vao_cho(tam: Path, dest: Path):
+    """Đổi tệp tạm thành tên thật trong một bước; không đè tệp có sẵn."""
+    if dest.exists():
+        tam.unlink(missing_ok=True)
+        raise LoiKho(f"Trong thư mục đã có file tên '{dest.name}' — gỡ bản cũ trước nếu muốn thay")
+    os.replace(tam, dest)
+    quen_dem()
+
+
+def kiem_tra_tep_hoc(rel: str):
+    """Những lỗi hoc_file sẽ báo ngay, kiểm trước khi xếp hàng — để nút Học
+    ngay báo lỗi tức thì thay vì chờ tới lượt trong luồng học."""
+    root = library_root()
+    path = duong_dan_kho(rel, root)
+    if not path.is_file():
+        raise LoiKho("Không thấy file này trong kho")
+    if path.suffix.lower() not in ALLOWED:
+        raise LoiKho(f"Định dạng {path.suffix} chưa hỗ trợ; dùng "
+                     + ", ".join(sorted(e.lstrip('.').upper() for e in ALLOWED)))
+    ly_do = ly_do_thu_muc_khong_hoc(path.relative_to(root).parts[:-1])
+    if ly_do:
+        raise LoiKho(f"Thư mục chưa xếp được loại tài liệu: {ly_do}")
+
+
+def kho_khach_chi_doc() -> bool:
+    """Cài đặt `kho_khach_chi_doc` (28/09/2026): khi CRM đã là nơi DUY NHẤT
+    thêm/sửa hồ sơ khách, khoá đường tải lên / tạo thư mục trong ngăn Hồ sơ
+    khách hàng từ web để không còn hai nơi cùng ghi. API tích hợp
+    (app/tich_hop.py) ghi thẳng, không đi qua hai hàm dưới nên không bị chặn."""
+    raw = str(settings.get("kho_khach_chi_doc", "false") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _trong_ngan_khach(path: Path, root: Path) -> bool:
+    try:
+        parts = path.resolve().relative_to(root.resolve()).parts
+    except ValueError:
+        return False
+    return bool(parts) and auto_learn._norm(parts[0]) in _ban_do_nhan()[2]
+
+
+def _chan_ghi_ngan_khach(path: Path, root: Path):
+    if kho_khach_chi_doc() and _trong_ngan_khach(path, root):
+        raise LoiKho("Ngăn Hồ sơ khách hàng đang KHOÁ GHI từ web: hồ sơ khách được thêm/sửa "
+                     "trên CRM và tự đẩy sang đây. Cần mở lại thì đổi cài đặt "
+                     "'Khoá ghi ngăn Hồ sơ khách hàng' trong Cài đặt AI.")
 
 
 def cho_tai_len(rel_thu_muc: str, ten_file: str) -> Path:
@@ -442,6 +641,7 @@ def cho_tai_len(rel_thu_muc: str, ten_file: str) -> Path:
         raise LoiKho("Không có thư mục này trong kho")
     if folder == root:
         raise LoiKho("Không tải thẳng vào gốc kho — chọn một ngăn (thư mục) để bộ quét biết loại tài liệu")
+    _chan_ghi_ngan_khach(folder, root)
     ten = Path(ten_file or "").name
     if not ten or ten.startswith(SKIP_PREFIXES):
         raise LoiKho("Tên file không hợp lệ")
@@ -454,12 +654,28 @@ def cho_tai_len(rel_thu_muc: str, ten_file: str) -> Path:
     return dest
 
 
+def _goi_y_ma_khach() -> str:
+    try:
+        from app import tich_hop  # nạp muộn: tich_hop nạp kho ở đầu mô-đun
+        return f". Mã kế tiếp còn trống: {tich_hop.ma_khach_ke_tiep()}"
+    except Exception:  # noqa: BLE001 — thiếu gợi ý không được che lỗi chính
+        return ""
+
+
 def tao_thu_muc(rel_cha: str, ten: str, user_id=None) -> dict:
     root = library_root()
     cha = duong_dan_kho(rel_cha, root)
     if not cha.is_dir():
         raise LoiKho("Không có thư mục cha này trong kho")
+    _chan_ghi_ngan_khach(cha, root)
     ten = ten_thu_muc_hop_le(ten)
+    cha_parts = cha.relative_to(root).parts
+    if len(cha_parts) == 1 and auto_learn._norm(cha_parts[0]) in _ban_do_nhan()[2]:
+        # Tầng khách: thư mục không tách được mã thì mọi tệp tải vào đều bị
+        # bộ quét bỏ qua — chặn ngay lúc đặt tên, khi còn sửa được.
+        ly_do = ly_do_thu_muc_khach(ten)[2]
+        if ly_do:
+            raise LoiKho(ly_do + _goi_y_ma_khach())
     moi = cha / ten
     if moi.exists():
         raise LoiKho(f"Đã có '{ten}' trong thư mục này")

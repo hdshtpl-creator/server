@@ -126,6 +126,8 @@ const mapServerMessages = (rows: Array<{
   evidence?: ChatMessage['sources'];
   grounding_status?: ChatMessage['grounding_status'];
   answer_mode?: string;
+  ai_soat?: ChatMessage['ai_soat'];
+  ai_khac?: ChatMessage['ai_khac'];
 }>): ChatMessage[] =>
   (rows || []).map((m) => ({
     id: `h-${m.id}`,
@@ -136,6 +138,8 @@ const mapServerMessages = (rows: Array<{
     sources: m.evidence ?? m.sources,
     grounding_status: m.grounding_status,
     answer_mode: m.answer_mode,
+    ai_soat: m.ai_soat ?? null,
+    ai_khac: m.ai_khac ?? null,
   }));
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -264,6 +268,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     return () => api.onMockFallback(null);
   }, [showToast]);
+
+  // Máy chủ trả 403 "đang dùng mật khẩu tạm" giữa phiên (quản trị vừa đặt lại
+  // mật khẩu) → nạp lại /auth/me; cờ must_change_password bật và App.tsx chỉ
+  // còn dựng hộp đổi mật khẩu, không để người dùng đứng giữa loạt lỗi 403.
+  useEffect(() => {
+    api.onMustChangePassword(() => {
+      refreshMe().catch(() => {
+        /* /auth/me lỗi thì giữ nguyên — lỗi của lời gọi gốc đã được báo */
+      });
+    });
+    return () => api.onMustChangePassword(null);
+  }, [refreshMe]);
 
   // Khôi phục phiên: có token trong localStorage thì hỏi lại /auth/me.
   // Thiếu bước này, tải lại trang sẽ vào thẳng ứng dụng mà không biết mình là ai.
@@ -479,8 +495,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // mạch làm việc vì phải bấm tạo cuộc mới. Lịch sử KHÔNG mất gì: mọi cuộc cũ
   // vẫn nằm ở cột trái, bấm vào là selectConversation mở lại đầy đủ tin nhắn
   // kèm file đính kèm còn hạn.
+  //
+  // Đang dùng mật khẩu tạm (must_change_password) thì CHƯA nạp gì: máy chủ trả
+  // 403 cho mọi cửa trừ /auth/me và /auth/change-password. Đổi xong, refreshMe()
+  // tắt cờ → effect chạy lại và nạp như thường.
+  const phaiDoiMatKhau = Boolean(currentUser?.must_change_password);
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || phaiDoiMatKhau) return;
     let cancelled = false;
     setIsHistoryLoading(true);
     (async () => {
@@ -499,7 +520,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id]);
+  }, [currentUser?.id, phaiDoiMatKhau]);
 
   return (
     <AppContext.Provider

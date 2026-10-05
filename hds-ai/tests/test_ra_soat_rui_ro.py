@@ -386,5 +386,140 @@ class XuatBaoCaoTests(unittest.TestCase):
         self.assertEqual(len(d.tables[0].rows), 1)
 
 
+# Kiểm thử nghiệm thu 02/10/2026 — F-10 (lãi chậm trả trong HĐ vay) và F-11
+# (dùng dữ liệu/tài liệu bên kia không cần chấp thuận).
+RR01 = """CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM
+HỢP ĐỒNG VAY TIỀN
+Hôm nay, ngày 01 tháng 10 năm 2026, tại Hà Nội, chúng tôi gồm:
+BÊN CHO VAY (Bên A): CÔNG TY TNHH THỬ NGHIỆM ALPHA (DỮ LIỆU GIẢ)
+BÊN VAY (Bên B): CÔNG TY CỔ PHẦN THỬ NGHIỆM BETA (DỮ LIỆU GIẢ)
+Điều 1. Số tiền vay
+Bên A đồng ý cho Bên B vay số tiền 2.000.000.000 đồng (Hai tỷ đồng).
+Điều 3. Thời hạn vay
+Thời hạn vay là 12 tháng kể từ ngày giải ngân.
+Điều 4. Lãi suất
+Lãi suất cho vay là 3%/tháng, tính trên dư nợ gốc thực tế.
+Điều 5. Phương thức trả nợ
+Bên B trả lãi hằng tháng vào ngày 05; trả gốc một lần khi hết hạn bằng chuyển khoản.
+Điều 6. Lãi chậm trả
+Nếu Bên B chậm trả, Bên B phải chịu lãi chậm trả 30%/năm trên số tiền chậm trả.
+Điều 7. Biện pháp bảo đảm
+Khoản vay không có tài sản bảo đảm.
+Điều 8. Giải quyết tranh chấp
+Tranh chấp được giải quyết tại Toà án nhân dân có thẩm quyền.
+Điều 9. Hiệu lực
+Hợp đồng có hiệu lực kể từ ngày ký.
+ĐẠI DIỆN BÊN A ĐẠI DIỆN BÊN B
+"""
+
+
+class LaiChamTraHopDongVayTests(unittest.TestCase):
+    def test_rr01_lai_cham_tra_30_phan_tram_nam(self):
+        kq = rs.ra_soat(RR01, "RR01_HD_vay_lai_3pt_thang.docx")
+        self.assertEqual(kq["loai"], "hop_dong_vay")
+        lc = _theo_ma(kq, "lai_cham_nam")
+        self.assertIsNotNone(lc)
+        self.assertEqual(lc["trang_thai"], "canh_bao")
+        self.assertEqual(lc["gia_tri"], 30)
+        self.assertEqual(lc["dieu_khoan"], "Điều 6. Lãi chậm trả")
+        self.assertIn("Điều 466", lc["can_cu"])
+        # Lãi suất vay vẫn là 3%/tháng ở Điều 4, không bị lẫn với lãi chậm trả.
+        ls = _theo_ma(kq, "lai_suat_thang")
+        self.assertEqual((ls["trang_thai"], ls["gia_tri"]), ("canh_bao", 3))
+        self.assertIsNone(_theo_ma(kq, "lai_suat_nam"))
+        self.assertGreaterEqual(kq["tong_ket"]["canh_bao"], 3)
+        self.assertEqual(kq["tong_ket"]["muc_rui_ro"], "cao")
+
+    def test_cac_cach_viet_lai_cham(self):
+        for cau in ("Bên B chịu lãi chậm trả 30%/năm trên số tiền chậm trả.",
+                    "Lãi suất chậm trả: 30%/năm.",
+                    "Bên B trả lãi do chậm trả bằng 30% một năm.",
+                    "Lãi do chậm thanh toán là 30%/năm.",
+                    "Lãi quá hạn 30%/năm tính trên nợ gốc quá hạn."):
+            with self.subTest(cau=cau):
+                text = "HỢP ĐỒNG VAY TIỀN\nBên cho vay và Bên vay.\nĐiều 1. Lãi\n" + cau + "\n"
+                kq = rs.ra_soat(text, loai="hop_dong_vay")
+                lc = _theo_ma(kq, "lai_cham_nam")
+                self.assertIsNotNone(lc, cau)
+                self.assertEqual((lc["trang_thai"], lc["gia_tri"]), ("canh_bao", 30))
+                # Câu lãi chậm trả không được chấm lại thành "Lãi suất vay".
+                self.assertIsNone(_theo_ma(kq, "lai_suat_nam"), cau)
+
+    def test_lai_cham_trong_tran_va_theo_thang(self):
+        text = ("HỢP ĐỒNG VAY TIỀN\nĐiều 1. Lãi\nLãi suất 10%/năm. Lãi chậm trả 15%/năm.\n"
+                "Điều 2. Phạt\nLãi chậm trả lãi 2%/tháng.\n")
+        kq = rs.ra_soat(text, loai="hop_dong_vay")
+        self.assertEqual(_theo_ma(kq, "lai_suat_nam")["gia_tri"], 10)
+        self.assertEqual(_theo_ma(kq, "lai_suat_nam")["trang_thai"], "dat")
+        self.assertEqual(_theo_ma(kq, "lai_cham_nam")["trang_thai"], "dat")
+        lt = _theo_ma(kq, "lai_cham_thang")
+        self.assertEqual((lt["trang_thai"], lt["gia_tri"]), ("canh_bao", 2))
+
+
+class DungDuLieuKhongChapThuanTests(unittest.TestCase):
+    HD = ("HỢP ĐỒNG DỊCH VỤ\nBên A (Bên sử dụng dịch vụ) và Bên B (Bên cung cấp dịch vụ).\n"
+          "Điều 4. Sử dụng thông tin\n{cau}\n")
+
+    def test_du_lieu_tai_lieu_ho_so_bi_mat(self):
+        for cau in ("Bên A được sử dụng toàn bộ dữ liệu của Bên B mà không cần sự chấp "
+                    "thuận của Bên B.",
+                    "Bên A được chia sẻ tài liệu do Bên B cung cấp cho bên thứ ba mà không "
+                    "cần sự đồng ý của Bên B.",
+                    "Bên A được khai thác hồ sơ khách hàng của Bên B không cần xin phép.",
+                    "Bên A được tiết lộ bí mật kinh doanh của Bên B mà không phải được Bên B "
+                    "chấp thuận.",
+                    "Bên A được sử dụng thông tin khách hàng mà không cần sự chấp thuận của "
+                    "Bên B."):
+            with self.subTest(cau=cau):
+                kq = rs.ra_soat(self.HD.format(cau=cau), loai="hop_dong_dich_vu")
+                m = _theo_ma(kq, "dung_thong_tin_khong_chap_thuan")
+                self.assertEqual(m["trang_thai"], "canh_bao", cau)
+                self.assertEqual(m["dieu_khoan"], "Điều 4. Sử dụng thông tin")
+
+    def test_bao_mat_binh_thuong_van_dat(self):
+        for cau in ("Các bên giữ bí mật thông tin nhận được trong quá trình thực hiện hợp đồng.",
+                    "Bên A cung cấp thông tin, tài liệu trung thực, đầy đủ.",
+                    "Bên B chỉ sử dụng dữ liệu của Bên A khi có sự chấp thuận bằng văn bản."):
+            with self.subTest(cau=cau):
+                kq = rs.ra_soat(self.HD.format(cau=cau), loai="hop_dong_dich_vu")
+                self.assertEqual(
+                    _theo_ma(kq, "dung_thong_tin_khong_chap_thuan")["trang_thai"], "dat", cau)
+
+
+class MauKiemThuNghiemThuTests(unittest.TestCase):
+    """Số liệu của bộ mẫu deploy/kiem-thu/du-lieu-mau sau F-10/F-11 (02/10/2026)."""
+    KY_VONG = {
+        "RR01_HD_vay_lai_3pt_thang.docx": ("hop_dong_vay", 9, 3, 0, "cao"),
+        "RR02_HD_dich_vu_phat_12pt_thieu_tranh_chap.docx": ("hop_dong_dich_vu", 11, 6, 0, "cao"),
+        "RR03_HDLD_vi_pham_nguong.docx": ("hop_dong_lao_dong", 12, 5, 3, "cao"),
+        "RR04_HD_dich_vu_hop_le_DOI_CHUNG.docx": ("hop_dong_dich_vu", 16, 2, 0, "trung_binh"),
+        "RR05_HD_dieu_khoan_mot_chieu.docx": ("hop_dong_dich_vu", 7, 8, 1, "cao"),
+        "AT01_HD_co_chen_lenh.docx": ("hop_dong_mua_ban", 9, 3, 1, "cao"),
+    }
+
+    def test_bo_mau(self):
+        from pathlib import Path
+        thu_muc = Path(__file__).resolve().parents[2] / "deploy" / "kiem-thu" / "du-lieu-mau"
+        if not thu_muc.is_dir():
+            self.skipTest("không có thư mục deploy/kiem-thu trên máy này")
+        try:
+            from app.ingest import extract_text
+        except Exception as e:
+            self.skipTest(f"không nạp được app.ingest: {e}")
+        for ten, ky_vong in self.KY_VONG.items():
+            with self.subTest(file=ten):
+                p = thu_muc / ten
+                if not p.exists():
+                    continue
+                kq = rs.ra_soat(extract_text(p), tieu_de=ten)
+                tk = kq["tong_ket"]
+                self.assertEqual((kq["loai"], tk["dat"], tk["canh_bao"], tk["thieu"],
+                                  tk["muc_rui_ro"]), ky_vong)
+                if ten.startswith("RR04"):
+                    self.assertEqual(_theo_ma(kq, "dung_thong_tin_khong_chap_thuan")
+                                     ["trang_thai"], "dat")
+                    self.assertEqual(_theo_ma(kq, "lai_cham_nam")["trang_thai"], "dat")
+
+
 if __name__ == "__main__":
     unittest.main()

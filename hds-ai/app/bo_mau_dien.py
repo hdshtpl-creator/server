@@ -28,7 +28,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-from app import bo_mau, template_fill
+from app import bo_mau, chong_chen_lenh, template_fill
 
 # Trần cho một giá trị điền: dài hơn thế gần như chắc chắn là nhân viên dán
 # nhầm cả đoạn văn vào ô, thay vào file là vỡ trang.
@@ -674,10 +674,36 @@ def boc_gia_tri(bo: dict, uploads):
 # ---------------------------------------------------------------------------
 # AI đoán nốt các ô còn trống (tuỳ chọn)
 # ---------------------------------------------------------------------------
+# Chữ viết tắt hay gặp trong TÊN Ô ({{CCCD_UQ}}, {{NDD_PL}}…). Mẫu không có
+# nhãn đi kèm thì model chỉ thấy mã ô và bỏ qua hết (kiểm thử 02–03/10, BM-04:
+# "Tất cả các ô đều không tìm thấy giá trị" dù hồ sơ có CCCD). Diễn giải để
+# model biết ô cần gì; quy tắc "chỉ lấy giá trị có trong hồ sơ" vẫn giữ.
+_VIET_TAT_O = {
+    "cccd": "số căn cước công dân", "cmnd": "số chứng minh nhân dân",
+    "uq": "người được ủy quyền", "nuq": "người ủy quyền", "nduq": "người được ủy quyền",
+    "ndd": "người đại diện", "nddpl": "người đại diện theo pháp luật",
+    "pl": "theo pháp luật", "mst": "mã số thuế", "msdn": "mã số doanh nghiệp",
+    "dc": "địa chỉ", "sdt": "số điện thoại", "dt": "điện thoại", "ns": "ngày sinh",
+    "ngay": "ngày", "noi": "nơi", "cap": "cấp", "tt": "thường trú", "hktt": "hộ khẩu thường trú",
+    "ten": "tên", "ho": "họ", "cty": "công ty", "dn": "doanh nghiệp", "cv": "chức vụ",
+    "gd": "giám đốc", "tgd": "tổng giám đốc", "stk": "số tài khoản", "nh": "ngân hàng",
+    "vdl": "vốn điều lệ", "qt": "quốc tịch", "gt": "giới tính",
+}
+
+
+def dien_giai_khoa(khoa: str) -> str:
+    """'cccd_uq' → 'số căn cước công dân · người được ủy quyền' (rỗng nếu không
+    nhận ra chữ viết tắt nào)."""
+    phan = [p for p in re.split(r"[_\W]+", (khoa or "").lower()) if p]
+    nghia = [_VIET_TAT_O[p] for p in phan if p in _VIET_TAT_O]
+    return " · ".join(nghia) if nghia else ""
+
+
 def build_prompt_o_trong(dong_thieu, van_ban: str, bo_ten: str):
     ds = "\n".join(
         f'- "{d["khoa"]}": {d.get("goi_y") or d["literal"]}'
-        f' (có trong: {", ".join(d["files"][:3])})'
+        + (f' — nghĩa là: {dien_giai_khoa(d["khoa"])}' if dien_giai_khoa(d["khoa"]) else "")
+        + f' (có trong: {", ".join(d["files"][:3])})'
         for d in dong_thieu[:MAX_O_HOI_AI])
     system = ("Bạn là công cụ bóc thông tin cho công ty luật. Bạn chỉ trả về "
               "DUY NHẤT một khối JSON, không giải thích gì bên ngoài JSON.")
@@ -821,15 +847,25 @@ def chay(bo: dict, *, uploads=None, file_ids=None, gia_tri_tay=None,
 
     hop_le = {d["khoa"] for d in dong}
     ghi_chu_ai = ""
+    # Che câu "ra lệnh cho AI" trong văn bản file tải lên TRƯỚC khi nó tới model
+    # ở bước "Cho AI đoán các ô còn trống" (F-22, kiểm thử 02/10/2026). Báo cả
+    # khi không bật AI: dòng lệnh giấu trong hồ sơ là bất thường cần biết.
+    canh_bao_chen = []
+    van_ban_sach = []
+    for u in uploads or []:
+        sach, n = chong_chen_lenh.loc_lenh_chen((u.get("van_ban") or "").strip())
+        van_ban_sach.append((u.get("ten_file"), sach))
+        if n:
+            canh_bao_chen.append(chong_chen_lenh.canh_bao(u.get("ten_file") or "?", n))
     if dung_ai:
         # Chỉ những file KHÔNG phải tờ khai / bản đã điền mới cần model đọc —
         # hai loại kia đã bóc tất định xong rồi.
         da_boc = {b["ten_file"] for b in bao_cao
                   if b["cach"] in ("to_khai", "ban_da_dien")}
         van_ban = "\n\n".join(
-            f"NỘI DUNG «{u.get('ten_file')}»:\n{(u.get('van_ban') or '').strip()}"
-            for u in (uploads or [])
-            if (u.get("van_ban") or "").strip() and u.get("ten_file") not in da_boc)
+            f"NỘI DUNG «{ten}»:\n{sach}"
+            for ten, sach in van_ban_sach
+            if sach and ten not in da_boc)
         thieu = [d for d in dong if not gia_tri.get(d["khoa"])]
         if thieu and van_ban.strip():
             doan_duoc, ghi_chu_ai = doan_bang_ai(thieu, van_ban,
@@ -840,6 +876,9 @@ def chay(bo: dict, *, uploads=None, file_ids=None, gia_tri_tay=None,
 
     # Giá trị không thuộc chỗ trống nào của bộ thì bỏ — đừng để tờ khai của bộ
     # khác lẳng lặng điền vào đây.
+    if canh_bao_chen:
+        # ghi_chu_ai là ô giao diện đang hiện sẵn — đặt cảnh báo lên đầu.
+        ghi_chu_ai = " ".join(canh_bao_chen + ([ghi_chu_ai] if ghi_chu_ai else []))
     thua = [k for k in gia_tri if k not in hop_le]
     for k in thua:
         gia_tri.pop(k, None)
@@ -883,4 +922,5 @@ def chay(bo: dict, *, uploads=None, file_ids=None, gia_tri_tay=None,
         "loi_mau": loi_quet,
         "gia_tri_thua": len(thua),
         "ghi_chu_ai": ghi_chu_ai,
+        "canh_bao_chen_lenh": canh_bao_chen,
     }

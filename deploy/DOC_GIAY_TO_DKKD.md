@@ -30,7 +30,7 @@ VISION_KEEP_ALIVE=0
 DKKD_ALLOWED_ORIGINS=https://<domain-web-dkkd>,https://<ten-du-an>.vercel.app
 
 # 3) Khởi động lại backend
-sudo systemctl restart hds-ai      # hoặc: bash deploy/update.sh
+sudo systemctl restart hds-ai-backend   # hoặc: sudo bash deploy/update.sh
 ```
 
 Kiểm tra:

@@ -10,6 +10,11 @@ Khách hàng hỏi bot qua hai đường, **cùng một phạm vi dữ liệu**:
 Khoá API **chỉ cấp cho tài khoản khách**. Vai nội bộ không cấp được — một khoá
 lọt ra ngoài không được phép mở toàn bộ dữ liệu công ty.
 
+> **Khác với khoá tích hợp `hdsi_…`** (28/09/2026): khoá cho HỆ THỐNG — CRM đẩy
+> hồ sơ khách vào kho, chatbot bên thứ ba — có danh sách quyền riêng, cấp ở
+> *Quản trị → Khoá API & tích hợp*. Xem `deploy/API_TICH_HOP.md`. Hai loại khoá
+> không dùng lẫn: khoá `hds_` gửi vào `/integration/*` bị 401 và ngược lại.
+
 ---
 
 ## Cấp khoá

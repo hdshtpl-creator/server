@@ -227,12 +227,18 @@ def cached_md5(path: Path, key: str, cache: dict) -> str:
 # Truy vấn dùng chung
 # ---------------------------------------------------------------------------
 def unmigrated_drive_docs() -> int:
-    """Số tài liệu còn mang danh tính Drive. Khác 0 nghĩa là CHƯA chuyển đổi."""
+    """Số tài liệu còn mang danh tính Drive. Khác 0 nghĩa là CHƯA chuyển đổi.
+
+    Không đếm khoá 'da_go:<id>:<khoá cũ>' — bản ghi ĐÃ GỠ nhả khoá cho tệp
+    tải lại cùng chỗ (auto_learn.learn_one, 03/10/2026). Đếm chúng là chốt này
+    tưởng kho chưa chuyển đổi và CHẶN cả bộ quét (đã xảy ra 03/10 02:51)."""
     with db.session(role="internal", admin=True) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT count(*) FROM documents
                             WHERE drive_file_id IS NOT NULL
-                              AND drive_file_id NOT LIKE %s""", (LOCAL_PREFIX + "%",))
+                              AND drive_file_id NOT LIKE %s
+                              AND drive_file_id NOT LIKE %s""",
+                        (LOCAL_PREFIX + "%", "da_go:%"))
             return cur.fetchone()[0]
 
 
@@ -284,8 +290,9 @@ def migrate_drive_keys(root: Path, dry_run=False):
             cur.execute("""SELECT id, source_path FROM documents
                             WHERE source_path IS NOT NULL
                               AND (drive_file_id IS NULL OR drive_file_id NOT LIKE %s)
+                              AND coalesce(drive_file_id,'') NOT LIKE %s
                               AND coalesce(source_kind,'') IN ('drive','manual','local')""",
-                        (LOCAL_PREFIX + "%",))
+                        (LOCAL_PREFIX + "%", "da_go:%"))
             rows = cur.fetchall()
 
     moved, outside = [], 0
@@ -389,8 +396,19 @@ def run(dry_run=False, thu_lai_loi=False):
             sys.exit(1)
         print("       (--dry-run: vẫn liệt kê bên dưới, nhưng con số sẽ sai lệch.)")
 
-    review_mode = ("TỰ DUYỆT" if auto_learn.AUTO_APPROVE
-                   else "CHỜ NGƯỜI DUYỆT (mặc định an toàn)")
+    # Chỉ là dòng MÔ TẢ — quyết định thật nằm ở auto_learn.quyet_dinh_duyet.
+    # Chính sách 28/09/2026: tài liệu mới TỰ DUYỆT khi tỉ lệ rác ≤ ngưỡng
+    # `tu_duyet_nguong_rac` (mặc định 0,2); ngưỡng 'off' → chính sách cũ.
+    try:
+        nguong_duyet = auto_learn.nguong_tu_duyet()
+    except Exception:  # noqa: BLE001 — chỉ để in, không được làm hỏng lượt quét
+        nguong_duyet = 0.2
+    if nguong_duyet is not None:
+        review_mode = (f"TỰ DUYỆT tài liệu đọc sạch (tỉ lệ rác ≤ {nguong_duyet:.0%}); "
+                       "tệp đọc lỗi quá ngưỡng → CHỜ NGƯỜI DUYỆT")
+    else:
+        review_mode = ("TỰ DUYỆT (chính sách cũ, PDF vẫn chờ duyệt)" if auto_learn.AUTO_APPROVE
+                       else "CHỜ NGƯỜI DUYỆT (ngưỡng tự duyệt đang tắt — chính sách cũ)")
     print(f">> Chế độ nhập: {review_mode}")
     print(f">> Quét kho tài liệu: {root}")
     items = walk_library(root)

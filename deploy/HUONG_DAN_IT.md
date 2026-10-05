@@ -183,14 +183,15 @@ Mở web bằng địa chỉ script in ra, đăng nhập `admin@hdslaw.vn` bằn
 Từ 22/09/2026 `seed_accounts` **chỉ tạo một tài khoản admin** và **không đụng** tài khoản đã có — chạy lại bao nhiêu lần cũng vô hại. Nhân viên tạo trên web (mục 8). Quên mật khẩu admin duy nhất:
 
 ```bash
-cd /opt/hds-ai/hds-ai && sudo -u hds .venv/bin/python -m app.seed_accounts --reset-admin
+# chạy bằng user đang chạy backend (máy chủ HDS: pc), trong thư mục hds-ai của repo
+cd ~/hds-ai-full/hds-ai && .venv/bin/python -m app.seed_accounts --reset-admin
 ```
 
 Tài khoản mẫu (giamdoc@, truong.dndt@, cv.tranhtung@, troly@ — mật khẩu `demo123`) chỉ được tạo khi chạy `python -m app.seed_accounts --demo` — **không chạy trên máy vận hành thật**. Máy nào đã lỡ tạo trước 22/09 thì rà và khoá:
 
 ```bash
-sudo -u hds .venv/bin/python -m app.ra_soat_tai_khoan            # xem trước
-sudo -u hds .venv/bin/python -m app.ra_soat_tai_khoan --thuc-hien  # khoá tài khoản mẫu chưa ai dùng, bắt đổi mật khẩu mặc định
+cd ~/hds-ai-full/hds-ai && .venv/bin/python -m app.ra_soat_tai_khoan   # xem trước
+.venv/bin/python -m app.ra_soat_tai_khoan --thuc-hien  # khoá tài khoản mẫu chưa ai dùng, bắt đổi mật khẩu mặc định
 ```
 
 > ⚠ **Chạy lại `setup.sh` trên máy đang hoạt động** vẫn xoá ma trận `access_rules` rồi seed lại (mất chỉnh tay) và ghi đè nginx. Mật khẩu CSDL và mật khẩu tài khoản web thì được giữ nguyên.
@@ -209,7 +210,7 @@ Khai trong `hds-ai/.env`:
 
 ```bash
 DATA_LIB=./data/raw              # bỏ trống = dùng DATA_RAW (mặc định)
-AUTO_LEARN_AUTO_APPROVE=0        # 0 = mọi tài liệu chờ người duyệt (khuyến nghị)
+AUTO_LEARN_AUTO_APPROVE=0        # chỉ còn tác dụng khi ngưỡng tự duyệt đặt "Tắt" (xem 4.4) — từ 28/09 tự duyệt khi rác ≤ 20%
 # DRIVE_FOLDER_ID=               # để TRỐNG — còn giá trị là hệ thống quay về chế độ Drive
 ```
 
@@ -260,17 +261,28 @@ Bộ quét **tự dừng** trong ba tình huống nguy hiểm, đọc kỹ thôn
 
 | Đường | Thao tác | Duyệt |
 |---|---|---|
-| **Ổ mạng (kho)** | Thả file vào đúng thư mục, chờ ≤3 phút | Chờ duyệt nhãn (PDF **luôn luôn** phải duyệt) |
-| **Trang Tổng quan → Kho tài liệu** | Chọn thư mục → *Tải lên vào đây* (học ngay, không đợi quét) | Chờ duyệt, trừ khi người có quyền tick "Duyệt luôn" (xem 4.8) |
-| **Tải lên web** | Chat → Tải tài liệu → *Lưu vào kho* | Chờ duyệt, trừ khi người có quyền tick "Duyệt luôn" |
+| **Ổ mạng (kho)** | Thả file vào đúng thư mục, chờ ≤3 phút | Tự duyệt nếu đọc sạch (xem chính sách dưới) |
+| **Trang Tổng quan → Kho tài liệu** | Chọn thư mục → *Tải lên vào đây* (học ngay, không đợi quét) | Tự duyệt nếu đọc sạch; tick "Duyệt luôn" chỉ còn cần cho file đọc lỗi |
+| **Tải lên web** | Quản trị → Kho tài liệu → *Tải lên vào đây*, hoặc Kho tài liệu đã học → *Nạp tài liệu vào kho* (khung chat chỉ đính kèm tạm 6 giờ, không vào kho) | Tự duyệt khi tỉ lệ chữ rác ≤ ngưỡng; đọc lỗi hơn thì chờ duyệt (người có quyền tick "Duyệt luôn" vẫn được) |
+| **API tích hợp (CRM)** | CRM gọi `POST /integration/v1/clients/{code}/documents` — xem 4.9 | Tự duyệt nếu đọc sạch |
 | **Từ hội thoại** | Người dùng 👎 → admin sửa → *Đạt — nạp học* | Chính admin là bước duyệt |
 
-Đường thứ tư dành cho IT, **bỏ qua mọi bước duyệt** — chỉ dùng cho tài liệu nội
-bộ chắc chắn an toàn, tuyệt đối không dùng cho hồ sơ khách:
+**Chính sách duyệt từ 28/09/2026** (chủ dự án quyết; trước đó là "PDF luôn chờ
+duyệt"): tài liệu mới vào kho **tự duyệt** — trợ lý dùng ngay — trừ khi máy đọc
+lỗi quá ngưỡng: tỉ lệ chữ rác (`app/chat_luong.ty_le_rac`, đo trên chính văn
+bản đã trích xuất) **lớn hơn 20%** thì vào hàng chờ duyệt như cũ. Ngưỡng đổi ở
+**Cài đặt AI → "Tự duyệt tài liệu mới — ngưỡng tỉ lệ chữ rác"**; chọn *Tắt* là
+quay về chính sách cũ nguyên vẹn (kể cả `AUTO_LEARN_AUTO_APPROVE`). Bản thay thế
+của tài liệu đã duyệt mà đọc lỗi vẫn rơi lại hàng chờ và bộ quét in `[GỠ KHỎI
+KHO]` như trước. Mọi tài liệu học từ nay có `documents.ty_le_rac` để tab Duyệt
+nhãn xếp cái tệ lên trước.
 
-```bash
-cd hds-ai && .venv/bin/python -m app.ingest data/raw law
-```
+> **KHÔNG chạy `python -m app.ingest data/raw …` (đã bỏ 02/10/2026).** Lệnh này nạp
+> MỌI tệp trong thư mục chỉ định với mức **Nội bộ**, **đã duyệt**, không kiểm trùng
+> (`ingest.py` `ingest_folder`): chạy trên `data/raw` là nhân đôi toàn bộ kho và gắn
+> hồ sơ khách thành tài liệu nội bộ. Muốn học ngay một tệp / một thư mục: thả vào
+> đúng ngăn rồi bấm **Quét ngay** (Quản trị → Tổng quan) hoặc **Học ngay** trên từng
+> tệp ở thẻ Kho tài liệu; chạy tay thì `bash deploy/hoc-tu-thu-muc.sh`.
 
 ### 4.4b Tệp không đọc được — bộ quét KHÔNG thử lại mãi (16/09/2026)
 
@@ -530,6 +542,10 @@ cây thư mục `data/raw` trên máy chủ, đọc trực tiếp từ đĩa —
   dẫn cũ>`. Bot ngừng dùng ngay, bộ quét không học lại. File không bị xoá hẳn —
   muốn khôi phục thì chuyển file về chỗ cũ rồi bấm *Học ngay* (bản ghi mới).
   Đặt `DATA_DA_GO` trong `.env` nếu muốn thùng đã gỡ nằm chỗ khác.
+  Từ 03/10/2026, khi một tệp được thả / tải lại vào ĐÚNG chỗ của tài liệu đã gỡ,
+  bản ghi cũ đổi khoá thành `da_go:<id>:<khoá cũ>` để nhường chỗ (trước đó báo
+  `UniqueViolation`). Thấy khoá dạng này trong CSDL là bình thường — nó vẫn giữ
+  lịch sử, bộ quét và chốt "kho chưa chuyển đổi Drive" đều bỏ qua nó.
 - **Thư mục con**: tạo ngăn con trong thư mục đang xem (không đặt tên bắt đầu
   bằng `.` hoặc `~$`, không dùng `uploads`).
 - **Quét lại** (nút trên thẻ *Quét kho tài liệu trên máy chủ*, tab Kho tài liệu
@@ -543,6 +559,58 @@ cây thư mục `data/raw` trên máy chủ, đọc trực tiếp từ đĩa —
 Mọi thao tác ghi vào `audit_log` (`kho_hoc`, `kho_go`, `kho_tao_thu_muc`).
 API tương ứng: `GET /kho/cay`, `GET /kho/tim`, `POST /kho/tai-len`, `POST
 /kho/hoc`, `POST /kho/go`, `POST /kho/thu-muc` (`hds-ai/app/kho.py`).
+
+### 4.9 CRM và hệ thống ngoài đẩy hồ sơ vào kho — API tích hợp (28/09/2026)
+
+Quyết định 28/09/2026: **CRM của công ty là nơi duy nhất thêm/sửa hồ sơ khách và
+hợp đồng**; kho của trợ lý chỉ nhận bản sao qua API. Đặc tả đầy đủ cho đội CRM:
+**`deploy/API_TICH_HOP.md`**. Phía IT cần biết:
+
+- **Cấp khoá:** Quản trị → **Khoá API & tích hợp** → *Cấp khoá mới* → bộ quyền
+  *CRM* → đặt tên nguồn `crm` → sao chép khoá `hdsi_…` gửi đội CRM (chỉ hiện
+  một lần). Khoá này KHÁC khoá `hds_…` trên thẻ tài khoản khách: không gắn với
+  người dùng, mang danh sách quyền tick được (`khach:*`, `tai_lieu:*`, `chat`).
+  Mất khoá: *Thu hồi* rồi cấp khoá mới **cùng tên nguồn** — dữ liệu đã gửi vẫn
+  nhận ra.
+- **Tệp CRM gửi nằm ở đâu:** đúng thư mục khách trong kho (`9. HỒ SƠ KHÁCH
+  HÀNG/<mã>. <tên>/<thư mục con>/`), danh tính `local:…` như tệp thả tay, nên bộ
+  quét 3 phút thấy "không đổi" và không học lại; màn 360°, nút Tải về, phân
+  quyền theo khách đều như cũ. Ánh xạ mã CRM ↔ tệp ở bảng `tich_hop_tai_lieu`.
+- **Học nền một luồng**, giữ cùng khoá tệp `/tmp/hds-ai-quet-kho.lock` với cron
+  quét kho nên hai bộ học không chạy chồng. Máy chủ khởi động lại thì tài liệu
+  còn `da_nhan/dang_hoc` được xếp lại hàng ở lời gọi API đầu tiên.
+- **Mã khách mới** do máy chủ cấp = mã số lớn nhất hiện có + 1, đếm cả CSDL lẫn
+  tên thư mục trên đĩa (1.237 thư mục khách trống chưa có bản ghi `clients`).
+- **Khi CRM vận hành thật:** bật **Cài đặt AI → Khoá ghi ngăn Hồ sơ khách hàng
+  từ web** (`kho_khach_chi_doc=true`: web không tải lên / tạo thư mục trong ngăn
+  khách nữa, API vẫn ghi) và đặt Samba **chỉ đọc** cho ngăn khách — thêm
+  `read only = yes` cho khối chia sẻ ngăn khách hoặc `write list =` rỗng, rồi
+  `sudo systemctl reload smbd`. Không làm bước này là vẫn hai nơi cùng ghi.
+- **Chẩn đoán:** `SELECT trang_thai, count(*) FROM tich_hop_tai_lieu GROUP BY 1;`
+  · dòng `loi` có cột `loi` ghi lý do · nhật ký hệ thống lọc `tich_hop_*` ·
+  `GET /integration/v1/me` với khoá của CRM trả `queued` = số tệp đang xếp
+  hàng.
+- Sao lưu: hai bảng mới nằm trong CSDL nên `sao-luu.sh` đã bao gồm; **CSDL riêng
+  của CRM không thuộc bản sao lưu này** — đội CRM tự lo.
+
+**Cập nhật 29/09/2026 — máy chủ là nơi giữ bản gốc DUY NHẤT, CRM chỉ là đầu cầu:**
+- CRM tải về được mọi tệp của hồ sơ khách và hồ sơ nhân viên (kể cả tệp cũ), gắn
+  mã cho tệp cũ, có bộ API nhân viên (`/integration/v1/employees/*`, ngăn `8. HỒ SƠ
+  NHÂN SỰ`). Bộ quyền *CRM* nay có 7 quyền; khoá đã cấp trước thì bấm **Sửa
+  quyền** tick thêm `employees:read`, `employees:write` — chuỗi khoá không đổi.
+- 29/09/2026 API công khai đổi sang tiếng Anh: `/integration/v1/*`, tên trường
+  và mã quyền tiếng Anh (`clients:read`…); mã cũ vẫn được hiểu, `schema.sql` tự
+  đổi khoá đã cấp. Đặc tả: `deploy/API_TICH_HOP.md`.
+- Bản cũ không mất: trước khi ghi đè / đổi tên / gỡ, bản hiện tại được chép sang
+  `data/_phien_ban/<nguồn>/<mã ngoài>/` (đổi chỗ bằng `DATA_PHIEN_BAN` trong
+  `.env`), ghi ở bảng `tich_hop_phien_ban`.
+- `sao-luu.sh` nay sao lưu thêm `data/_da_go` và `data/_phien_ban` (cộng dồn,
+  không `--delete`), và hiểu `DATA_LIB=./data/raw` là tương đối với thư mục
+  backend. **Kiểm tra lịch sao lưu có đang chạy:** `bash deploy/sao-luu.sh
+  --status` — 29/09/2026 đo thấy crontab KHÔNG còn dòng sao lưu, lượt cuối là
+  16/09; đặt lại bằng `bash deploy/sao-luu.sh --install-cron`.
+- CRM được tải toàn bộ hồ sơ khách + nhân sự bằng khoá `hdsi_` → coi khoá như mật
+  khẩu quản trị; nên giới hạn `/api/integration/` trong nginx chỉ nhận IP máy CRM.
 
 ## 5. TÊN MIỀN VÀ HTTPS
 
@@ -684,6 +752,7 @@ Gần như luôn là **trình duyệt còn chạy bản cũ**, không phải mã
 > **Từ 15/09/2026 có script sao lưu + lịch hằng đêm** (`deploy/sao-luu.sh`, không cần root).
 > Bản sao mặc định nằm ở `~/hds-backup` **cùng ổ với bản gốc** — chống được xoá nhầm,
 > KHÔNG chống được hỏng ổ. Gắn ổ ngoài/ổ mạng rồi đặt `HDS_BACKUP_DIR` trong `hds-ai/.env`.
+> Từ 03/10/2026 `--status` và cuối mỗi lượt sao lưu in dòng **⚠ CẢNH BÁO … CÙNG Ổ** cho tới khi làm việc này.
 
 ### 7.0 Script sao-luu.sh (cách chính thức)
 
@@ -695,13 +764,17 @@ bash deploy/sao-luu.sh --status         # bản gần nhất, dung lượng, l�
 bash deploy/sao-luu.sh --install-cron   # 02:30 hằng đêm (crontab của user chạy backend)
 ```
 
-- Đích: `$HDS_BACKUP_DIR/db/hdsai-YYYYmmdd-HHMM.dump` (định dạng `pg_restore`, giữ 14 bản mới nhất — đổi bằng `HDS_BACKUP_KEEP`),
+- Đích: `$HDS_BACKUP_DIR/db/hdsai-YYYYmmdd-HHMM.dump` (định dạng `pg_restore`, giữ **3 bản** mới nhất từ 01/10/2026 — mỗi bản ~11 GB; đổi bằng `HDS_BACKUP_KEEP=N` trong `hds-ai/.env`),
   `$HDS_BACKUP_DIR/kho/` (rsync `--delete` của kho tài liệu), `$HDS_BACKUP_DIR/env.backup` (bản chép `.env`, quyền 600).
 - Nhật ký: `hds-ai/data/sao_luu.log` (lượt gần nhất) và `hds-ai/data/sao_luu_lich_su.log` (một dòng mỗi lượt, có `rc=`).
 - Lượt đầu tiên chạy 15/09/2026: CSDL 3,9 GB + kho 71 GB trong 14 phút, thử phục hồi đạt.
 - **Mỗi tháng chạy `--restore-test` một lần** — bản sao chưa từng phục hồi được thì chưa phải bản sao.
 
-### 7.1 Sao lưu bằng tay (cách cũ, vẫn đúng)
+### 7.1 Sao lưu bằng tay — CHỈ khi không dùng được sao-luu.sh
+
+> Đừng đặt thêm cron dưới đây khi đã có lịch `sao-luu.sh --install-cron`: hai lịch cùng
+> chạy 02:30 là hai lượt pg_dump ~11 GB chồng nhau, và bản tay KHÔNG tự xoay vòng — ổ
+> 468 GB đầy sau vài tuần. Cách chính thức là mục 7.0 (giữ 3 bản, có `--restore-test`).
 
 ```bash
 mkdir -p /root/backup && chmod 700 /root/backup
@@ -727,7 +800,7 @@ Ngoài CSDL, chép tay và cất nơi an toàn (những thứ này không nằm 
 `hds-ai/.env` (và `hds-ai/credentials/service-account.json` nếu máy chủ còn giữ
 đường lui về Drive — bỏ Drive rồi thì file này không còn cần thiết).
 
-Nên xoay vòng: giữ 7 bản gần nhất + 1 bản mỗi tháng, và **chép một bản ra máy khác** — dump nằm cùng ổ với CSDL thì ổ hỏng là mất cả hai.
+Nếu buộc phải làm tay: tự xoá bản cũ (mỗi bản ~11 GB — giữ 3 bản như script), và **chép một bản ra máy khác** — dump nằm cùng ổ với CSDL thì ổ hỏng là mất cả hai. Phục hồi thử bằng `pg_restore` vào CSDL tạm (mục 7.2) — script có sẵn `--restore-test`.
 
 > Bản dump chứa **toàn bộ hồ sơ khách hàng**. Thư mục quyền 700, không đưa lên GitHub/Drive công khai, chép ra ổ ngoài thì cân nhắc mã hoá.
 
@@ -834,7 +907,8 @@ UPDATE access_rules SET can_open=true
 mật khẩu của **admin duy nhất** mới cần dòng lệnh:
 
 ```bash
-cd /opt/hds-ai/hds-ai && sudo -u hds .venv/bin/python -m app.seed_accounts --reset-admin
+# chạy bằng user đang chạy backend (máy chủ HDS: pc), trong thư mục hds-ai của repo
+cd ~/hds-ai-full/hds-ai && .venv/bin/python -m app.seed_accounts --reset-admin
 ```
 
 ### 8.3 Ma trận quyền mặc định
@@ -888,7 +962,7 @@ cd hds-ai && .venv/bin/python -m tests.test_security
 | **Phong cách tư vấn** ×4 | | Prompt hệ thống cho 4 kênh: nội bộ / cổng khách / website / **tab Kiểm tra pháp lý** (`prompt_legal_review` — giọng rà soát hồ sơ, khác hẳn giọng tư vấn) | Đổi giọng văn, quy tắc trích dẫn |
 | **Bản đồ thư mục kho** | JSON | Tên thư mục trong kho → nhãn tài liệu | Thêm ngăn mới vào kho |
 | **Gọi model qua API** (`cloud_enabled`) | `false` | Bật là dữ liệu câu hỏi **rời khỏi máy chủ** và mỗi lượt hỏi tốn tiền. Cần `ANTHROPIC_API_KEY` (hoặc `COMPAT_*`) trong `.env` | Cần lập luận pháp lý sâu hơn qwen3:14b |
-| Phạm vi dữ liệu ra ngoài (`cloud_scope`) | `law_only` | `law_only` / `plus_attachments` / `all_but_finance`. Câu hỏi chạm dữ liệu ngoài phạm vi **không bị cắt xén** — nó tự chạy bằng model trên máy chủ. Công nợ chặn cứng ở mọi mức | Muốn tab Kiểm tra pháp lý dùng cloud → `plus_attachments` |
+| Phạm vi dữ liệu ra ngoài (`cloud_scope`) | `law_only` | `law_only` (chỉ văn bản pháp luật / án lệ / bản án) / `plus_attachments` / `all_but_finance`. Câu hỏi chạm dữ liệu ngoài phạm vi **không bị cắt xén** — nó tự chạy bằng model trên máy chủ. Công nợ chặn cứng ở mọi mức. **Từ 04/10/2026** tài liệu nội bộ không gắn khách (hồ sơ nhân sự, hợp đồng, mẫu, quy trình…) cũng bị giữ lại ở `law_only`/`plus_attachments` — trước đó chúng lọt qua. Dùng chung cho tính năng ChatGPT song song (mục dưới) | Muốn tab Kiểm tra pháp lý dùng cloud → `plus_attachments` |
 | Model cloud (`cloud_model`) | `claude:claude-sonnet-5` | Tiền tố `claude:` (API Anthropic) hoặc `api:` (endpoint tương thích OpenAI — Qwen/DashScope, DeepSeek, OpenRouter) | Rẻ hơn → `claude:claude-haiku-4-5` |
 | Kênh được gọi API (`cloud_channels`) | `internal` | **Không mở cho `public`** — đó là cửa cho người lạ gõ câu hỏi không giới hạn, mở cloud ở đó là mở hoá đơn cho người lạ bơm | Hiếm khi đổi |
 | Độ sâu suy nghĩ (`cloud_effort`) | `medium` | Nút chỉnh chi phí chính sau khi đã chốt model | Rà soát hồ sơ → `high`; tra cứu thường → `low` |
@@ -900,6 +974,69 @@ cd hds-ai && .venv/bin/python -m tests.test_security
 > **Cảnh báo cửa sổ ngữ cảnh:** prompt dài hơn `llm_num_ctx` bị Ollama cắt **phần đầu** — đúng chỗ chứa dữ liệu công ty. Giao diện hiện cảnh báo vàng "Ngữ cảnh đã chạm trần" trong bảng thời gian khi việc này xảy ra. Gặp cảnh báo thì giảm *Trần ký tự tài liệu*, đừng tăng `num_ctx` vô tội vạ (tốn RAM).
 >
 > **Cạm bẫy:** dòng cài đặt trong CSDL luôn thắng giá trị mặc định trong mã nguồn. Sau khi nâng cấp, nếu một tham số "không chịu đổi", có thể còn dòng cũ trong bảng `app_settings` — dùng nút **Về mặc định** để xoá dòng đó.
+
+### ChatGPT làm việc song song — soát đầu ra · "Xem câu trả lời khác" (04/10/2026)
+
+Câu trả lời chính **vẫn do Qwen trên máy chủ viết**. Hai việc phụ gọi model ngoài
+(mặc định ChatGPT qua API OpenAI):
+
+| Tính năng | Người dùng thấy | Ghi ở đâu |
+|---|---|---|
+| **Soát đầu ra** | Dưới câu trả lời: nút *Soát bằng ChatGPT* (hoặc tự chạy) → huy hiệu **ổn / cần xem lại / có sai sót**, bấm vào xem từng vấn đề + gợi ý sửa | `messages.ai_soat` |
+| **Xem câu trả lời khác** | Nút *Xem câu trả lời khác* → khung riêng bên dưới, chữ chảy dần, có panel nguồn riêng; *Hỏi lại* / *Thu gọn* | `messages.ai_khac` |
+
+**Bật (hai bước, mặc định đều TẮT):**
+
+1. IT điền khoá vào `hds-ai/.env` rồi khởi động lại backend — Claude/trợ lý không điền khoá hộ:
+   ```bash
+   OPENAI_API_KEY=sk-...        # khoá dự án trên platform.openai.com, đặt hạn mức chi tiêu ở đó
+   ```
+   `COMPAT_BASE_URL` để `https://api.openai.com/v1` (mặc định). Đã trỏ `COMPAT_BASE_URL` sang
+   DashScope/DeepSeek thì model `api:gpt-…` sẽ không gọi được — khi đó dùng model của nhà đó
+   hoặc `claude:…` (cần `ANTHROPIC_API_KEY`).
+2. Admin vào **Cài đặt AI → thẻ "ChatGPT làm việc song song"**: thẻ báo khoá đã có chưa, số lượt
+   và chi phí ước tính tháng này; chọn chế độ rồi bấm *Lưu cài đặt ChatGPT*.
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `ai_soat_che_do` | `tat` | `tat` / `nut` (người dùng bấm) / `tu_dong` (soát ngay sau mỗi câu trả lời vừa viết) |
+| `ai_soat_model` | `api:gpt-5-mini` | `api:<tên>` = OpenAI, `claude:<tên>` = Anthropic. OpenAI đổi tên model thường xuyên — gõ đúng tên đang bán |
+| `ai_soat_effort` | `low` | Độ sâu suy nghĩ khi soát |
+| `ai_soat_thay_doc_lai` | `false` | Khi soát **tự động**: bỏ lượt Qwen tự đọc lại câu dài (đỡ 30–60 giây). Chỉ bỏ khi lượt đó chắc chắn soát được |
+| `ai_khac_bat` | `false` | Hiện nút "Xem câu trả lời khác" |
+| `ai_khac_model` / `ai_khac_effort` | `api:gpt-5` / `medium` | Model trả lời khác |
+| `ai_ngoai_che_dinh_danh` | `true` | Che CCCD/CMND, điện thoại, email, mã số thuế, số tài khoản, **tên khách trong bảng `clients`** trước khi gửi |
+| `ai_ngoai_tran_luot_thang` | 500 | Trần lượt gọi mỗi tháng (soát + trả lời khác). 0 = không giới hạn. Hết lượt → nút báo 429 |
+| `ai_ngoai_max_tokens` | 12000 | Trần token sinh ra mỗi lượt (gpt-5 tính cả phần suy nghĩ) |
+
+**Dữ liệu nào rời máy chủ** — theo `cloud_scope` (dùng chung với nhánh API ngoài):
+
+- Chỉ kênh nội bộ, chỉ câu trả lời trong hội thoại **của chính người bấm**.
+- `law_only`: gửi câu hỏi + đoạn văn bản pháp luật/án lệ/bản án. Hồ sơ khách, tài liệu nội bộ,
+  file đính kèm, dữ liệu công ty, bản tóm tắt hội thoại và các câu trả lời cũ trong lịch sử bị **bỏ
+  khỏi phần gửi đi** (câu trả lời khác ghi rõ "không dựa trên …"). Câu trả lời đã **trích dẫn**
+  nguồn ngoài phạm vi, hoặc dựa trên dữ liệu công ty (đếm nhân sự, vụ việc…) → **không soát**
+  (huy hiệu khoá "Không gửi ChatGPT soát" kèm lý do) — gửi câu trả lời là gửi luôn nội dung nguồn.
+- `plus_attachments`: thêm file người dùng tự đính kèm. `all_but_finance`: mọi thứ trừ công nợ.
+- Công nợ/tài chính không bao giờ gửi. Không có đường lui về Qwen khi API hỏng — nút báo lỗi thật.
+- Mỗi lượt gọi ghi vào **Nhật ký hệ thống** (`audit_log`, hành động `ai_soat` / `ai_khac`: model,
+  thời gian, chi phí ước tính, số chỗ đã che) — đó cũng là nguồn đếm trần lượt tháng.
+
+**Chi phí tham khảo** (giá OpenAI trong `app/models.py → OPENAI_PRICES`, sửa khi họ đổi giá):
+một lượt soát gpt-5-mini ≈ 10–20 nghìn token vào + 1–2 nghìn ra → khoảng **0,5–1 cent**; một câu
+trả lời khác gpt-5 ≈ 20–25 nghìn token vào + 3–6 nghìn ra (gồm phần suy nghĩ) → khoảng **6–9 cent**.
+
+| Triệu chứng | Nguyên nhân / xử lý |
+|---|---|
+| Không thấy nút dưới câu trả lời | Chưa bật trong Cài đặt AI, hoặc `.env` chưa có khoá (thẻ cài đặt báo "chưa có") — sửa `.env` xong phải khởi động lại backend. Trình duyệt giữ cấu hình nút 60 giây |
+| "API từ chối yêu cầu (HTTP 400)… model not found" | Tên model sai/đã ngừng bán → sửa `ai_soat_model` / `ai_khac_model` |
+| "Model ngoài trả về rỗng" | gpt-5 tiêu hết trần token cho phần suy nghĩ → tăng `ai_ngoai_max_tokens` hoặc hạ độ sâu suy nghĩ |
+| "API lỗi HTTP 401 / 429" từ OpenAI | Khoá sai / hết hạn mức chi tiêu trên tài khoản OpenAI (khác trần lượt tháng của HDS) |
+| "Đã dùng hết N lượt…" | Trần `ai_ngoai_tran_luot_thang` — nâng trong Cài đặt AI |
+
+Tham số `max_tokens`/`temperature` mà model suy luận của OpenAI không nhận, và lỗi "organization
+must be verified to stream" được backend **tự sửa và gửi lại** (xem `models._sua_body_theo_loi`) —
+không cần cấu hình gì.
 
 ---
 
@@ -923,10 +1060,12 @@ web xuống 24576, trần ký tự tài liệu tự co theo.
 
 ### Nạp một lô lớn mà không muốn duyệt tay
 
-Mặc định **mọi PDF đều chờ người duyệt** (chính sách 20/08/2026) — OCR đọc sai
-một con số là sai căn cứ. Khi nạp một lô văn bản **công khai** lớn (hàng trăm
-nghị định, án lệ tải từ chinhphu.vn / toaan.gov.vn) mà chấp nhận rủi ro đó để
-khỏi bấm duyệt hàng trăm lần:
+**Từ 28/09/2026 không cần mục này trong vận hành thường:** tài liệu đọc sạch (tỉ lệ
+chữ rác ≤ 20%) đã tự duyệt, kể cả PDF (xem 4.4). Hai biến dưới đây chỉ có tác dụng
+khi admin đặt ngưỡng tự duyệt là *Tắt* (quay về chính sách 20/08 "mọi PDF chờ người
+duyệt"). Khi đó, để nạp một lô văn bản **công khai** lớn (hàng trăm nghị định, án lệ
+tải từ chinhphu.vn / toaan.gov.vn) mà chấp nhận rủi ro OCR để khỏi bấm duyệt hàng
+trăm lần:
 
 ```bash
 cd /opt/hds-ai-full
@@ -1010,6 +1149,22 @@ Ba script đầu **chỉ đọc, không sửa gì**, chạy lúc nào cũng an t
 | Rà soát rủi ro theo danh mục điều khoản | **Kiểm tra pháp lý & mẫu → Rà soát rủi ro** (cần file đính kèm đọc xong) → bảng Đạt/Cảnh báo/Thiếu + đoạn luật trong kho + **Xuất báo cáo Word** | `POST /legal/ra-soat`; danh mục 10 loại hợp đồng + ngưỡng (lãi ≤ 20 %/năm, phạt ≤ 8 %, thử việc ≤ 60 ngày…) trong `app/ra_soat_rui_ro.py` — bổ sung loại mới bằng cách thêm vào `LOAI_HOP_DONG`. |
 | Sao lưu tự động | `deploy/sao-luu.sh` + cron 02:30 | Xem mục 7. |
 
+## 10c. SỬA LỖI TỪ BỘ CÂU HỎI MẪU (05/10/2026)
+
+Đo bộ câu mẫu (`deploy/kiem-thu/BO_CAU_HOI_*.md`) trên máy chủ thật lộ ra 8 lỗi P1–P8; đã sửa và cập nhật máy chủ cùng ngày. Phần TÌM NGUỒN: 48/59 → **60/60** câu có đúng căn cứ, 56 câu ở [Nguồn 1–3] (trước sửa 27).
+
+| Việc | Nằm đâu | Vận hành |
+|---|---|---|
+| **Luật nền + điều nền**: câu không nêu tên văn bản vẫn tìm KHOANH trong bộ luật nền của chủ đề (BLLĐ, BLDS, LTM, LDN, SHTT, BLTTDS, Luật Đầu tư, Luật Đất đai); điều nền theo bảng (thử việc → Điều 24–27 BLLĐ, phạt vi phạm → Điều 301 LTM…) luôn có mặt và đứng đầu | `app/luat_nen.py` — bảng `LUAT` (số hiệu ưu tiên, bản hợp nhất mới nhất trước), `CHU_DE`, `DIEU_NEN` | Có bản hợp nhất mới thì sửa số hiệu trong `LUAT` (đệm id 10 phút). Câu hay hỏi mà tìm trượt Điều → thêm một dòng `DIEU_NEN` + một test trong `tests/test_sua_loi_0510.py`. |
+| **Nhãn hiệu lực** đọc từ chính câu "… hết hiệu lực kể từ…", "… thay thế…", "bãi bỏ…" trong văn bản đang phục vụ (danh sách dài sau dấu hai chấm, cấp dưới không khai tử cấp trên, bỏ chú thích của văn bản hợp nhất) | `app/van_ban.py` (bóc), `app/backfill_hieu_luc.py` (chạy lại cả kệ) | Sau khi nạp lô luật lớn: `set -a && . ./.env && set +a && .venv/bin/python -m app.backfill_hieu_luc --dry-run` (đếm + mẫu, không ghi) rồi bỏ `--dry-run`. Dùng chung khoá với bộ quét kho; không đụng nhãn người duyệt đặt tay. Kết quả 05/10: 24.219 hết hiệu lực, 2.371 hết một phần (trước: 11). |
+| Cron hằng giờ `7 * * * * ~/cap-nhat-hieu-luc.sh` (tệp vbpl) | `deploy/cap-nhat-hieu-luc.sh` (nguồn), bản chạy ở `~/cap-nhat-hieu-luc.sh` | Từ 05/10 **không ghi đè** `het_hieu_luc` (tệp vbpl không có giá trị này, trước đó mỗi giờ hồi sinh luật đã chết). Sửa script thì chép lại vào `~` trên máy chủ. |
+| Hỏi theo luật đã chết ("Luật Doanh nghiệp 2014") → câu trả lời mở đầu bằng ⚠ + văn bản thay thế; văn bản thay thế chỉ chen NGAY TRƯỚC văn bản cũ, không lên đầu nguồn | `app/rag.py` (`_van_ban_nhac_da_bi_thay`, khối "VĂN BẢN TRÚNG ĐÃ CHẾT") | — |
+| **Ngăn công khai nội bộ**: lô *Hợp đồng Hoa Kỳ – SEC* mở cho mọi tài khoản nội bộ (trợ lý, DN-ĐT, SHTT…); mẫu HĐ của HDS vẫn theo ma trận | Cài đặt `thu_muc_cong_khai_noi_bo` (JSON danh sách tên thư mục, mặc định `["Hợp đồng Hoa Kỳ – SEC"]`) | Thêm một thư mục tài liệu công khai khác = thêm tên vào danh sách (bảng `app_settings`), hiệu lực sau ≤ 10 phút. Cổng khách KHÔNG dùng ngoại lệ này. |
+| Câu hỏi hợp đồng Mỹ / tiếng Anh: ghim hợp đồng nêu tên bên ký (BOXABL…), lấy riêng trong lô SEC, lọc theo loại hợp đồng (thuê BĐS, NDA, li-xăng…) | `app/rag.py` (`_mau_nhac_ten`, `_ids_hop_dong_sec`, `_SEC_LOAI_HOP_DONG`), `app/company_context.py` (`DOC_SCOPE_WORDS`) | — |
+| Sửa thuật ngữ dịch máy lô SEC ("Thỏa thuận Mật khẩu" → "Bảo mật", ghi chú jury trial / forum non conveniens) | `app/sua_thuat_ngu_sec.py` | Đã chạy 05/10 (47 đoạn). **Học lại lô SEC thì chạy lại**: `.venv/bin/python -m app.sua_thuat_ngu_sec`. |
+| **Lỗ quyền (P8)**: đoạn liền kề của tài liệu bị khoá lọt vào câu trả lời (có từ 18/09) | `app/rag.py` (`_with_neighbours`, `loc_theo_quyen_mo` — nay fail-closed) | Không gỡ: đoạn của kho thiếu cột quyền bị CHẶN, không cho qua. |
+| Đo lại phần tìm nguồn (không gọi model, ~3 giây/câu) | `deploy/kiem-thu/nguon/do_nguon.py` + `cau_hoi_mau.py` | Chép hai tệp vào `/tmp` rồi: `cd ~/hds-ai-full/hds-ai && set -a && . ./.env && set +a && PYTHONPATH=/tmp .venv/bin/python /tmp/do_nguon.py > /tmp/do.json`. Sinh lại tài liệu: `python deploy/kiem-thu/nguon/build_cau_hoi_mau.py deploy/kiem-thu`. |
+
 ---
 
 ## 11. TRIỆU CHỨNG → LỆNH XỬ LÝ
@@ -1061,8 +1216,7 @@ journalctl -u ollama -n 50                 # model
 ```bash
 df -h                                  # ổ đĩa còn trống — dưới 100GB thì lo ổ mới
 sudo bash deploy/kiem-tra-vector.sh    # kho vector còn khoẻ
-ls -lh /root/backup/ | tail -5         # bản sao lưu CSDL có sinh ra thật không
-du -sh /mnt/backup/kho-tai-lieu/       # bản sao lưu KHO có chạy không
+bash deploy/sao-luu.sh --status        # nơi lưu, bản CSDL mới nhất, lượt chạy gần nhất (rc=0), dung lượng
 ```
 
 **Hằng tháng**
@@ -1114,7 +1268,7 @@ OLLAMA_KEEP_ALIVE=30m
 
 # Kho tài liệu
 DATA_LIB=./data/raw                    # thư mục kho (bỏ trống = dùng DATA_RAW)
-AUTO_LEARN_AUTO_APPROVE=0              # 0 = chờ người duyệt (khuyến nghị)
+AUTO_LEARN_AUTO_APPROVE=0              # chỉ dùng khi ngưỡng tự duyệt = Tắt; mặc định tự duyệt khi rác ≤ 20%
 # DRIVE_FOLDER_ID=                     # ★ để TRỐNG — có giá trị là quay về chế độ Drive
 
 # Đường dẫn dữ liệu
@@ -1127,7 +1281,20 @@ TOKEN_HOURS=12
 CORS_ORIGINS=                          # ★ để trống với cài đặt một máy chủ
 MAX_UPLOAD_MB=50
 PUBLIC_RATE_MAX=30                     # câu hỏi/giờ/IP ở kênh công khai
+LOGIN_RATE_MAX=10                      # lượt đăng nhập SAI / 5 phút / IP (từ 03/10 chỉ đếm lượt sai)
+API_DOCS=0                             # 1 = mở /docs, /redoc, /openapi.json (chỉ bật khi tích hợp, tắt lại sau)
+
+# Model ngoài (tuỳ chọn) — ChatGPT soát / câu trả lời khác, nhánh API ngoài
+OPENAI_API_KEY=                        # khoá OpenAI; trống = không nút ChatGPT nào hiện
+COMPAT_BASE_URL=https://api.openai.com/v1
+ANTHROPIC_API_KEY=                     # chỉ khi dùng model claude:…
 ```
+
+> **Từ 03/10/2026 (kiểm thử nghiệm thu):** `/api/docs` và `/api/openapi.json` **tắt mặc định** (sơ đồ API là
+> thông tin trinh sát); `/api/stats` cần đăng nhập nội bộ; `/api/health` gọi từ Internet chỉ trả bốn cờ
+> đúng/sai (`database`, `ollama`, `llm`, `embed`) — gọi thẳng trên máy chủ `curl http://127.0.0.1:8000/health`
+> vẫn ra đủ tên model. Tài khoản đang dùng **mật khẩu tạm** bị máy chủ trả 403 ở mọi API trừ
+> `/auth/me` và `/auth/change-password` cho tới khi đổi mật khẩu.
 
 ### 14.2 Cổng và tên cố định
 
@@ -1135,14 +1302,30 @@ PUBLIC_RATE_MAX=30                     # câu hỏi/giờ/IP ở kênh công kha
 |---|---|
 | nginx | 80 / 443 |
 | Backend | 127.0.0.1:8000 |
-| PostgreSQL | 5432 (container `hds-postgres`, volume `hds-ai_pgdata`) |
+| PostgreSQL | **127.0.0.1**:5432 (container `hds-postgres`, volume `hds-ai_pgdata`) |
 | Ollama | 11434 |
 | Cấu hình nginx | `/etc/nginx/sites-available/hds-ai` |
 | Unit backend | `hds-ai-backend.service` |
 | Unit quét kho | `hds-ai-quet-kho.service` + `.timer` |
 | Unit lưu trữ | `hds-luu-tru.service` + `.timer` |
 
-> Postgres đang mở cổng 5432 ra máy chủ. Nếu máy có IP công khai và chưa bật tường lửa, đây là một cổng CSDL nhìn thấy được từ Internet. Nên: `sudo ufw allow 80,443/tcp && sudo ufw enable`.
+> **Postgres chỉ nghe trên 127.0.0.1 (từ 03/10/2026).** Trước đó `docker-compose.yml` ghi `"5432:5432"` = mở ra mọi
+> địa chỉ; Docker tự thêm luật iptables nên **ufw không chặn được** cổng publish của container. Backend chạy cùng
+> máy nên không ảnh hưởng. Cần mở CSDL từ máy khác thì đi đường hầm SSH:
+> `ssh -L 5432:127.0.0.1:5432 pc@<máy chủ>` rồi nối `localhost:5432`.
+>
+> **Bộ nhớ Postgres (từ 04/10/2026)** đặt trong `docker-compose.yml` (`command:`): `shared_buffers=8GB`,
+> `effective_cache_size=20GB`, `random_page_cost=1.1` (ổ NVMe), `work_mem=16MB`. Trước đó là mặc định của image
+> (128 MB) trong khi chỉ mục vector đã 15 GB. Kiểm tra: `docker exec hds-postgres psql -U hds -d hdsai -c "show shared_buffers"`.
+> Máy chủ ít RAM hơn 24 GB thì hạ `shared_buffers` xuống ~25% RAM rồi `docker compose up -d postgres`.
+>
+> **Tìm từ khoá dưới RLS:** `schema.sql` đánh dấu `ts_match_vq` là LEAKPROOF để Postgres dùng được chỉ mục
+> GIN `idx_chunks_fts` cho tài khoản ứng dụng. Thiếu bước này mỗi lượt tìm từ khoá quét tuần tự 2 triệu đoạn
+> (3–15 giây). Kiểm tra: `select proleakproof from pg_proc where proname='ts_match_vq'` phải ra `t`.
+> Dựng CSDL mới hoặc nâng bản Postgres thì chạy lại `schema.sql` (update.sh tự làm). Kiểm tra: `docker port hds-postgres` phải ra
+> `5432/tcp -> 127.0.0.1:5432`. Áp cấu hình mới cho máy đã chạy: `cd hds-ai && docker compose up -d postgres`
+> (tạo lại container, dữ liệu nằm trong volume nên không mất; mất kết nối vài giây — **đừng chạy lúc 02:30–03:00**
+> khi sao lưu CSDL đang chạy).
 
 ### 14.3 Tài liệu liên quan trong `deploy/`
 

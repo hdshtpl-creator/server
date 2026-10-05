@@ -9,6 +9,13 @@ credentials/
 **/credentials/*.json
 *.pem
 *.key
+# Bản chép tay của .env (02/10/2026: hds-ai/.env.txt từng lọt lên GitHub công khai)
+.env.txt
+*.env.txt
+.env.bak
+*.env.bak
+# Cài đặt máy cá nhân của Claude Code (chứa lệnh ssh, IP máy chủ) — từng lọt lên GitHub
+.claude/settings.local.json
 
 # ===== Sinh ra khi chạy, không cần lưu lịch sử =====
 node_modules/

@@ -17,7 +17,7 @@ import * as api from '../../api';
 import type { Client, PendingReviewDoc, ReviewChunk } from '../../types';
 import { ACCESS_LEVELS, DOC_TYPES } from '../../constants';
 import {
-  AlertCircle, CheckCircle2, Download, ExternalLink, FileText, Loader2, Save, X,
+  AlertCircle, CheckCircle2, Download, ExternalLink, FileText, Loader2, Save, Sparkles, X,
 } from 'lucide-react';
 
 const EDIT_REASONS: Array<{ value: string; label: string }> = [
@@ -66,11 +66,17 @@ export const DocumentCompareModal: React.FC<Props> = ({
   // --- Cột phải: nội dung bot đọc ---
   const [cach, setCach] = useState<'toan_van' | 'theo_doan'>('toan_van');
   const [noiDung, setNoiDung] = useState('');
+  // Bản đang lưu trên máy chủ — để biết người duyệt đã sửa gì chưa (nút "Gợi ý
+  // lý do" chỉ có nghĩa khi có chỗ sửa).
+  const [noiDungGoc, setNoiDungGoc] = useState('');
   const [soDoan, setSoDoan] = useState<number | null>(null);
   const [trangThai, setTrangThai] = useState<string | null>(null);
   const [dangTai, setDangTai] = useState(true);
   const [dangLuu, setDangLuu] = useState(false);
   const [lyDo, setLyDo] = useState('sua_loi_trich_xuat');
+  // Gợi ý lý do từ máy chủ (quy tắc hoặc AI) — chỉ điền ô chọn, KHÔNG tự lưu.
+  const [goiY, setGoiY] = useState<string | null>(null);
+  const [dangGoiY, setDangGoiY] = useState(false);
   const [ghiChu, setGhiChu] = useState('');
   const [doan, setDoan] = useState<ReviewChunk[] | null>(null);
   const [dangDuyet, setDangDuyet] = useState(false);
@@ -83,6 +89,7 @@ export const DocumentCompareModal: React.FC<Props> = ({
       .then((data) => {
         if (huy) return;
         setNoiDung(data.content || '');
+        setNoiDungGoc(data.content || '');
         setSoDoan(data.chunk_count ?? null);
         setTrangThai(data.extraction_status || null);
       })
@@ -139,6 +146,24 @@ export const DocumentCompareModal: React.FC<Props> = ({
     }
   };
 
+  const daSua = noiDung !== noiDungGoc;
+
+  const goiYLyDo = async () => {
+    if (!daSua || dangGoiY) return;
+    setDangGoiY(true);
+    try {
+      const res = await api.goiYLyDoSua(doc.id, noiDung);
+      if (res?.ly_do && EDIT_REASONS.some((r) => r.value === res.ly_do)) {
+        setLyDo(res.ly_do);
+      }
+      setGoiY(res?.giai_thich?.trim() || null);
+    } catch (err: any) {
+      showToast(err?.message || 'Không gợi ý được lý do sửa.', 'error');
+    } finally {
+      setDangGoiY(false);
+    }
+  };
+
   const luuNoiDung = async () => {
     if (noiDung.trim().length < 30) {
       showToast('Nội dung sau sửa quá ngắn (dưới 30 ký tự).', 'error');
@@ -148,6 +173,8 @@ export const DocumentCompareModal: React.FC<Props> = ({
     try {
       const res = await api.saveReviewContent(doc.id, noiDung, lyDo, ghiChu);
       setSoDoan(res.chunks ?? null);
+      setNoiDungGoc(noiDung);     // bản vừa lưu thành bản gốc mới
+      setGoiY(null);
       setTrangThai('edited');
       setDoan(null);               // đoạn cũ không còn đúng sau khi chia lại
       // Backend vừa bóc LẠI danh tính từ bản đã sửa: không nạp đè thì nút Duyệt
@@ -380,6 +407,18 @@ export const DocumentCompareModal: React.FC<Props> = ({
                 >
                   {EDIT_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
+                <button
+                  type="button"
+                  onClick={() => void goiYLyDo()}
+                  disabled={!daSua || dangGoiY || dangLuu}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold text-hds-navy dark:text-blue-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title={daSua
+                    ? 'Máy chủ đối chiếu chỗ sửa và gợi ý lý do — bạn vẫn phải bấm Lưu để xác nhận'
+                    : 'Sửa nội dung trước rồi mới gợi ý được lý do'}
+                >
+                  {dangGoiY ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                  <span>Gợi ý lý do</span>
+                </button>
                 <input
                   value={ghiChu}
                   onChange={(e) => setGhiChu(e.target.value)}
@@ -394,6 +433,11 @@ export const DocumentCompareModal: React.FC<Props> = ({
                   {dangLuu ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
                   <span>{dangLuu ? 'Đang chia đoạn & tạo vector…' : 'Lưu nội dung đã sửa'}</span>
                 </button>
+                {goiY && (
+                  <p className="basis-full text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                    Gợi ý: {goiY}
+                  </p>
+                )}
               </div>
             )}
           </div>
