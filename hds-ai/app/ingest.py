@@ -16,7 +16,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 from xml.etree import ElementTree
 
-from app import db, van_ban
+from app import chay_soffice, db, van_ban
 from app.models import embed, summarize
 
 # Kích thước ĐOẠN MỤC TIÊU, không phải kích thước cố định. `chunk_generic` cắt
@@ -831,7 +831,6 @@ def _convert_via_libreoffice(path: Path, target: str, timeout=180) -> Path:
     Người gọi phải tự dọn thư mục cha của file trả về — nên luôn đi qua
     `_extract_via_libreoffice` thay vì gọi thẳng hàm này."""
     import shutil
-    import subprocess
     import tempfile
 
     soffice = shutil.which("libreoffice") or shutil.which("soffice")
@@ -842,11 +841,11 @@ def _convert_via_libreoffice(path: Path, target: str, timeout=180) -> Path:
     tmp = Path(tempfile.mkdtemp(prefix="hds_conv_"))
     try:
         # UserInstallation riêng để nhiều lần gọi liên tiếp không khoá hồ sơ nhau.
-        subprocess.run(
+        # Đi qua chay_soffice: quá giờ phải giết cả soffice.bin (xem module đó).
+        chay_soffice.chay(
             [soffice, f"-env:UserInstallation=file://{tmp}/profile",
              "--headless", "--convert-to", target, "--outdir", str(tmp), str(path)],
-            check=True, timeout=timeout,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            timeout=timeout)
     except Exception as exc:  # noqa: BLE001 — mọi kiểu hỏng đều quy về một mã lỗi có hướng xử lý
         shutil.rmtree(tmp, ignore_errors=True)
         raise ExtractionError("office_conversion_failed",
@@ -1008,7 +1007,6 @@ def _extract_doc_strict(path: Path) -> str:
     Cần gói hệ thống 'libreoffice' trên máy chủ (deploy/setup.sh đã cài).
     """
     import shutil
-    import subprocess
     import tempfile
 
     soffice = shutil.which("libreoffice") or shutil.which("soffice")
@@ -1018,11 +1016,10 @@ def _extract_doc_strict(path: Path) -> str:
     try:
         with tempfile.TemporaryDirectory() as tmp:
             # UserInstallation riêng để nhiều lần gọi liên tiếp không khoá hồ sơ nhau
-            subprocess.run(
+            chay_soffice.chay(
                 [soffice, f"-env:UserInstallation=file://{tmp}/profile",
                  "--headless", "--convert-to", "docx", "--outdir", tmp, str(path)],
-                check=True, timeout=120,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                timeout=120)
             out = Path(tmp) / (path.stem + ".docx")
             if not out.exists():
                 # Tên có ký tự lạ thì LibreOffice đặt tên khác — lấy file .docx

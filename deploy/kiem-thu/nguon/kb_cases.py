@@ -51,6 +51,34 @@ DIEU = {
     "4.10": "Điểm b khoản 2 Điều 26 Luật Đầu tư 2020; NĐ 31/2021/NĐ-CP",
 }
 
+# TIÊU CHÍ THEO LUẬT HIỆN HÀNH — ĐỀ XUẤT 07/10/2026, CHỜ LUẬT SƯ HDS XÁC NHẬN.
+# Cột DIEU ở trên do HDS soạn theo Luật Đầu tư 61/2020 và NĐ 01/2021, 31/2021 —
+# trong kho cả ba đã hết hiệu lực (Luật 143/2025/QH15 từ 01/03/2026 đánh số lại
+# toàn bộ; NĐ 168/2025 thay NĐ 01/2021; NĐ 96/2026 thay NĐ 31/2021). Bot dẫn đúng
+# luật mới thì bị chấm SAI theo cột cũ. Đối chiếu tên điều trong kho:
+#   Điều 26 cũ (thủ tục góp vốn, mua cổ phần)  → Điều 21 mới
+#   Điều 22 cũ (thành lập tổ chức kinh tế)      → Điều 19 mới
+#   Điều 29 cũ (lựa chọn nhà đầu tư)            → Điều 23 mới
+#   Điều 30–32 cũ (thẩm quyền chấp thuận CTĐT)  → Điều 24, 25 mới
+#   Điều 37–38 cũ (cấp GCNĐKĐT)                 → Điều 26, 27 mới
+#   Điều 41 cũ (điều chỉnh dự án)               → Điều 33 mới
+#   Điều 44 cũ (thời hạn hoạt động)             → Điều 31 mới
+#   Điều 46 cũ (chuyển nhượng dự án)            → Điều 34 mới
+# Câu 1.5: Điều 202 là TNHH → cổ phần; câu hỏi là cổ phần → TNHH hai thành viên
+# = Điều 204 (tên điều trong 67/VBHN-VPQH).
+DIEU_HIEN_HANH = {
+    "1.2": "Điều 21 Luật Đầu tư 2025",
+    "1.4": "Điều 34 Luật Đầu tư 2025; Luật Đất đai (đất thuê trả tiền hằng năm)",
+    "1.5": "Điều 204 LDN 2020",
+    "4.1": "Điều 38, 39, 41 LDN 2020; NĐ 168/2025/NĐ-CP",
+    "4.4": "Điều 57, 58 LDN 2020; NĐ 168/2025/NĐ-CP",
+    "4.5": "Luật Quản lý thuế 108/2025/QH15; NĐ 168/2025/NĐ-CP",
+    "4.7": "Điều 19, 26, 27 Luật Đầu tư 2025; NĐ 96/2026/NĐ-CP",
+    "4.8": "Điều 23, 24, 25 Luật Đầu tư 2025; Luật Đất đai",
+    "4.9": "Điều 31, 33 Luật Đầu tư 2025",
+    "4.10": "Điều 21 Luật Đầu tư 2025; NĐ 96/2026/NĐ-CP",
+}
+
 # Kết quả các lượt trước (biên bản 15/09, lượt 11/09) để tester so tiến bộ.
 LUOT_TRUOC = {
     "1.1": "15/09: Một phần (dẫn Điều 47, thiếu Điều 35)",
@@ -67,6 +95,7 @@ def load():
         c["tieu_chi"] = re.sub(r"\s*(Dưới đây là.*|\d\.\s*Nhóm Kịch bản:.*)$", "",
                                c["tieu_chi"]).strip()
         c["dieu"] = DIEU[c["id"]]
+        c["dieu_hien_hanh"] = DIEU_HIEN_HANH.get(c["id"])
         c["luot_truoc"] = LUOT_TRUOC.get(c["id"], "")
         # Câu gửi bot = Tình huống + Yêu cầu, nguyên văn của HDS.
         c["cau_hoi"] = f"{c['tinh_huong']} {c['yeu_cau']}".strip()

@@ -17,6 +17,21 @@ cp deploy/kiem-thu/du-lieu-mau/*.docx deploy/kiem-thu/du-lieu-mau/*.txt deploy/k
 `kt_lib.mint()` ký JWT bằng `app.auth.make_token` ngay trên máy chủ (đọc JWT_SECRET từ `.env`, không in ra) —
 vì vậy phải chạy từ thư mục `hds-ai` bằng `.venv` của backend.
 
+## Bộ câu hỏi mẫu 05/10 (chạy thật, có sinh câu trả lời)
+`kt_cau_hoi_mau.py` gửi 112 câu của `cau_hoi_mau.py` + 24 tình huống KB qua API (tài khoản thử kt.banqt / kt.troly,
+kênh website), M6.x hỏi tiếp trong hội thoại câu gốc, M12.x tải tệp mẫu từ `deploy/kiem-thu/du-lieu-mau`:
+```bash
+mkdir -p /tmp/kt_mau && chmod 700 /tmp/kt_mau
+cp deploy/kiem-thu/nguon/tu_dong/{kt_cau_hoi_mau.py,kt_lib.py} deploy/kiem-thu/nguon/{cau_hoi_mau.py,kb_cases.py,kb40.json} /tmp/kt_mau/
+cd ~/hds-ai-full/hds-ai && KT_DIR=/tmp/kt_mau .venv/bin/python /tmp/kt_mau/kt_cau_hoi_mau.py chay   # ~1,5 giờ, chạy lại được
+KT_DIR=/tmp/kt_mau .venv/bin/python /tmp/kt_mau/kt_cau_hoi_mau.py don    # xoá hội thoại/nháp thử, khoá tài khoản
+```
+Về máy dev: chép `cau_hoi_mau_kq.json` → `nguon/ket_qua_cau_hoi_mau_0510.json`, **che tên khách**
+(`python deploy/kiem-thu/nguon/che_du_lieu_khach.py <tệp>`) rồi chấm vào `nguon/cham_cau_hoi_mau_0510.json` và sinh
+`python deploy/kiem-thu/nguon/build_ket_qua_cau_hoi_mau.py deploy/kiem-thu`. Xoá `/tmp/kt_mau` trên máy chủ sau khi chép.
+Kiểm tiến trình bằng `pgrep -fa "^.venv/bin/python /tmp/kt_mau"` — `pgrep -f "kt_cau_hoi_mau.py chay"` qua SSH khớp
+luôn chính lệnh SSH.
+
 ## Chạy
 Chạy NỀN qua một script, tách khỏi phiên SSH (`nohup setsid`), để đứt SSH không giết lượt chạy:
 ```bash

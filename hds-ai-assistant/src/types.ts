@@ -850,6 +850,8 @@ export interface DocumentDetail {
   ty_le_rac?: number | null;
   so_doan: number;
   can_open: boolean;
+  /** Đuôi tệp lưu trong kho ('.md' = chỉ có bản chữ, không có bản gốc). */
+  duoi?: string | null;
   /** Văn bản này nói về ai (thay thế/sửa đổi/căn cứ văn bản nào). */
   quan_he_xuoi: DocRelation[];
   /** Ai nói về nó (bị ai thay thế/sửa đổi/hướng dẫn). */

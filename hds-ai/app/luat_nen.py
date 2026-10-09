@@ -42,7 +42,11 @@ LUAT = {
     "ldn": (("67/VBHN-VPQH", "59/2020/QH14"), "doanh nghiep"),
     "shtt": (("11/VBHN-VPQH", "50/2005/QH11"), "so huu tri tue"),
     "blttds": (("11/VBHN-VPQH", "92/2015/QH13"), "to tung dan su"),
-    "ldt": (("61/2020/QH14",), "dau tu"),
+    # Luật Đầu tư 61/2020/QH14 hết hiệu lực từ 01/03/2026 — Luật 143/2025/QH15
+    # thay thế và ĐÁNH SỐ LẠI toàn bộ (Điều 26 cũ "thủ tục góp vốn, mua cổ
+    # phần" là Điều 21 mới). Trỏ bản cũ là kéo điều đã chết vào mọi câu đầu tư
+    # (đo 40 kịch bản 07/10/2026: 1.2, 4.7–4.10).
+    "ldt": (("143/2025/QH15",), "dau tu"),
     "ldd": (("31/2024/QH15",), "dat dai"),
 }
 
@@ -50,7 +54,7 @@ TEN_LUAT = {
     "blld": "Bộ luật Lao động 2019", "blds": "Bộ luật Dân sự 2015",
     "ltm": "Luật Thương mại 2005", "ldn": "Luật Doanh nghiệp 2020",
     "shtt": "Luật Sở hữu trí tuệ", "blttds": "Bộ luật Tố tụng dân sự 2015",
-    "ldt": "Luật Đầu tư 2020", "ldd": "Luật Đất đai 2024",
+    "ldt": "Luật Đầu tư 2025", "ldd": "Luật Đất đai 2024",
 }
 
 # Cụm chủ đề (đã bỏ dấu, chữ thường) → bộ luật nền.
@@ -63,9 +67,11 @@ CHU_DE = {
              "lai suat", "giao dich dan su", "boi thuong thiet hai", "quyen so huu",
              "bat kha khang", "hop dong dan su", "huy bo hop dong", "the chap",
              "cam co", "thoi hieu khoi kien ve hop dong", "bo luat dan su",
-             "gioi han trach nhiem", "thiet hai", "loi nhuan bi mat"),
+             "gioi han trach nhiem", "thiet hai", "loi nhuan bi mat",
+             "chi nhanh", "phap nhan", "van phong dai dien"),
     "ltm": ("thuong mai", "thuong nhan", "mua ban hang hoa", "nhuong quyen",
-            "dai ly thuong mai", "logistics",
+            "dai ly thuong mai", "logistics", "giao hang", "nha cung cap",
+            "phat hop dong", "mien trach nhiem",
             # "giới hạn phạt vi phạm theo pháp luật Việt Nam" (EN-D3 05/10) —
             # trần 8% của Điều 301 là thứ người hỏi cần đối chiếu.
             "gioi han phat vi pham", "muc phat vi pham", "phat vi pham hop dong",
@@ -74,15 +80,21 @@ CHU_DE = {
             "cong ty co phan", "co dong", "von dieu le", "gop von",
             "hoi dong thanh vien", "hoi dong quan tri", "giai the",
             "nguoi dai dien theo phap luat", "thanh lap cong ty", "giam von",
-            "tang von", "phat hanh co phan"),
+            "tang von", "phat hanh co phan", "ten doanh nghiep", "chuyen doi",
+            "chuyen nhuong co phan", "chao ban co phan", "dai hoi dong co dong",
+            "von gop", "phan von gop", "tai san gop von"),
     "shtt": ("nhan hieu", "sang che", "kieu dang cong nghiep", "quyen tac gia",
              "ban quyen", "so huu tri tue", "van bang bao ho", "chi dan dia ly",
              "giai phap huu ich"),
     "blttds": ("khoi kien", "khang cao", "to tung dan su", "thu ly", "an phi",
                "bien phap khan cap tam thoi", "phuc tham", "so tham",
-               "giam doc tham", "nguyen don", "bi don"),
+               "giam doc tham", "nguyen don", "bi don", "phong toa", "duong su"),
     "ldt": ("nha dau tu nuoc ngoai", "du an dau tu", "chu truong dau tu",
-            "giay chung nhan dang ky dau tu", "uu dai dau tu"),
+            "giay chung nhan dang ky dau tu", "uu dai dau tu", "von dau tu nuoc ngoai",
+            "chap thuan chu truong", "lua chon nha dau tu", "tien do thuc hien",
+            "tiep can thi truong", "dieu chinh du an", "chuyen nhuong du an",
+            "hop dong bcc", "dau tu ra nuoc ngoai", "nha dau tu han quoc",
+            "nha dau tu nhat ban", "nha dau tu trung quoc", "nha dau tu singapore"),
     "ldd": ("quyen su dung dat", "giao dat", "thu hoi dat", "thue dat",
             "dat nong nghiep", "so do", "chuyen muc dich su dung dat"),
 }
@@ -109,14 +121,27 @@ DIEU_NEN = (
     ("blds", r"boi thuong thiet hai|gioi han trach nhiem|loi nhuan bi mat|thiet hai", (360, 419)),
     ("blds", r"bat kha khang", (156, 351)),
     ("blds", r"huy bo hop dong", (423, 427)),
-    ("blds", r"hoan canh thay doi", (420,)),
+    ("blds", r"hoan canh thay doi|thay doi co ban|bien dong gia", (420,)),
+    ("blds", r"phap nhan|chi nhanh|van phong dai dien", (74, 84)),
     ("ltm", r"phat vi pham|muc phat", (301, 300)),
     ("ltm", r"boi thuong", (302, 303, 307)),
     ("ltm", r"mien trach|bat kha khang", (294,)),
     ("ltm", r"thoi hieu", (319,)),
     ("ldn", r"gop von|thoi han gop", (47, 75, 113)),
+    ("ldn", r"tai san gop von|chuyen quyen so huu|gop von bang", (35,)),
     ("ldn", r"giai the", (207, 208)),
-    ("ldn", r"giam von", (68, 112)),
+    ("ldn", r"giam von|hoan tra (?:mot phan )?von", (68, 112)),
+    # Đã đối chiếu tên điều trong 67/VBHN-VPQH ngày 07/10/2026.
+    ("ldn", r"ten doanh nghiep|dat ten|ten cong ty|trung ten|ten trung|gay nham lan|ten viet tat",
+     (37, 38, 39, 41)),
+    ("ldn", r"chuyen doi", (202, 203, 204, 205)),
+    ("ldn", r"chia cong ty|tach cong ty|hop nhat cong ty|sap nhap", (198, 199, 200, 201)),
+    ("ldn", r"quyen thanh lap|khong duoc (?:thanh lap|gop von)|cam thanh lap|can bo|cong chuc|vien chuc",
+     (17,)),
+    ("ldn", r"hop hoi dong thanh vien|trieu tap hop", (57, 58, 59)),
+    ("ldn", r"chuyen nhuong co phan", (127,)),
+    ("ldn", r"chao ban|phat hanh rieng le|rieng le", (123, 125)),
+    ("ldn", r"dai hoi dong co dong|nghi quyet .{0,30}thong qua|ty le bieu quyet", (148,)),
     ("ldn", r"phat hanh co phan", (111, 74)),
     ("ldn", r"bien ban hop", (60,)),
     ("ldn", r"nguoi dai dien theo phap luat", (12,)),
@@ -130,22 +155,54 @@ DIEU_NEN = (
     ("shtt", r"tham dinh|xu ly don|thu tuc dang ky", (119,)),
     ("shtt", r"tinh moi", (60,)),
     ("shtt", r"cham dut hieu luc|khong su dung", (95,)),
+    ("shtt", r"chuyen quyen su dung|cap quyen su dung|li.?xang|cap phep su dung|hop dong su dung",
+     (142,)),
     ("blttds", r"don khoi kien|noi dung don|nop don", (189, 190)),
     ("blttds", r"khang cao", (271, 272, 273)),
     ("blttds", r"bien phap khan cap", (111, 114)),
+    ("blttds", r"phong toa", (124, 125)),
+    ("blttds", r"bien phap bao dam", (136,)),
+    ("blttds", r"duong su|tu cach (?:to tung|khoi kien|bi don|nguyen don)|tham gia to tung", (68,)),
     ("blttds", r"huy ban an", (310,)),
+    ("blld", r"phuong an su dung lao dong", (44,)),
+    # Luật Đầu tư 143/2025/QH15 — số điều MỚI, đối chiếu kho ngày 07/10/2026.
+    ("ldt", r"nganh nghe cam", (6,)),
+    ("ldt", r"(?:nganh nghe|kinh doanh) co dieu kien", (7,)),
+    ("ldt", r"tiep can thi truong|ty le so huu|nha dau tu nuoc ngoai|von dau tu nuoc ngoai", (8,)),
+    ("ldt", r"uu dai dau tu|ho tro dau tu", (14, 15)),
+    ("ldt", r"thanh lap (?:to chuc kinh te|cong ty|doanh nghiep)", (19, 20)),
+    ("ldt", r"gop von|mua co phan|mua phan von gop|mua lai", (21,)),
+    ("ldt", r"hop dong bcc|hop tac kinh doanh", (22, 37)),
+    ("ldt", r"lua chon nha dau tu", (23,)),
+    ("ldt", r"chu truong dau tu", (24, 25)),
+    ("ldt", r"giay chung nhan dang ky dau tu|chung nhan dau tu|\birc\b", (26, 27)),
+    ("ldt", r"thu tuc dau tu dac biet", (28,)),
+    ("ldt", r"thoi han hoat dong|tien do thuc hien", (31,)),
+    ("ldt", r"dieu chinh", (33,)),
+    ("ldt", r"chuyen nhuong (?:\w+ ){0,3}du an", (34,)),
+    ("ldt", r"ngung hoat dong", (35,)),
+    ("ldt", r"cham dut hoat dong", (36,)),
+    ("ldt", r"dau tu ra nuoc ngoai", (39, 42)),
 )
 
-TOI_DA_LUAT = 2       # tối đa bộ luật nền mỗi câu
+# 3 chứ không 2 (07/10/2026): tình huống thật hay chạm 3 bộ luật — câu 2.8 cần
+# BLDS (bất khả kháng, hoàn cảnh thay đổi) + LTM (miễn trách) mà LDN chen lên
+# vì có chữ "doanh nghiệp", LTM bị gạt và Điều 294 không bao giờ có mặt.
+TOI_DA_LUAT = 3       # tối đa bộ luật nền mỗi câu
 DOAN_CHUNG = 3        # ngoài điều nền, lấy thêm bấy nhiêu đoạn khớp nhất
 
 
 def chu_de_luat(question: str) -> list:
-    """Các bộ luật nền câu hỏi chạm tới, nhiều cụm khớp trước. Hàm thuần."""
+    """Các bộ luật nền câu hỏi chạm tới, điểm cao trước. Hàm thuần.
+
+    Điểm = tổng SỐ CHỮ của các cụm khớp, không phải số cụm: cụm dài là cụm
+    đặc trưng. Đếm cụm thì "thương mại" (trong "đất thương mại dịch vụ") và
+    "doanh nghiệp" ngang hàng "chấp thuận chủ trương đầu tư" và thắng nhờ thứ
+    tự bảng — câu 4.8 (07/10/2026) mất hẳn Luật Đầu tư."""
     q = f" {_fold(question)} "
     diem = []
     for i, (khoa, cum) in enumerate(CHU_DE.items()):
-        n = sum(1 for c in cum if f" {c} " in q)
+        n = sum(len(c.split()) for c in cum if f" {c} " in q)
         if n:
             diem.append((-n, i, khoa))
     return [k for _n, _i, k in sorted(diem)][:TOI_DA_LUAT]

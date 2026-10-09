@@ -9,7 +9,7 @@
  * Người có quyền duyệt sửa được tại chỗ: thêm/gỡ quan hệ, đổi trạng thái
  * hiệu lực. Mọi giá trị enum lấy từ constants.ts (khớp CHECK backend).
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import * as api from '../../api';
 import type { DocRelation, DocumentDetail, DocumentVersion, SoSanhKetQua } from '../../types';
@@ -112,7 +112,10 @@ const VersionHistory: React.FC<{ docId: number; title: string; showToast: (m: st
 interface Props {
   docId: number;
   canReview: boolean;
-  onClose: () => void;
+  /** daDoi = trong modal vừa đổi hiệu lực/quan hệ — chỉ khi đó nơi gọi mới
+   *  cần nạp lại danh sách (nạp lại mỗi lần đóng làm bảng chớp + nhảy về đầu
+   *  trang, người dùng tưởng trang bị F5). */
+  onClose: (daDoi: boolean) => void;
 }
 
 const RelationRow: React.FC<{
@@ -188,6 +191,8 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [newRel, setNewRel] = useState({ loai: 'thay_the', so_hieu_dich: '', ten_dich: '' });
+  const daDoi = useRef(false);
+  const dong = () => onClose(daDoi.current);
 
   const load = async () => {
     setIsLoading(true);
@@ -195,7 +200,7 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
       setDetail(await api.getDocumentDetail(docId));
     } catch (err: any) {
       showToast(err?.message || 'Không tải được chi tiết tài liệu.', 'error');
-      onClose();
+      dong();
     } finally {
       setIsLoading(false);
     }
@@ -217,6 +222,7 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
   const handleDeleteRel = async (relId: number) => {
     try {
       await api.deleteDocumentRelation(docId, relId);
+      daDoi.current = true;
       showToast('Đã gỡ quan hệ.', 'success');
       load();
     } catch (err: any) {
@@ -237,6 +243,7 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
         so_hieu_dich: newRel.so_hieu_dich.trim() || null,
         ten_dich: newRel.ten_dich.trim() || null,
       });
+      daDoi.current = true;
       showToast('Đã thêm quan hệ.', 'success');
       setNewRel({ loai: 'thay_the', so_hieu_dich: '', ten_dich: '' });
       setAddOpen(false);
@@ -252,6 +259,7 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
     setSaving(true);
     try {
       await api.updateDocumentVanBan(docId, { trang_thai_hieu_luc: value });
+      daDoi.current = true;
       showToast('Đã cập nhật trạng thái hiệu lực.', 'success');
       load();
     } catch (err: any) {
@@ -264,7 +272,7 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+      onClick={dong}
       role="dialog"
       aria-modal="true"
     >
@@ -284,7 +292,7 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
               </p>
             )}
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 shrink-0" aria-label="Đóng">
+          <button type="button" onClick={dong} className="text-slate-400 hover:text-slate-600 shrink-0" aria-label="Đóng">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -363,7 +371,7 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
                 className="inline-flex items-center gap-1 px-2.5 py-1 bg-hds-soft dark:bg-slate-800 text-hds-navy dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-700 font-bold rounded-lg border border-blue-200 dark:border-slate-700 text-[11px] transition-colors"
               >
                 <Eye className="w-3 h-3" />
-                Xem bản gốc
+                {detail.duoi === '.md' ? 'Xem văn bản' : 'Xem bản gốc'}
               </button>
               <button
                 type="button"
@@ -374,6 +382,12 @@ export const DocumentDetailModal: React.FC<Props> = ({ docId, canReview, onClose
                 Tải lại
               </button>
             </div>
+            {detail.duoi === '.md' && (
+              <p className="-mt-3 text-[11px] text-slate-500 dark:text-slate-400">
+                Kho chỉ lưu <b>bản chữ</b> của văn bản này (tệp .md), không có bản PDF/Word gốc —
+                trang xem và tệp Word tải về được dàn lại từ bản chữ đó.
+              </p>
+            )}
 
             {canReview && <VersionHistory docId={detail.id} title={detail.title} showToast={showToast} />}
 

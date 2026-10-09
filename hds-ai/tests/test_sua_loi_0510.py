@@ -223,6 +223,62 @@ class VanBanCuTests(unittest.TestCase):
         self.assertEqual(rag._canh_bao_van_ban_cu("abc", []), "abc")
 
 
+class LuatDaBiThayTests(unittest.TestCase):
+    """Chạy thật 06/10: "Theo Luật Đất đai 2013…" không có cảnh báo ⚠ vì kho
+    lưu trích yếu "Đất đai" (loại "Luật" ở cột riêng) mà hàm chỉ so trích yếu."""
+
+    def test_ten_khop_khi_trich_yeu_khong_kem_loai(self):
+        self.assertTrue(rag.khop_ten_van_ban_thay(" luat dat dai ", None, "Luật", "Đất đai",
+                                                  "10_Luat_Dat_dai_31-2024-QH15"))
+        self.assertTrue(rag.khop_ten_van_ban_thay(" luat doanh nghiep ", None, "Luật", "Doanh nghiệp",
+                                                  "Luật số 59-2020-QH14"))
+        self.assertTrue(rag.khop_ten_van_ban_thay(" bo luat lao dong ", None, "Bộ luật", "Lao động", None))
+
+    def test_khac_ten_khong_khop(self):
+        self.assertFalse(rag.khop_ten_van_ban_thay(" luat dat dai ", None, "Luật", "Đầu tư",
+                                                   "07_Luat_Dau_tu_61-2020-QH14"))
+
+    def test_ten_doc_duoc(self):
+        self.assertEqual(rag.ten_van_ban_thay(None, "Luật", "Đất đai", "x", "31/2024/QH15"),
+                         "Luật Đất đai số 31/2024/QH15")
+        # ten_nguon trong bảng quan hệ là trích yếu trơn — vẫn ra tên đủ
+        self.assertEqual(rag.ten_van_ban_thay("Đất đai", "Luật", "Đất đai", "x", "31/2024/QH15"),
+                         "Luật Đất đai số 31/2024/QH15")
+        self.assertEqual(rag.ten_van_ban_thay("Nghị định số 168/2025/NĐ-CP", None, None, "x",
+                                              "168/2025/NĐ-CP"), "Nghị định số 168/2025/NĐ-CP")
+
+    def test_ca_ham_voi_dong_csdl_that(self):
+        class Cur:
+            def execute(self, *a):
+                pass
+
+            def fetchall(self):
+                return [("45/2013/QH13", None, "Luật", "Đất đai", "10_Luat_Dat_dai_31-2024-QH15", "31/2024/QH15")]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with mock.patch.object(rag.db, "session", return_value=Conn()):
+            ra = rag._van_ban_nhac_da_bi_thay(rag._van_ban_nhac_trong_cau_hoi(
+                "Theo Luật Đất đai 2013, hạn mức giao đất nông nghiệp là bao nhiêu?"))
+        self.assertEqual(len(ra), 1)
+        self.assertEqual(ra[0]["so_hieu_cu"], "45/2013/QH13")
+        self.assertIn("31/2024/QH15", ra[0]["thay_boi"])
+
+
 class TaiLieuCongKhaiTests(unittest.TestCase):
     def test_tro_ly_mo_duoc_tai_lieu_sec_nhung_khong_mo_mau_hds(self):
         rules = {("tro_ly", "*", "mau_hd"): False}

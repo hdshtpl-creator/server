@@ -51,8 +51,10 @@ export const BrowseDocsTab: React.FC = () => {
     }
   };
 
-  const fetchBrowseDocs = async () => {
-    setIsLoading(true);
+  // im = nạp lại mà giữ nguyên bảng (không thay bằng vòng xoay) — thay bảng
+  // là trang co lại, cuộn nhảy về đầu, trông như bị F5.
+  const fetchBrowseDocs = async (im = false) => {
+    if (!im) setIsLoading(true);
     try {
       setDocs(await api.getBrowseDocuments({ q: searchQuery }));
     } catch (err: any) {
@@ -86,7 +88,7 @@ export const BrowseDocsTab: React.FC = () => {
           </p>
         </div>
         <button
-          onClick={fetchBrowseDocs}
+          onClick={() => fetchBrowseDocs()}
           className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs rounded-xl transition-colors shrink-0"
         >
           <RefreshCw className="w-3.5 h-3.5" />
@@ -283,9 +285,9 @@ export const BrowseDocsTab: React.FC = () => {
         <DocumentDetailModal
           docId={detailId}
           canReview={canReview}
-          onClose={() => {
+          onClose={(daDoi) => {
             setDetailId(null);
-            fetchBrowseDocs();  // trạng thái hiệu lực có thể vừa đổi trong modal
+            if (daDoi) fetchBrowseDocs(true);  // hiệu lực vừa đổi trong modal
           }}
         />
       )}

@@ -3073,7 +3073,8 @@ def _doc_row_or_404(cur, doc_id: int):
                           d.created_at,d.so_hieu,d.loai_van_ban,d.trich_yeu,
                           d.ngay_ban_hanh,d.ngay_hieu_luc,d.trang_thai_hieu_luc,
                           d.extraction_status,
-                          (SELECT count(*) FROM chunks WHERE document_id=d.id)
+                          (SELECT count(*) FROM chunks WHERE document_id=d.id),
+                          d.source_path
                      FROM documents d
                      LEFT JOIN clients c ON c.id=d.client_id
                      LEFT JOIN departments dep ON dep.id=d.department_id
@@ -3168,6 +3169,8 @@ def document_detail(doc_id: int, user=Depends(current_user)):
         "ngay_hieu_luc": str(r[15]) if r[15] else None,
         "trang_thai_hieu_luc": r[16], "extraction_status": r[17],
         "so_doan": r[18], "can_open": True,
+        # Đuôi tệp lưu trong kho — '.md' = chỉ có bản chữ, không có bản gốc.
+        "duoi": Path(r[19]).suffix.lower() if r[19] else None,
         "quan_he_xuoi": [_quan_he_hien_thi(q, user, rules, "xuoi")
                          for q in quan_he["xuoi"]],
         "quan_he_nguoc": [_quan_he_hien_thi(q, user, rules, "nguoc")
@@ -3869,9 +3872,18 @@ def _original_file(doc_id: int, user) -> tuple[Path, str]:
 def files_download(doc_id: int, user=Depends(current_user)):
     """Tải bản gốc tài liệu về máy người dùng."""
     _can_tinh_nang(user, "tai_lieu")
-    resolved, _title = _original_file(doc_id, user)
+    resolved, title = _original_file(doc_id, user)
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user["id"], "download_document", "documents", doc_id, {})
+    if resolved.suffix.lower() == ".md":
+        # Văn bản chỉ có bản chữ .md (không có Word/PDF gốc) — đưa Word dàn
+        # trang sẵn; tệp .md trần Windows không biết mở bằng gì.
+        from app.drafting import safe_export_name
+        name = safe_export_name(title or resolved.stem, "docx")
+        return Response(
+            content=xem_truoc.docx_tu_markdown(xem_truoc.doc_markdown(resolved), title),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
     return FileResponse(resolved, filename=resolved.name.split("_", 1)[-1])
 
 
@@ -3923,6 +3935,16 @@ def files_preview(doc_id: int, user=Depends(current_user)):
     suffix = resolved.suffix.lower()
     with db.session(role="internal", admin=True) as conn:
         db.audit(conn, user["id"], "preview_document", "documents", doc_id, {})
+    if suffix == ".md":
+        # Bản chữ .md → trang văn bản PDF. Không chuyển được (LibreOffice
+        # vắng/quá giờ với tệp cực lớn) thì lùi về chữ thuần như trước.
+        try:
+            pdf = xem_truoc.pdf_tu_markdown(resolved, doc_id)
+            return FileResponse(pdf, media_type="application/pdf",
+                                filename=f"{title}.pdf",
+                                content_disposition_type="inline")
+        except xem_truoc.LoiXemTruoc:
+            pass
     if suffix in _INLINE_SUFFIXES:
         media = {".pdf": "application/pdf", ".txt": "text/plain; charset=utf-8",
                  ".md": "text/plain; charset=utf-8"}.get(suffix)

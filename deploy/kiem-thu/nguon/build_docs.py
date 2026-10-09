@@ -32,6 +32,13 @@ TEN_NHOM = dict(NHOM)
 for c in C:
     c["nhom"] = TEN_NHOM[c["ma"].split("-")[0]]
 KB = kb_cases.load()
+
+
+def phai_dan(k):
+    """Cột Phải dẫn: tiêu chí HDS + tiêu chí theo luật hiện hành (đề xuất 07/10, chờ luật sư xác nhận)."""
+    if not k.get("dieu_hien_hanh"):
+        return k["dieu"]
+    return f"{k['dieu']} — THEO LUẬT HIỆN HÀNH (đề xuất, chờ luật sư HDS xác nhận): {k['dieu_hien_hanh']}"
 _MUC = {"Cao": 0, "Trung bình": 1, "Thấp": 2}
 F.PHAT_HIEN.sort(key=lambda x: (_MUC.get(x[1], 9), int(x[0][2:])))
 F.LECH_TAI_LIEU.sort(key=lambda x: int(x[0][2:]))
@@ -94,7 +101,7 @@ def build_md():
           "- Ghi thêm huy hiệu kiểm chứng và thời gian trả lời. Kho đang dùng **bản luật mới nhất** (ví dụ Luật Doanh nghiệp đã sửa đổi 2025) — "
           "số điều có thể khác bản 2020 mà tiêu chí dẫn; HDS chốt chấm theo bản nào trước khi chạy (mục 9).", "",
           bang(["KB", "Lĩnh vực · Chủ đề", "Câu gửi bot", "Phải dẫn", "Lượt trước"],
-               [(k["id"], f"{k['linh_vuc']} · {k['tieu_de']}", k["cau_hoi"], k["dieu"], k["luot_truoc"]) for k in KB]), "",
+               [(k["id"], f"{k['linh_vuc']} · {k['tieu_de']}", k["cau_hoi"], phai_dan(k), k["luot_truoc"]) for k in KB]), "",
           "## 8. Thứ tự chạy đề xuất", "",
           "| Buổi | Nội dung | Ghi chú |", "|---|---|---|",
           "| 1 | Chuẩn bị mục 4.1–4.2, HT-01, HT-02, KHO-01, KHO-02 | Không có chim mồi thì nhóm PQ không chạy được |",
@@ -270,7 +277,7 @@ def build_xlsx(path):
     header(wk, 2, cols, widths)
     k0 = 3
     for i, k in enumerate(KB):
-        put(wk, k0 + i, [k["id"], k["linh_vuc"], k["tieu_de"], k["cau_hoi"], k["tieu_chi"], k["dieu"], k["luot_truoc"],
+        put(wk, k0 + i, [k["id"], k["linh_vuc"], k["tieu_de"], k["cau_hoi"], k["tieu_chi"], phai_dan(k), k["luot_truoc"],
                          None, None, None, None, None, None, None], input_from=8)
     klast = k0 + len(KB) - 1
     dv2 = DataValidation(type="list", formula1='"ĐÚNG,MỘT PHẦN,SAI,BỎ QUA"', allow_blank=True)

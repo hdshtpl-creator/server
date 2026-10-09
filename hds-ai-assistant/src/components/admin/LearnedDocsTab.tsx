@@ -45,8 +45,9 @@ export const LearnedDocsTab: React.FC = () => {
     }
   };
 
-  const fetchLearnedDocs = async (q = searchQuery, docType = docTypeFilter) => {
-    setIsLoading(true);
+  // im = nạp lại mà giữ nguyên bảng (xem BrowseDocsTab).
+  const fetchLearnedDocs = async (q = searchQuery, docType = docTypeFilter, im = false) => {
+    if (!im) setIsLoading(true);
     try {
       setDocs(await api.getDocuments({ q, doc_type: docType, limit: 200 }));
     } catch (err: any) {
@@ -109,9 +110,9 @@ export const LearnedDocsTab: React.FC = () => {
         <DocumentDetailModal
           docId={detailId}
           canReview={canReview}
-          onClose={() => {
+          onClose={(daDoi) => {
             setDetailId(null);
-            fetchLearnedDocs();  // trạng thái hiệu lực có thể vừa đổi trong modal
+            if (daDoi) fetchLearnedDocs(searchQuery, docTypeFilter, true);  // hiệu lực vừa đổi trong modal
           }}
         />
       )}

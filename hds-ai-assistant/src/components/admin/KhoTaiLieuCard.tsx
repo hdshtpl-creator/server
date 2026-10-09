@@ -753,7 +753,7 @@ export const KhoTaiLieuCard: React.FC = () => {
       )}
 
       {detailId != null && (
-        <DocumentDetailModal docId={detailId} canReview={canReview} onClose={() => { setDetailId(null); lamMoi(); }} />
+        <DocumentDetailModal docId={detailId} canReview={canReview} onClose={(daDoi) => { setDetailId(null); if (daDoi) lamMoi(); }} />
       )}
     </div>
   );

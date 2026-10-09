@@ -479,26 +479,126 @@ def bao_gia_cong_khai(question: str, bang_gia: str) -> str:
 HIEU_LUC_PHAT = {"het_hieu_luc": 0.08, "het_hieu_luc_mot_phan": 0.03}
 
 
+# Nhãn đoạn luật: "Luật Doanh nghiệp số 59/2020/QH14 (văn bản hợp nhất
+# 67/VBHN-VPQH) — Chương I — Điều 10". Tên + số hiệu LUẬT GỐC nằm trước "—".
+_RE_NHAN_LUAT_GOC = re.compile(
+    r"^\s*(?P<ten>[^—(]{3,120}?)\s+số\s+(?P<so>\d+/\d{4}/[A-Za-zĐđ0-9-]+)")
+
+
+def _khoa_dieu_luat(c):
+    """(tên luật, số hiệu luật GỐC, số Điều) của một đoạn luật — cùng một điều ở
+    bản gốc, bản hợp nhất hay bản sao thứ hai cho CÙNG khoá. Tên nằm trong khoá
+    vì một số hiệu có thể là hai văn bản: 91/2015/QH13 vừa là Bộ luật Dân sự
+    vừa là Nghị quyết giám sát của Quốc hội (id 100776). "Bộ luật X" và
+    "Luật X" là một (hai bản BLLĐ trong kho ghi khác nhau). None nếu không rõ."""
+    if c.get("doc_type") != "law":
+        return None
+    m = _RE_NHAN_LUAT_GOC.match(c.get("section_title") or "")
+    if not m:
+        return None
+    dieu = luat_nen.dieu_cua_doan(c)
+    if dieu is None:
+        return None
+    ten = re.sub(r"^bo\s+", "", _fold(m.group("ten")))
+    return (ten, re.sub(r"\s+", "", m.group("so")).upper(), dieu)
+
+
+def _la_ban_hop_nhat(c) -> bool:
+    return ("VBHN" in (c.get("so_hieu") or "").upper()
+            or "văn bản hợp nhất" in (c.get("section_title") or "").lower())
+
+
 def bo_ban_trung_so_hieu(chunks):
-    """Bỏ đoạn LẶP do kho có HAI BẢN cùng số hiệu (kiểm thử 02/10, F-19: Bộ
-    luật Lao động 45/2019/QH14 có ở id 35869 và 42934; BLDS 91/2015/QH13 ở
-    399 và 100776). Cùng một điều đứng hai lần trong nguồn là tốn ngân sách
-    prompt và model dẫn hai [Nguồn] cho một điều. Giữ đoạn đứng TRƯỚC (điểm
-    cao hơn hoặc được ghim), bỏ đoạn cùng số hiệu + cùng điều/nội dung đầu của
-    văn bản KHÁC. Không đụng đoạn của cùng văn bản. Hàm thuần.
+    """Bỏ đoạn LẶP của cùng một điều luật đến từ HAI văn bản trong kho. Hàm thuần.
+
+    (1) Hai bản cùng số hiệu (kiểm thử 02/10, F-19: BLLĐ 45/2019/QH14 ở id
+        35869 và 42934). (2) Từ 07/10/2026 cả LUẬT GỐC và VĂN BẢN HỢP NHẤT
+        của nó: 59/2020/QH14 và 67/VBHN-VPQH cùng là Luật Doanh nghiệp, số
+        hiệu khác nhau nên lọt bước (1) — câu 1.5 có Điều 202, 203, 204, 205
+        mỗi điều HAI lần, đẩy điều cần dẫn xuống [10] và [20].
+
+    Mỗi điều chỉ còn đoạn của MỘT văn bản, đặt ở vị trí lần xuất hiện ĐẦU TIÊN
+    của điều đó (giữ thứ hạng). Văn bản được giữ: bản hợp nhất (chứa phần sửa
+    đổi), rồi bản đến trước. Các đoạn khác của cùng văn bản và cùng điều (phần
+    2/3, 3/3) được giữ cùng. Đoạn không nhận ra tên/số điều dùng khoá cũ (số
+    hiệu + nhãn/nội dung đầu).
     """
-    out, da_gap = [], {}
-    for c in chunks or []:
+    chunks = list(chunks or [])
+    khoa = [_khoa_dieu_luat(c) for c in chunks]
+    # Văn bản "chủ" của từng điều.
+    chu = {}
+    for c, k in zip(chunks, khoa):
+        if k is None:
+            continue
+        cu = chu.get(k)
+        if cu is None or (_la_ban_hop_nhat(c) and not cu[1]):
+            chu[k] = (c.get("document_id"), _la_ban_hop_nhat(c))
+    out, da_xuat, da_gap = [], set(), {}
+    for c, k in zip(chunks, khoa):
+        if k is not None:
+            if k in da_xuat:
+                continue
+            da_xuat.add(k)
+            doc = chu[k][0]
+            out.extend(x for x, kx in zip(chunks, khoa)
+                       if kx == k and x.get("document_id") == doc)
+            continue
         so = re.sub(r"\s+", "", (c.get("so_hieu") or "")).upper()
         if c.get("doc_type") == "law" and so:
             noi_dung = re.sub(r"^\[[^\]]*\]\s*", "", c.get("content") or "")
-            khoa = (so, _fold(c.get("section_title") or "")
-                    or re.sub(r"\s+", " ", _fold(noi_dung))[:160])
-            chu = da_gap.setdefault(khoa, c.get("document_id"))
-            if chu != c.get("document_id"):
+            k2 = (so, _fold(c.get("section_title") or "")
+                  or re.sub(r"\s+", " ", _fold(noi_dung))[:160])
+            if da_gap.setdefault(k2, c.get("document_id")) != c.get("document_id"):
                 continue
         out.append(c)
     return out
+
+
+# VĂN BẢN ĐỊA PHƯƠNG trong kệ luật (quyết định UBND, nghị quyết HĐND…): kệ 61
+# nghìn văn bản có hàng chục nghìn cái, chữ nghĩa giống văn bản trung ương nên
+# vector kéo chúng vào câu hỏi luật chung — 1.1 (07/10/2026) có "Quyết định
+# của UBND tỉnh Nghệ An 1068/1998/QĐ-UB" ở [7] và [16] cho câu góp vốn công
+# ty TNHH. Chỉ giữ khi câu hỏi có dấu hiệu địa phương.
+_RE_SO_HIEU_DIA_PHUONG = re.compile(r"UBND|HĐND|HDND|QĐ-UB\b|QĐ-CT\b|QĐ-CTUBND", re.I)
+_RE_NHAN_DIA_PHUONG = re.compile(r"\b(?:ubnd|hdnd|uy ban nhan dan|hoi dong nhan dan)\b")
+_RE_CAU_DIA_PHUONG = re.compile(
+    r"\b(?:ubnd|hđnd|ủy ban nhân dân|uỷ ban nhân dân|hội đồng nhân dân|địa phương|địa bàn"
+    r"|tỉnh|thành phố|quận|huyện|thị xã|phường)\b")
+_TINH_THANH = (
+    "an giang", "ba ria", "vung tau", "bac giang", "bac kan", "bac lieu", "bac ninh", "ben tre",
+    "binh dinh", "binh duong", "binh phuoc", "binh thuan", "ca mau", "can tho", "cao bang",
+    "da nang", "dak lak", "dak nong", "dien bien", "dong nai", "dong thap", "gia lai", "ha giang",
+    "ha nam", "ha noi", "ha tinh", "hai duong", "hai phong", "hau giang", "hoa binh", "hung yen",
+    "khanh hoa", "kien giang", "kon tum", "lai chau", "lam dong", "lang son", "lao cai", "long an",
+    "nam dinh", "nghe an", "ninh binh", "ninh thuan", "phu tho", "phu yen", "quang binh",
+    "quang nam", "quang ngai", "quang ninh", "quang tri", "soc trang", "son la", "tay ninh",
+    "thai binh", "thai nguyen", "thanh hoa", "thua thien hue", "hue", "tien giang", "ho chi minh",
+    "sai gon", "hcm", "tphcm", "tra vinh", "tuyen quang", "vinh long", "vinh phuc", "yen bai", "phu quoc")
+_RE_TINH_THANH = re.compile(r"\b(?:" + "|".join(_TINH_THANH) + r")\b")
+
+
+def _cau_hoi_dia_phuong(question: str) -> bool:
+    q = unicodedata.normalize("NFC", (question or "").lower())
+    return bool(_RE_CAU_DIA_PHUONG.search(q) or _RE_TINH_THANH.search(_fold(q)))
+
+
+def _la_van_ban_dia_phuong(c) -> bool:
+    if c.get("doc_type") != "law":
+        return False
+    if _RE_SO_HIEU_DIA_PHUONG.search(c.get("so_hieu") or ""):
+        return True
+    dau_nhan = (c.get("section_title") or "").split("—", 1)[0]
+    return bool(_RE_NHAN_DIA_PHUONG.search(_fold(dau_nhan)))
+
+
+def bo_van_ban_dia_phuong(chunks, question):
+    """Bỏ đoạn của văn bản địa phương khi câu hỏi không nhắc địa phương nào.
+    Trả (giữ, số bỏ). Hàm thuần."""
+    chunks = list(chunks or [])
+    if _cau_hoi_dia_phuong(question):
+        return chunks, 0
+    giu = [c for c in chunks if not _la_van_ban_dia_phuong(c)]
+    return giu, len(chunks) - len(giu)
 
 
 def uu_tien_hieu_luc(items, san=None):
@@ -1568,6 +1668,10 @@ def _van_ban_nhac_trong_cau_hoi(question: str) -> list:
     return ra
 
 
+_HAU_TO_SO_HIEU = {"bo luat": "/qh", "luat": "/qh", "nghi dinh": "/nđ-", "thong tu": "/tt-",
+                   "thong tu lien tich": "/ttlt-", "nghi quyet": "/nq-"}
+
+
 def _van_ban_nhac_da_bi_thay(nhac) -> list:
     """Văn bản câu hỏi nêu (số hiệu, hoặc tên + năm) mà một văn bản ĐANG PHỤC
     VỤ trong kho tuyên bố thay thế / bãi bỏ / "… hết hiệu lực kể từ…".
@@ -1584,12 +1688,16 @@ def _van_ban_nhac_da_bi_thay(nhac) -> list:
         nam = v.get("nam")
         if not so and not (v.get("ten") and v.get("loai") and nam):
             continue
+        # Khoanh theo LOẠI ở đuôi số hiệu ("/QH" cho luật): từ khi backfill
+        # 05/10 có 1.011 quan hệ thay thế trỏ tới văn bản năm 2013 — LIMIT 300
+        # theo ngày cắt mất Luật Đất đai 2024 và cảnh báo im lặng (06/10).
+        hau_to = None if so else _HAU_TO_SO_HIEU.get(v.get("loai"))
         try:
             with db.session(role="internal", admin=True) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        """SELECT q.so_hieu_dich,
-                                  coalesce(q.ten_nguon, s.trich_yeu, s.title)
+                        """SELECT q.so_hieu_dich, q.ten_nguon, s.loai_van_ban,
+                                  s.trich_yeu, s.title, q.so_hieu_nguon
                              FROM van_ban_quan_he q
                              JOIN documents s ON lower(s.so_hieu)=lower(q.so_hieu_nguon)
                                   AND s.doc_type='law' AND coalesce(s.active,true)
@@ -1600,20 +1708,45 @@ def _van_ban_nhac_da_bi_thay(nhac) -> list:
                               AND (CASE WHEN %s::text IS NOT NULL
                                         THEN lower(q.so_hieu_dich)=lower(%s::text)
                                         ELSE q.so_hieu_dich LIKE %s END)
+                              AND (%s::text IS NULL OR lower(q.so_hieu_dich) LIKE %s)
                             ORDER BY s.ngay_ban_hanh DESC NULLS LAST
-                            LIMIT 300""",
-                        (so, so, f"%/{nam}/%"))
+                            LIMIT 2000""",
+                        (so, so, f"%/{nam}/%", hau_to, f"%{hau_to}%"))
                     rows = cur.fetchall()
         except Exception:  # noqa: BLE001 — chốt phụ, hỏng thì im lặng
             return ra
         cum = f" {v.get('loai')} {v.get('ten')} " if v.get("ten") else None
-        for so_cu, ten_moi in rows:
-            if cum and cum not in " " + _fold_text(ten_moi or "").replace("-", " ") + " ":
+        for row in rows:
+            so_cu, ten_moi = row[0], ten_van_ban_thay(*row[1:])
+            if cum and not khop_ten_van_ban_thay(cum, *row[1:5]):
                 continue
             ra.append({"hien_thi": v["hien_thi"], "so_hieu_cu": so_cu,
-                       "thay_boi": " ".join(str(ten_moi or "").split())[:160]})
+                       "thay_boi": ten_moi[:160]})
             break
     return ra
+
+
+def khop_ten_van_ban_thay(cum, ten_nguon, loai_van_ban, trich_yeu, title) -> bool:
+    """`cum` (" luat dat dai ") nằm trong tên văn bản thay thế? Kho lưu trích
+    yếu KHÔNG kèm loại ("Đất đai", loại "Luật" ở cột riêng) — trước 06/10/2026
+    chỉ so với trích yếu nên "Luật Đất đai 2013", "Luật Doanh nghiệp 2014"
+    không bao giờ khớp và cảnh báo luật hết hiệu lực im lặng. Hàm thuần."""
+    def gon(s):
+        return " " + " ".join(re.sub(r"[-_]", " ", _fold_text(s or "")).split()) + " "
+    ung_vien = (ten_nguon, f"{loai_van_ban or ''} {trich_yeu or ''}", title)
+    return any(cum in gon(x) for x in ung_vien if x and x.strip())
+
+
+def ten_van_ban_thay(ten_nguon, loai_van_ban, trich_yeu, title, so_hieu) -> str:
+    """Tên đọc được của văn bản thay thế: "Luật Đất đai số 31/2024/QH15".
+    ten_nguon trong bảng quan hệ thường chỉ là trích yếu trơn ("Đất đai") —
+    ghép loại + trích yếu + số hiệu từ chính văn bản trước."""
+    if trich_yeu and trich_yeu.strip():
+        ten = f"{loai_van_ban or ''} {trich_yeu}".strip()
+        return " ".join(f"{ten} số {so_hieu}".split()) if so_hieu else ten
+    if ten_nguon and ten_nguon.strip():
+        return " ".join(ten_nguon.split())
+    return " ".join(str(title or so_hieu or "").split())
 
 
 def _van_ban_thieu_trong_kho(question: str, chunks) -> list:
@@ -4055,6 +4188,11 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         if bi_khoa:
             timings["bo_qua_khong_quyen_mo"] = len(bi_khoa)
             tai_lieu_khoa = _ten_khoa(bi_khoa)
+    if source_document_ids is None:
+        # Người dùng tự khoanh nguồn thì tôn trọng đúng vùng đã chọn.
+        kept, n_dia_phuong = bo_van_ban_dia_phuong(kept, question)
+        if n_dia_phuong:
+            timings["bo_van_ban_dia_phuong"] = n_dia_phuong
     truoc_trung = len(kept)
     kept = bo_ban_trung_so_hieu(kept)
     if len(kept) != truoc_trung:
