@@ -85,9 +85,17 @@ _RE_TAO_DAU_CAU = re.compile(
     r"toan bo\s+|day du\s+|luon\s+|lai\s+|san\s+|nhanh\s+|ngay\s+|them\s+)*"
     r"(?:" + _DOI_TUONG_BO + r"|ho so|cac file|file|giay to|cac van ban)\b(.*)$",
     re.S)
-# "điền thông tin khách vào bộ mẫu Thuê nhà" — động từ ở đâu cũng được, miễn
-# câu có nhắc tới MỘT BỘ.
-_RE_TAO_CO_BO = re.compile(r"\b" + _VERB + r"\b.*\b" + _DOI_TUONG_BO + r"\b", re.S)
+# "điền thông tin khách vào bộ mẫu Thuê nhà", "Khách vừa ký. Hãy tạo bộ hồ sơ…"
+# — động từ phải ĐỨNG ĐẦU một câu/vế (lệnh), cách cụm "bộ …" tối đa 6 chữ.
+# Trước 12/10/2026 động từ ở đâu cũng được: câu tình huống 4.4 của 40 kịch bản
+# ("… Đại DIỆN theo pháp luật … Xây dựng quy trình … và bộ hồ sơ đăng ký …")
+# bỏ dấu thành "dai dien" — khớp "điền" — nên bot tạo 4 file thay vì phân tích
+# luật. Chủ dự án chốt: chỉ tạo file khi người dùng RA LỆNH rõ ràng.
+_LOI_MO = (r"(?:hay\s+|nho\s+|giup toi\s+|giup\s+|ban\s+|toi muon\s+|toi can\s+|"
+           r"can\s+|muon\s+|lam on\s+)?")
+_RE_TAO_CO_BO = re.compile(
+    r"(?:^|[.;:!\n]\s*)" + _LOI_MO + _VERB + r"\s+(?:\S+\s+){0,6}?" + _DOI_TUONG_BO + r"\b",
+    re.S)
 # Câu HỎI về cách làm ("tạo bộ hồ sơ như thế nào?") là tra cứu, không phải lệnh.
 _RE_HOI = re.compile(
     r"\?\s*$|\b(?:the nao|lam sao|cach nao|nhu the nao|ra sao|duoc khong|"

@@ -540,8 +540,14 @@ def bo_ban_trung_so_hieu(chunks):
                 continue
             da_xuat.add(k)
             doc = chu[k][0]
-            out.extend(x for x, kx in zip(chunks, khoa)
-                       if kx == k and x.get("document_id") == doc)
+            # Dấu "điều nền" đi theo ĐIỀU, không theo văn bản: bản gốc được ghim
+            # mà bản hợp nhất thắng chỗ thì bản hợp nhất mang dấu thay.
+            nen = any(x.get("dieu_nen") for x, kx in zip(chunks, khoa) if kx == k)
+            for x, kx in zip(chunks, khoa):
+                if kx == k and x.get("document_id") == doc:
+                    if nen:
+                        x["dieu_nen"] = True
+                    out.append(x)
             continue
         so = re.sub(r"\s+", "", (c.get("so_hieu") or "")).upper()
         if c.get("doc_type") == "law" and so:
@@ -2090,6 +2096,23 @@ def chon_ben_ky(rows, ten) -> list:
     return [i for i, ben in rows if (ben or "").strip().lower() in ben_chon]
 
 
+def _dieu_trong_tam(all_ctx, toi_da=10) -> list:
+    """Các đoạn "điều nền" (luat_nen) đang có trong nguồn, gộp theo điều:
+    ["Điều 156 Bộ luật Dân sự số 91/2015/QH13 [Nguồn 3]", …]. Hàm thuần."""
+    gom = {}
+    for i, c in enumerate(all_ctx or [], 1):
+        if not c.get("dieu_nen"):
+            continue
+        dieu = luat_nen.dieu_cua_doan(c)
+        ten = (c.get("section_title") or "").split(" — ", 1)[0].strip()
+        if dieu is None or not ten:
+            continue
+        gom.setdefault((dieu, ten), []).append(i)
+    ra = [f"Điều {d} {ten} [Nguồn {', '.join(map(str, so))}]"
+          for (d, ten), so in gom.items()]
+    return ra[:toi_da]
+
+
 def build_prompt(question, chunks, temp_chunks=None, method=None,
                  company="", history=None, chunk_chars=None, budget=None,
                  summary=None, van_ban_thieu=None, phat_hien_tu_dong="",
@@ -2361,6 +2384,22 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             "điều lệ như thể đó là luật. Nếu nguồn không có văn bản luật cho ý nào, "
             "nói rõ 'kho chưa có văn bản điều chỉnh ý này' thay vì dẫn tài liệu khác."
             + chr(10))
+        # THỨ BẬC VĂN BẢN (40 kịch bản 11/10/2026, câu 2.8): Điều 156 BLDS, 294
+        # LTM, 420 BLDS đứng [Nguồn 1–3] mà model lấy định nghĩa bất khả kháng
+        # trong một Thông tư của Bộ Công Thương.
+        parts.append(
+            "THỨ BẬC VĂN BẢN: khi nguồn có cả Bộ luật/Luật lẫn Nghị định/Thông tư "
+            "cho cùng một vấn đề (khái niệm, điều kiện, mức trần, hậu quả pháp lý), "
+            "căn cứ CHÍNH là Bộ luật/Luật — nêu nó trước; Nghị định/Thông tư chỉ "
+            "dùng để chi tiết thêm và chỉ khi đúng lĩnh vực của câu hỏi. Không lấy "
+            "văn bản của lĩnh vực khác làm căn cứ chỉ vì trùng chữ." + chr(10))
+        trong_tam = _dieu_trong_tam(all_ctx)
+        if trong_tam:
+            parts.append(
+                "ĐIỀU LUẬT TRỌNG TÂM (hệ thống tra theo chủ đề câu hỏi, đã có trong "
+                "nguồn): " + "; ".join(trong_tam) + ". Điều nào khớp tình huống thì "
+                "PHẢI phân tích và nêu đúng số Điều đó trong câu trả lời; điều không "
+                "khớp tình huống thì bỏ qua, không nhắc." + chr(10))
     parts.append(f"CÂU HỎI HIỆN TẠI: {question}\n"
                  "Nếu đây là câu nói lại/chỉnh lại câu trước, hiểu theo diễn biến ở "
                  "trên và trả lời luôn. MỖI đoạn có khẳng định lấy từ tài liệu phải kết "
@@ -3905,6 +3944,10 @@ def prepare(question, channel, client_id=None, conversation_id=None,
                         kept = [k for k in kept if k["chunk_id"] != cid]
                     seen_ids.add(cid)
                     if la_dieu_nen:
+                        # build_prompt liệt kê các đoạn này thành "điều luật trọng
+                        # tâm" — model 14B có điều đúng trong tay mà vẫn không nêu
+                        # số (40 kịch bản 11/10/2026: 1.8, 2.8, 3.7).
+                        c["dieu_nen"] = True
                         luat_them.append(c)
                         n_nen += 1
                     else:

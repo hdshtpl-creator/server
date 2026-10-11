@@ -48,6 +48,10 @@ LUAT = {
     # (đo 40 kịch bản 07/10/2026: 1.2, 4.7–4.10).
     "ldt": (("143/2025/QH15",), "dau tu"),
     "ldd": (("31/2024/QH15",), "dat dai"),
+    # Trọng tài (12/10/2026, câu 2.1 "VIAC hoặc Toà án"): luật + nghị quyết
+    # hướng dẫn của HĐTP — điều quyết định nằm ở nghị quyết (Điều 2–4).
+    "lttm": (("54/2010/QH12",), "trong tai"),
+    "nq_tt": (("01/2014/NQ-HĐTP",), "trong tai"),
 }
 
 TEN_LUAT = {
@@ -55,6 +59,8 @@ TEN_LUAT = {
     "ltm": "Luật Thương mại 2005", "ldn": "Luật Doanh nghiệp 2020",
     "shtt": "Luật Sở hữu trí tuệ", "blttds": "Bộ luật Tố tụng dân sự 2015",
     "ldt": "Luật Đầu tư 2025", "ldd": "Luật Đất đai 2024",
+    "lttm": "Luật Trọng tài thương mại 2010",
+    "nq_tt": "Nghị quyết 01/2014/NQ-HĐTP hướng dẫn Luật Trọng tài thương mại",
 }
 
 # Cụm chủ đề (đã bỏ dấu, chữ thường) → bộ luật nền.
@@ -97,6 +103,10 @@ CHU_DE = {
             "nha dau tu nhat ban", "nha dau tu trung quoc", "nha dau tu singapore"),
     "ldd": ("quyen su dung dat", "giao dat", "thu hoi dat", "thue dat",
             "dat nong nghiep", "so do", "chuyen muc dich su dung dat"),
+    "lttm": ("trong tai", "thoa thuan trong tai", "phan quyet trong tai",
+             "trung tam trong tai", "hoi dong trong tai", "viac"),
+    "nq_tt": ("trong tai", "thoa thuan trong tai", "phan quyet trong tai",
+              "trung tam trong tai", "hoi dong trong tai", "viac"),
 }
 
 # Điều nền: (bộ luật, mẫu trên câu đã bỏ dấu, các điều). Mỗi dòng đã đối chiếu
@@ -120,7 +130,7 @@ DIEU_NEN = (
     ("blds", r"phat vi pham", (418,)),
     ("blds", r"boi thuong thiet hai|gioi han trach nhiem|loi nhuan bi mat|thiet hai", (360, 419)),
     ("blds", r"bat kha khang", (156, 351)),
-    ("blds", r"huy bo hop dong", (423, 427)),
+    ("blds", r"huy bo hop dong", (423, 424, 427)),
     ("blds", r"hoan canh thay doi|thay doi co ban|bien dong gia", (420,)),
     ("blds", r"phap nhan|chi nhanh|van phong dai dien", (74, 84)),
     ("ltm", r"phat vi pham|muc phat", (301, 300)),
@@ -140,6 +150,7 @@ DIEU_NEN = (
      (17,)),
     ("ldn", r"hop hoi dong thanh vien|trieu tap hop", (57, 58, 59)),
     ("ldn", r"chuyen nhuong co phan", (127,)),
+    ("ldn", r"mua lai phan von|thoai von|be tac|chuyen nhuong phan von", (51, 52)),
     ("ldn", r"chao ban|phat hanh rieng le|rieng le", (123, 125)),
     ("ldn", r"dai hoi dong co dong|nghi quyet .{0,30}thong qua|ty le bieu quyet", (148,)),
     ("ldn", r"phat hanh co phan", (111, 74)),
@@ -157,6 +168,10 @@ DIEU_NEN = (
     ("shtt", r"cham dut hieu luc|khong su dung", (95,)),
     ("shtt", r"chuyen quyen su dung|cap quyen su dung|li.?xang|cap phep su dung|hop dong su dung",
      (142,)),
+    ("shtt", r"nhan hieu noi tieng", (75,)),
+    # Điều 112 (ý kiến người thứ ba) và 112a (phản đối đơn) — dieu_cua_doan đọc
+    # "Điều 112a" thành 112 nên một số điều phủ cả hai.
+    ("shtt", r"y kien (?:cua )?(?:nguoi|ben) thu ba|phan doi don|cong bao so huu cong nghiep", (112,)),
     ("blttds", r"don khoi kien|noi dung don|nop don", (189, 190)),
     ("blttds", r"khang cao", (271, 272, 273)),
     ("blttds", r"bien phap khan cap", (111, 114)),
@@ -183,6 +198,11 @@ DIEU_NEN = (
     ("ldt", r"ngung hoat dong", (35,)),
     ("ldt", r"cham dut hoat dong", (36,)),
     ("ldt", r"dau tu ra nuoc ngoai", (39, 42)),
+    # Trọng tài — tên điều đối chiếu 54/2010/QH12 (id 35870) và 01/2014/NQ-HĐTP
+    # (id 35871) ngày 12/10/2026.
+    ("lttm", r"thoa thuan trong tai|hieu luc|vo hieu", (5, 16, 18, 19)),
+    ("lttm", r"toa an|khoi kien|thu ly", (6,)),
+    ("nq_tt", r"thoa thuan trong tai|toa an|khoi kien|tham quyen|vo hieu", (2, 3, 4)),
 )
 
 # 3 chứ không 2 (07/10/2026): tình huống thật hay chạm 3 bộ luật — câu 2.8 cần
