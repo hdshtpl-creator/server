@@ -52,6 +52,14 @@ LUAT = {
     # hướng dẫn của HĐTP — điều quyết định nằm ở nghị quyết (Điều 2–4).
     "lttm": (("54/2010/QH12",), "trong tai"),
     "nq_tt": (("01/2014/NQ-HĐTP",), "trong tai"),
+    # Thuế hộ kinh doanh (12/10/2026, "hộ kinh doanh đang được miễn thuế bao
+    # nhiêu" — bot dẫn Nghị định 96/CP năm 1995). Trích yếu hai văn bản này
+    # trong kho trống (tên tệp "68-2026-NĐ-CP_05032026") nên để "" — số hiệu đã
+    # là duy nhất. Ngưỡng 500 triệu ở Nghị định 68 đã bị Nghị định 141/2026/NĐ-CP
+    # sửa thành 01 tỷ; Điều 7 Luật 109 bị Luật 09/2026/QH16 sửa — rag.prepare tự
+    # kéo đoạn sửa đổi (chen_doan_sua_doi), đừng trỏ thẳng bảng này vào chúng.
+    "nd_hkd": (("68/2026/NĐ-CP",), ""),
+    "tncn": (("109/2025/QH15",), ""),
 }
 
 TEN_LUAT = {
@@ -61,6 +69,8 @@ TEN_LUAT = {
     "ldt": "Luật Đầu tư 2025", "ldd": "Luật Đất đai 2024",
     "lttm": "Luật Trọng tài thương mại 2010",
     "nq_tt": "Nghị quyết 01/2014/NQ-HĐTP hướng dẫn Luật Trọng tài thương mại",
+    "nd_hkd": "Nghị định 68/2026/NĐ-CP về thuế hộ kinh doanh, cá nhân kinh doanh",
+    "tncn": "Luật Thuế thu nhập cá nhân 2025",
 }
 
 # Cụm chủ đề (đã bỏ dấu, chữ thường) → bộ luật nền.
@@ -107,6 +117,9 @@ CHU_DE = {
              "trung tam trong tai", "hoi dong trong tai", "viac"),
     "nq_tt": ("trong tai", "thoa thuan trong tai", "phan quyet trong tai",
               "trung tam trong tai", "hoi dong trong tai", "viac"),
+    "nd_hkd": ("ho kinh doanh", "ca nhan kinh doanh", "thue khoan", "hkd"),
+    "tncn": ("thue thu nhap ca nhan", "tncn", "giam tru gia canh",
+             "ho kinh doanh", "ca nhan kinh doanh"),
 }
 
 # Điều nền: (bộ luật, mẫu trên câu đã bỏ dấu, các điều). Mỗi dòng đã đối chiếu
@@ -203,6 +216,11 @@ DIEU_NEN = (
     ("lttm", r"thoa thuan trong tai|hieu luc|vo hieu", (5, 16, 18, 19)),
     ("lttm", r"toa an|khoi kien|thu ly", (6,)),
     ("nq_tt", r"thoa thuan trong tai|toa an|khoi kien|tham quyen|vo hieu", (2, 3, 4)),
+    # Nghị định 68/2026/NĐ-CP (id 45471): Điều 3 thuế GTGT, Điều 4 thuế TNCN của
+    # hộ/cá nhân kinh doanh — đối chiếu kho ngày 12/10/2026.
+    ("nd_hkd", r"mien|khong phai nop|khong chiu thue|nguong|doanh thu|bao nhieu|thue", (3, 4)),
+    # Luật 109/2025/QH15 Điều 7: thuế TNCN với thu nhập từ kinh doanh.
+    ("tncn", r"kinh doanh|hkd", (7,)),
 )
 
 # 3 chứ không 2 (07/10/2026): tình huống thật hay chạm 3 bộ luật — câu 2.8 cần
@@ -249,6 +267,26 @@ def dieu_cua_doan(c) -> int | None:
     return None
 
 
+# Tiêu đề Điều kiểu Markdown giữa đoạn ("## Điều 3. Thuế giá trị gia tăng"):
+# văn bản luật nạp từ tệp .md không được cắt theo Điều, một đoạn chứa cuối Điều
+# 2 và cả Điều 3 nhưng nhãn chỉ ra "Điều 2" (Nghị định 68/2026/NĐ-CP, 12/10/2026).
+_RE_TIEU_DE_MD = re.compile(r"(?:^|\n|##)\s*Điều\s+(\d+)[a-zđ]?\.\s")
+
+
+def cac_dieu_cua_doan(c) -> list:
+    """Mọi số Điều có TIÊU ĐỀ trong đoạn: nhãn trước, rồi tiêu đề "## Điều n."
+    trong nội dung. Hàm thuần."""
+    ra = []
+    d = dieu_cua_doan(c)
+    if d is not None:
+        ra.append(d)
+    for m in _RE_TIEU_DE_MD.finditer(c.get("content") or ""):
+        n = int(m.group(1))
+        if n not in ra:
+            ra.append(n)
+    return ra
+
+
 def chon_doan(chunks, cac_dieu, them=DOAN_CHUNG) -> list:
     """Từ kết quả tìm KHOANH trong một bộ luật: đoạn của điều nền trước (điểm
     khớp cao trước — "thử việc" gợi Điều 24–27 mà câu hỏi thời gian thử việc
@@ -260,8 +298,7 @@ def chon_doan(chunks, cac_dieu, them=DOAN_CHUNG) -> list:
     chunks = list(uniq.values())
     theo_dieu = {}
     for c in chunks:
-        d = dieu_cua_doan(c)
-        if d is not None:
+        for d in cac_dieu_cua_doan(c):
             theo_dieu.setdefault(d, []).append(c)
     ra, da = [], set()
     for d in cac_dieu or []:

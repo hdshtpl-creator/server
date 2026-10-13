@@ -202,6 +202,12 @@ _VIET_TAT_TRA_CUU = {
     "shcn": "sở hữu công nghiệp", "shtt": "sở hữu trí tuệ",
     "kdtm": "kinh doanh thương mại", "vsic": "hệ thống ngành kinh tế Việt Nam",
     "bpkctt": "biện pháp khẩn cấp tạm thời", "tand": "Tòa án nhân dân",
+    # Thuế (12/10/2026): "hkd đang được miễn bao nhiêu" — bot hỏi lại "hkd là
+    # viết tắt của gì?" trong khi kho có đủ nghị định thuế hộ kinh doanh.
+    # KHÔNG thêm "vat": so khớp sau khi bỏ dấu, "vật tư", "vật chất" cũng là "vat".
+    "hkd": "hộ kinh doanh", "gtgt": "thuế giá trị gia tăng",
+    "tncn": "thuế thu nhập cá nhân", "tndn": "thuế thu nhập doanh nghiệp",
+    "ttdb": "thuế tiêu thụ đặc biệt", "mst": "mã số thuế",
 }
 _RE_TOKEN_VT = re.compile(r"[^\W_]+(?:&[^\W_]+)?", re.UNICODE)
 
@@ -478,6 +484,26 @@ def bao_gia_cong_khai(question: str, bang_gia: str) -> str:
 # hiện (kèm cảnh báo) để luật sư đối chiếu lịch sử, không bị vô hình hoá.
 HIEU_LUC_PHAT = {"het_hieu_luc": 0.08, "het_hieu_luc_mot_phan": 0.03}
 
+# ĐỜI VĂN BẢN — tín hiệu thứ hai bên cạnh nhãn hiệu lực (12/10/2026). Câu "hộ
+# kinh doanh đang được miễn thuế bao nhiêu": nguồn là Nghị định 96/CP, Thông tư
+# 97/TC-TCT (1995), 154/2011/TT-BTC, 204/2013/NĐ-CP… trong khi kho có Nghị định
+# 141/2026/NĐ-CP (ngưỡng 1 tỷ) — đoạn đúng chỉ thua đoạn năm 1995 có 0,04–0,08
+# điểm vector. Nhãn hiệu lực không cứu được: 11.410 văn bản ban hành trước 2005
+# đang mang nhãn "còn hiệu lực" (đo 12/10/2026), vì máy chỉ biết văn bản đã chết
+# khi kho có văn bản tuyên bố thay nó. Nên:
+#   · văn bản DƯỚI LUẬT (nghị định, thông tư, quyết định…) càng cũ càng bị hạ —
+#     văn bản hướng dẫn đổi theo từng đời luật;
+#   · Bộ luật/Luật/Pháp lệnh/Nghị quyết Quốc hội KHÔNG bị hạ vì tuổi: Luật
+#     Thương mại 2005, Bộ luật Dân sự 2015 vẫn là luật nền;
+#   · văn bản ban hành trong 2 năm gần nhất được cộng nhẹ.
+# Câu hỏi nêu một năm đã qua ("Luật Doanh nghiệp 2020", "năm 2015") là hỏi theo
+# văn bản/thời kỳ cụ thể → giữ nguyên xếp hạng cũ.
+DOI_VB_PHAT = ((16, 0.06), (9, 0.03))   # (tuổi từ bao nhiêu năm, điểm trừ) — chỉ văn bản dưới luật
+DOI_VB_THUONG = (2, 0.03)               # tuổi ≤ 2 năm: cộng
+_RE_SO_HIEU_LUAT_QH = re.compile(r"/QH\d*\b|VBHN-VPQH", re.I)
+_LOAI_LUAT_KHONG_HA = ("bộ luật", "luật", "hiến pháp", "pháp lệnh")
+_RE_NAM = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
+
 
 # Nhãn đoạn luật: "Luật Doanh nghiệp số 59/2020/QH14 (văn bản hợp nhất
 # 67/VBHN-VPQH) — Chương I — Điều 10". Tên + số hiệu LUẬT GỐC nằm trước "—".
@@ -597,6 +623,200 @@ def _la_van_ban_dia_phuong(c) -> bool:
     return bool(_RE_NHAN_DIA_PHUONG.search(_fold(dau_nhan)))
 
 
+def _bac_van_ban(so_hieu: str) -> int:
+    """Thứ bậc thô theo số hiệu: Quốc hội 3 · Chính phủ/Thủ tướng 2 · bộ, ngành 1 ·
+    địa phương 0. Dùng để loại quan hệ "sửa đổi" bóc tự động sai chiều."""
+    so = (so_hieu or "").upper()
+    if _RE_SO_HIEU_LUAT_QH.search(so) or "UBTVQH" in so:
+        return 3
+    if _RE_SO_HIEU_DIA_PHUONG.search(so):
+        return 0
+    if re.search(r"(?:NĐ|ND|NQ)-CP\b|QĐ-TTG\b|QD-TTG\b", so):
+        return 2
+    return 1
+
+
+# Chỉ kéo đoạn sửa đổi cho văn bản đang đứng ở nhóm nguồn đầu — văn bản nằm cuối
+# danh sách là nguồn phụ, kéo thêm cho nó chỉ là chèn nhiễu (đo 29 câu 12/10/2026).
+SUA_DOI_TRONG_TOP = 12
+
+
+def so_hieu_quan_he(c) -> str:
+    """Số hiệu (chuẩn hoá) dùng để tra bảng quan hệ văn bản. Hàm thuần.
+
+    Bản hợp nhất mang số hiệu riêng — "02/VBHN-BNV" là SÁU văn bản khác nhau
+    trong kho — còn quan hệ thay thế ghi theo văn bản GỐC ("293/2025/NĐ-CP thay
+    thế 74/2024/NĐ-CP"). Câu "lương tối thiểu vùng hiện nay" (12/10/2026): kho
+    không có bản gốc 74/2024, chỉ có bản hợp nhất của nó (mức 2025); không tra
+    theo số gốc thì bản hợp nhất không bao giờ bị nhận là đã chết và Nghị định
+    293/2025 (mức 2026) không được kéo vào. Số gốc đọc từ nhãn "Nghị định số
+    74/2024/NĐ-CP (văn bản hợp nhất 02/VBHN-BNV) — …"."""
+    so = van_ban.chuan_hoa_so_hieu(c.get("so_hieu") or "")
+    if "VBHN" in so:
+        m = _RE_NHAN_LUAT_GOC.match(c.get("section_title") or "")
+        if m:
+            goc = van_ban.chuan_hoa_so_hieu(m.group("so"))
+            if "VBHN" not in goc:
+                return goc
+    return so
+
+
+def danh_dau_vbhn_bi_thay(kept, moi_hon) -> int:
+    """Đoạn của BẢN HỢP NHẤT mà văn bản gốc đã bị THAY THẾ → gắn nhãn hết hiệu
+    lực (bản hợp nhất chết theo văn bản gốc). Hàm thuần, sửa tại chỗ, trả số đoạn.
+    Cùng chốt thứ bậc/năm với quan hệ sửa đổi: văn bản thay phải cùng hoặc cao
+    hơn thứ bậc và không cũ hơn văn bản gốc."""
+    bi_thay = set()
+    for m in moi_hon or []:
+        if m.get("loai") != "thay_the" or "VBHN" in van_ban.chuan_hoa_so_hieu(m.get("so_hieu") or ""):
+            continue
+        if _bac_van_ban(m.get("so_hieu")) < _bac_van_ban(m["so_hieu_cu"]):
+            continue
+        nam_moi = nam_ban_hanh({"ngay_ban_hanh": m.get("ngay_ban_hanh"), "so_hieu": m.get("so_hieu")})
+        nam_cu = nam_ban_hanh({"so_hieu": m["so_hieu_cu"]})
+        if nam_moi is not None and nam_cu is not None and nam_moi < nam_cu:
+            continue
+        bi_thay.add(m["so_hieu_cu"])
+    n = 0
+    for c in kept or []:
+        so = van_ban.chuan_hoa_so_hieu(c.get("so_hieu") or "")
+        if (c.get("doc_type") == "law" and "VBHN" in so and so_hieu_quan_he(c) in bi_thay
+                and c.get("trang_thai_hieu_luc") != "het_hieu_luc"):
+            c["trang_thai_hieu_luc"] = "het_hieu_luc"
+            n += 1
+    return n
+
+
+def chon_van_ban_sua_doi(kept, moi_hon, toi_da_moi_van_ban=2, toi_da=4):
+    """Văn bản SỬA ĐỔI, BỔ SUNG cần kéo cho các văn bản luật đang có trong nguồn.
+
+    Hàm thuần. `moi_hon`: kết quả van_ban.van_ban_moi_hon. Trả {document_id của
+    văn bản sửa đổi: số hiệu (chuẩn hoá) của văn bản bị nó sửa}. Chỉ lấy văn bản
+    sửa đổi MỚI HƠN văn bản bị sửa (quan hệ bóc tự động có lúc ngược chiều), mỗi
+    văn bản bị sửa tối đa `toi_da_moi_van_ban` cái gần nhất, tổng `toi_da`. Bản
+    hợp nhất (VBHN) đã gộp sẵn phần sửa nên không kéo cho nó. Văn bản đến trước
+    trong nguồn được chọn trước. Văn bản sửa đổi ĐÃ có vài đoạn trong nguồn vẫn
+    được chọn: đoạn có mặt thường là đoạn khớp chữ ("Điều 2 … 01 tỷ đồng" của
+    doanh nghiệp), còn đoạn thật sự sửa văn bản kia (Điều 1) thì chưa."""
+    thu_tu, nam_cua, ngay_cua = [], {}, {}
+    for c in (kept or [])[:SUA_DOI_TRONG_TOP]:
+        so = van_ban.chuan_hoa_so_hieu(c.get("so_hieu") or "")
+        if c.get("doc_type") != "law" or not so or "VBHN" in so:
+            continue
+        if so not in nam_cua:
+            thu_tu.append(so)
+            nam_cua[so] = nam_ban_hanh(c)
+            ngay_cua[so] = c.get("ngay_ban_hanh") if isinstance(c.get("ngay_ban_hanh"), date) else None
+    theo_vb = {}
+    for m in moi_hon or []:
+        if m.get("loai") != "sua_doi_bo_sung" or m["so_hieu_cu"] not in nam_cua:
+            continue
+        # Bản hợp nhất không sửa văn bản nào — quan hệ bóc tự động từ chữ của
+        # nó ("24/2026/VBHN-TT-BTC sửa 89/2026/TT-BTC", 12/10/2026) là nhầm.
+        if "VBHN" in van_ban.chuan_hoa_so_hieu(m.get("so_hieu") or ""):
+            continue
+        # Thông tư không sửa được luật, quyết định UBND không sửa được nghị
+        # định: "64/2025/TT-NHNN sửa 59/2020/QH14", "129/2026/QĐ-CTUBND sửa
+        # 32/2024/QH15" là quan hệ bóc nhầm (đo 29 câu 12/10/2026).
+        if _bac_van_ban(m.get("so_hieu")) < _bac_van_ban(m["so_hieu_cu"]):
+            continue
+        nam_moi = nam_ban_hanh({"ngay_ban_hanh": m.get("ngay_ban_hanh"),
+                                "so_hieu": m.get("so_hieu")})
+        nam_cu = nam_cua[m["so_hieu_cu"]]
+        if nam_moi is None or (nam_cu is not None and nam_moi < nam_cu):
+            continue
+        ngay_cu, ngay_moi = ngay_cua[m["so_hieu_cu"]], m.get("ngay_ban_hanh")
+        if isinstance(ngay_cu, date) and isinstance(ngay_moi, date) and ngay_moi <= ngay_cu:
+            continue
+        theo_vb.setdefault(m["so_hieu_cu"], []).append(
+            (str(m.get("ngay_ban_hanh") or nam_moi), m["document_id"]))
+    chon = {}
+    for so in thu_tu:
+        for _ngay, id_moi in sorted(theo_vb.get(so, []), reverse=True)[:toi_da_moi_van_ban]:
+            if len(chon) >= toi_da:
+                return chon
+            if id_moi not in chon:
+                chon[id_moi] = so
+    return chon
+
+
+def chon_doan_sua_doi(ung_vien, sua_cho, diem_goc, min_score, moi_van_ban=2, lech=0.10):
+    """Lọc đoạn của văn bản sửa đổi (kết quả retrieve khoanh trong chúng). Hàm thuần.
+
+    Mỗi văn bản: ưu tiên đoạn NÊU ĐÍCH DANH số hiệu văn bản bị sửa ("Sửa đổi …
+    Nghị định số 68/2026/NĐ-CP"), tối đa `moi_van_ban`; không đoạn nào nêu (luật
+    sửa nhiều luật chỉ ghi tên: "khoản 1 Điều 7 của Luật Thuế thu nhập cá nhân")
+    thì lấy tối đa `moi_van_ban` đoạn khớp nhất có điểm không thua đoạn của văn
+    bản bị sửa quá `lech`. Bỏ phần mở đầu — nó nêu số hiệu trong danh sách căn
+    cứ chứ không sửa gì. Đoạn dưới ngưỡng liên quan luôn bị bỏ."""
+    theo_vb = {}
+    for c in ung_vien or []:
+        if c.get("document_id") in sua_cho:
+            theo_vb.setdefault(c["document_id"], []).append(c)
+    ra = []
+    for id_vb, ds in theo_vb.items():
+        so = sua_cho[id_vb]
+        ds = sorted((c for c in ds
+                     if (c.get("score") or 0) >= min_score
+                     and "phần mở đầu" not in (c.get("section_title") or "").lower()),
+                    key=lambda c: -(c.get("score") or 0))
+        nhac = [c for c in ds if _fold(so) in _fold(c.get("content") or "")]
+        if nhac:
+            ra.extend(nhac[:moi_van_ban])
+        else:
+            ra.extend([c for c in ds if c["score"] >= diem_goc.get(so, 0.0) - lech][:moi_van_ban])
+    return ra
+
+
+# "Điều 3. Hiệu lực thi hành" / "Điều 5. Hiệu lực và trách nhiệm thi hành" — không
+# bắt "Điều 12. Hiệu lực của hợp đồng".
+_RE_DIEU_HIEU_LUC = re.compile(
+    r"\bdieu\s+\d+[a-z]?\s*[.:]?\s*(?:hieu luc thi hanh|hieu luc va trach nhiem"
+    r"|to chuc thuc hien va hieu luc|hieu luc\s+(?:nghi dinh|thong tu|luat|quyet dinh)\b)")
+
+
+def doan_hieu_luc(chunks) -> list:
+    """Mỗi văn bản một đoạn mang tiêu đề "Điều n. Hiệu lực (thi hành)". Hàm thuần."""
+    ra, da = [], set()
+    for c in chunks or []:
+        if c.get("document_id") in da:
+            continue
+        if _RE_DIEU_HIEU_LUC.search(_fold((c.get("section_title") or "") + " "
+                                          + (c.get("content") or "")[:400])):
+            ra.append(c)
+            da.add(c.get("document_id"))
+    return ra
+
+
+def chen_doan_sua_doi(kept, doan_sua, sua_cho):
+    """Đặt mỗi đoạn của văn bản sửa đổi NGAY SAU đoạn cuối cùng của văn bản bị nó
+    sửa, gắn `sua_doi_cho` (số hiệu văn bản bị sửa) để build_prompt nói cho model
+    biết đoạn nào thay đoạn nào. Hàm thuần. `sua_cho`: {document_id: số hiệu}.
+    Đoạn đã có trong nguồn: gắn nhãn tại chỗ nếu nó đứng TRƯỚC văn bản bị sửa
+    (đang được đọc sớm, đừng đẩy lùi), đứng sau thì dời lên cạnh văn bản bị sửa."""
+    out = list(kept or [])
+    for c in doan_sua or []:
+        so = sua_cho.get(c.get("document_id"))
+        if not so:
+            continue
+        cuoi_bi_sua = max((i for i, k in enumerate(out)
+                           if van_ban.chuan_hoa_so_hieu(k.get("so_hieu") or "") == so
+                           and not k.get("sua_doi_cho")), default=None)
+        cu = next((i for i, k in enumerate(out)
+                   if c.get("chunk_id") is not None and k.get("chunk_id") == c.get("chunk_id")), None)
+        if cu is not None:
+            if cuoi_bi_sua is None or cu < cuoi_bi_sua:
+                out[cu]["sua_doi_cho"] = so
+                continue
+            c = out.pop(cu)
+        c["sua_doi_cho"] = so
+        vi_tri = max((i for i, k in enumerate(out)
+                      if van_ban.chuan_hoa_so_hieu(k.get("so_hieu") or "") == so
+                      or k.get("sua_doi_cho") == so), default=len(out) - 1)
+        out.insert(vi_tri + 1, c)
+    return out
+
+
 def bo_van_ban_dia_phuong(chunks, question):
     """Bỏ đoạn của văn bản địa phương khi câu hỏi không nhắc địa phương nào.
     Trả (giữ, số bỏ). Hàm thuần."""
@@ -624,6 +844,49 @@ def uu_tien_hieu_luc(items, san=None):
         if phat and item.get("score"):
             item["score"] = round(
                 max(item["score"] - phat, min(item["score"], san)), 4)
+    return items
+
+
+def nam_ban_hanh(item):
+    """Năm ban hành của một đoạn luật: cột ngày ban hành, không có thì năm trong
+    số hiệu ("154/2011/TT-BTC"). None nếu không rõ (VBHN không ghi năm)."""
+    for s in (item.get("ngay_ban_hanh"), item.get("so_hieu")):
+        m = _RE_NAM.search(str(s or ""))
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _la_luat_khong_ha(item) -> bool:
+    if _RE_SO_HIEU_LUAT_QH.search(item.get("so_hieu") or ""):
+        return True
+    return (item.get("loai_van_ban") or "").strip().lower() in _LOAI_LUAT_KHONG_HA
+
+
+def uu_tien_van_ban_moi(items, question="", nam_nay=None, san=None):
+    """Hàm thuần (sửa score tại chỗ): hạ văn bản dưới luật quá cũ, cộng nhẹ văn
+    bản mới — xem DOI_VB_PHAT. Không đẩy đoạn đang trên sàn xuống dưới sàn
+    (cùng nguyên tắc uu_tien_hieu_luc: cảnh báo-không-chặn)."""
+    nam_nay = nam_nay or date.today().year
+    if any(int(n) < nam_nay - 1 for n in _RE_NAM.findall(question or "")):
+        return items
+    if san is None:
+        san = settings.get_float("min_relevance", MIN_SCORE) + 0.01
+    for item in items:
+        if item.get("doc_type") != "law" or not item.get("score"):
+            continue
+        nam = nam_ban_hanh(item)
+        if nam is None or nam > nam_nay + 1:
+            continue
+        tuoi = nam_nay - nam
+        delta = DOI_VB_THUONG[1] if tuoi <= DOI_VB_THUONG[0] else 0.0
+        if not delta and not _la_luat_khong_ha(item):
+            delta = -next((p for tu, p in DOI_VB_PHAT if tuoi >= tu), 0.0)
+        if delta > 0:
+            item["score"] = round(min(1.0, item["score"] + delta), 4)
+        elif delta < 0:
+            item["score"] = round(
+                max(item["score"] + delta, min(item["score"], san)), 4)
     return items
 
 
@@ -868,7 +1131,9 @@ def retrieve(question, channel, client_id=None, dept_ids=None, is_banqt=False,
                             + 0.08 * coverage + 0.05 * title_cov + 0.02 * exact
                             + 0.20 * dieu)
 
-    uu_tien_hieu_luc(merged.values())
+    san = settings.get_float("min_relevance", MIN_SCORE) + 0.01
+    uu_tien_hieu_luc(merged.values(), san=san)
+    uu_tien_van_ban_moi(merged.values(), question, san=san)
     ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
     chosen, counts, used = [], defaultdict(int), set()
     for item in ranked:
@@ -1499,6 +1764,20 @@ def _yeu_cau_lam_ro(question: str) -> bool:
     return len(q.split()) >= _TU_TINH_HUONG_TOI_THIEU and _hoi_ve_phap_luat(q)
 
 
+# Câu tra cứu NGẮN hỏi một con số / mức / ngưỡng đang áp dụng ("hộ kinh doanh
+# đang được miễn thuế bao nhiêu", "lương tối thiểu vùng hiện nay") — người hỏi
+# cần con số ở câu đầu, kiểu Google, không cần bài phân tích tình huống.
+_RE_HOI_MUC = re.compile(
+    r"\bbao nhieu\b|\bmuc\b|\bnguong\b|\bthue suat\b|\bty le\b|\btoi da\b|\btoi thieu\b|"
+    r"\bmien thue\b|\bkhong phai nop\b|\bkhong chiu thue\b|\bbao lau\b|\bmay (?:ngay|thang|nam|phan tram)\b")
+
+
+def _yeu_cau_tra_loi_thang(question: str) -> bool:
+    q = question or ""
+    return (len(q.split()) < _TU_TINH_HUONG_TOI_THIEU and _hoi_ve_phap_luat(q)
+            and bool(_RE_HOI_MUC.search(_fold_text(q))))
+
+
 # ĐÁNH GIÁ NHÃN HIỆU — Nhi (Phòng SHTT, 29/08/2026): "tất cả các nhãn đánh giá
 # đều có một kết quả là khả năng từ chối cao; phương án cứu nhãn không đa dạng,
 # lúc nào cũng thêm chữ VÀNG ở cuối". Khung buộc so RIÊNG từng yếu tố, kết luận
@@ -1533,7 +1812,14 @@ _RE_TU_PHAP_LY = re.compile(
     r"\bvi pham\b|\bboi thuong\b|\bthoa thuan\b|\bco phan\b|\bvon gop\b|\bdoanh nghiep\b|"
     r"\bnha dau tu\b|\bnhan hieu\b|\bsang che\b|\bquyen tac gia\b|\btoa an\b|\btrong tai\b|"
     r"\bkhang cao\b|\bban an\b|\ban le\b|\bnguoi lao dong\b|\bsa thai\b|\bchap thuan\b|"
-    r"\bgop von\b|\bvon dieu le\b|\bco dong\b|\bdieu le cong ty\b|\bdang ky doanh nghiep\b|\bdang ky kinh doanh\b|\bgiai the\b|\bpha san\b|\bchuyen nhuong\b|\bthoi hieu\b|\bthe chap\b|\bbao lanh\b|\buy quyen\b|\bthua ke\b")
+    r"\bgop von\b|\bvon dieu le\b|\bco dong\b|\bdieu le cong ty\b|\bdang ky doanh nghiep\b|\bdang ky kinh doanh\b|\bgiai the\b|\bpha san\b|\bchuyen nhuong\b|\bthoi hieu\b|\bthe chap\b|\bbao lanh\b|\buy quyen\b|\bthua ke\b|"
+    # Thuế, phí, bảo hiểm (12/10/2026): "hộ kinh doanh đang được miễn thuế bao
+    # nhiêu" không có từ nào ở trên → kệ luật + luật nền không chạy, nguồn chỉ
+    # còn lượt tìm chung và bot dẫn Nghị định 96/CP năm 1995. "thue" bỏ dấu
+    # gồm cả "thuê" — hợp đồng thuê cũng là câu hỏi luật.
+    r"\bthue\b|\ble phi\b|\bhoa don\b|\bho kinh doanh\b|\bca nhan kinh doanh\b|"
+    r"\bbao hiem xa hoi\b|\bbao hiem y te\b|\bbao hiem that nghiep\b|\bluong toi thieu\b|"
+    r"\bmuc phat\b|\bphat tien\b|\bgiay phep\b")
 # 12/09/2026: 'thời hạn góp vốn của thành viên, cổ đông' không có từ nào ở trên nên
 # kệ luật không mở, bot lấy điều lệ của khách làm căn cứ (phản hồi Mai 29/08).
 
@@ -2103,7 +2389,7 @@ def _dieu_trong_tam(all_ctx, toi_da=10) -> list:
     for i, c in enumerate(all_ctx or [], 1):
         if not c.get("dieu_nen"):
             continue
-        dieu = luat_nen.dieu_cua_doan(c)
+        dieu = c.get("dieu_khop") or luat_nen.dieu_cua_doan(c)
         ten = (c.get("section_title") or "").split(" — ", 1)[0].strip()
         if dieu is None or not ten:
             continue
@@ -2149,6 +2435,15 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
         # Gom các nguồn KHÔNG đọc được / đọc chưa chắc để cuối prompt còn chỉ
         # người dùng mở đúng bản gốc.
         originals: list[tuple] = []
+        # Văn bản bị sửa ↔ đoạn sửa đổi của nó cùng có mặt (chen_doan_sua_doi):
+        # nói cho model đoạn nào thay đoạn nào, theo số [Nguồn n] thật.
+        nguon_cua_so, nguon_sua_cho = {}, {}
+        for i, c in enumerate(all_ctx, 1):
+            so = van_ban.chuan_hoa_so_hieu(c.get("so_hieu") or "")
+            if so and c.get("doc_type") == "law" and not c.get("sua_doi_cho"):
+                nguon_cua_so.setdefault(so, []).append(i)
+            if c.get("sua_doi_cho"):
+                nguon_sua_cho.setdefault(c["sua_doi_cho"], []).append(i)
         for i, c in enumerate(all_ctx, 1):
             locator = c.get("source_locator") or ""
             if not locator and c.get("page_number"):
@@ -2196,6 +2491,21 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
                                + " — điều khoản trích dưới đây có thể đã đổi. "
                                "Đối chiếu văn bản sửa đổi trước khi dùng làm "
                                "căn cứ, hoặc nói rõ là chưa đối chiếu được.)")
+                bi_sua = c.get("sua_doi_cho")
+                if bi_sua:
+                    o = nguon_cua_so.get(bi_sua) or []
+                    caveat += ("\n(VĂN BẢN SỬA ĐỔI: đoạn này sửa đổi, bổ sung văn bản "
+                               f"số {bi_sua}"
+                               + (f" [Nguồn {', '.join(map(str, o))}]" if o else "")
+                               + ". Chỗ nào hai bên khác nhau thì nội dung ĐÃ SỬA ở "
+                               "đây là nội dung đang áp dụng.)")
+                else:
+                    so_c = van_ban.chuan_hoa_so_hieu(c.get("so_hieu") or "")
+                    if so_c in nguon_sua_cho:
+                        caveat += ("\n(ĐOẠN SỬA ĐỔI văn bản này có ở [Nguồn "
+                                   + ", ".join(map(str, nguon_sua_cho[so_c]))
+                                   + "] — nội dung nào đã bị sửa thì trả lời theo "
+                                   "nội dung đã sửa ở đó.)")
             parts.append(f"[Nguồn {i}] {owner}{_ten_nguon(c)}{label}{caveat}\n{content}\n")
         # Chỉ dẫn phân biệt chủ thể — chỉ chèn khi thật sự có hồ sơ khách trong
         # bộ nguồn, để câu hỏi thuần pháp lý không phải cõng thêm chữ thừa.
@@ -2392,7 +2702,24 @@ def build_prompt(question, chunks, temp_chunks=None, method=None,
             "cho cùng một vấn đề (khái niệm, điều kiện, mức trần, hậu quả pháp lý), "
             "căn cứ CHÍNH là Bộ luật/Luật — nêu nó trước; Nghị định/Thông tư chỉ "
             "dùng để chi tiết thêm và chỉ khi đúng lĩnh vực của câu hỏi. Không lấy "
-            "văn bản của lĩnh vực khác làm căn cứ chỉ vì trùng chữ." + chr(10))
+            "văn bản của lĩnh vực khác làm căn cứ chỉ vì trùng chữ. NGOẠI LỆ: điều "
+            "luật đã bị văn bản sau sửa đổi, hoặc luật giao Chính phủ/Bộ quy định "
+            "mức cụ thể → nội dung, con số ĐANG ÁP DỤNG lấy theo văn bản sửa đổi / "
+            "văn bản được giao mới nhất trong nguồn." + chr(10))
+        if _yeu_cau_tra_loi_thang(question):
+            # 12/10/2026 — "hộ kinh doanh đang được miễn thuế bao nhiêu": bot kê
+            # bốn mục ngang hàng từ Nghị định 1995, 2008, 2011 rồi hỏi lại người
+            # dùng; Google trả lời ngay câu đầu "dưới 1 tỷ đồng/năm từ 2026".
+            parts.append(
+                "TRẢ LỜI THẲNG: câu hỏi này hỏi một MỨC / NGƯỠNG / CON SỐ đang áp "
+                "dụng. Câu ĐẦU TIÊN của câu trả lời phải nêu ngay con số đó, áp dụng "
+                "từ ngày nào, theo điều nào của văn bản nào — lấy văn bản mới nhất "
+                "trong nguồn và đã tính các lần sửa đổi. Sau đó mới tới điều kiện "
+                "áp dụng, cách tính phần vượt ngưỡng, ngoại lệ và việc người hỏi "
+                "cần làm. Nguồn cho thấy con số đã đổi qua nhiều văn bản thì thêm "
+                "MỘT dòng ngắn về các mức trước. Văn bản cũ không còn áp dụng thì "
+                "không kê thành mục ngang hàng với quy định hiện hành; câu hỏi đã đủ "
+                "để trả lời con số chung thì không hỏi lại người dùng." + chr(10))
         trong_tam = _dieu_trong_tam(all_ctx)
         if trong_tam:
             parts.append(
@@ -3004,6 +3331,20 @@ def _content_tokens(text: str) -> set[str]:
     return {t for t in _tokens(text) if t not in _STOP_TOKENS}
 
 
+# Câu MỜI ở cuối câu trả lời ("Nếu bạn cần …, vui lòng cung cấp thêm doanh thu
+# năm") không khẳng định điều gì từ tài liệu. Gắn [Nguồn n] cho nó là trích dẫn
+# lạc đề — 12/10/2026 bot gắn "(Điều 2 Nghị định 141/2026/NĐ-CP) [Nguồn 25]",
+# một điều về thuế doanh nghiệp, vào câu mời của câu hỏi thuế hộ kinh doanh.
+_RE_CAU_MOI = re.compile(
+    r"^(?:neu (?:ban|anh|chi|quy khach) (?:can|muon)|neu can (?:them|tu van)|vui long|"
+    r"ban co the (?:cung cap|cho biet|hoi)|hay cho (?:minh|toi|em) biet)")
+
+
+def _la_cau_moi(body: str) -> bool:
+    """Đoạn ngắn chỉ là lời mời hỏi tiếp / xin thêm thông tin."""
+    return len(body) <= 320 and bool(_RE_CAU_MOI.search(_fold(body)))
+
+
 def autocite(text, chunks, min_coverage=AUTOCITE_MIN_COVERAGE):
     """Tự gắn [Nguồn n] cho những đoạn CHỨNG MINH ĐƯỢC là lấy từ tài liệu.
 
@@ -3029,7 +3370,7 @@ def autocite(text, chunks, min_coverage=AUTOCITE_MIN_COVERAGE):
         body_lines = [line for line in block.splitlines()
                       if not line.lstrip().startswith(("#", ">"))]
         body = re.sub(r"[`*_>#-]", "", " ".join(body_lines)).strip()
-        if len(body) < 35 or "[CẦN BỔ SUNG" in body.upper():
+        if len(body) < 35 or "[CẦN BỔ SUNG" in body.upper() or _la_cau_moi(body):
             continue
         btokens = _content_tokens(body)
         if len(btokens) < 4:
@@ -3348,7 +3689,7 @@ def validate_grounding(text, chunks, answer_mode="grounded", strict=True,
             # Tiêu đề, câu nối rất ngắn và placeholder không phải một khẳng
             # định cần nguồn. Các khối nội dung đáng kể thì bắt buộc phải có.
             if (len(body) >= 35 and "[CẦN BỔ SUNG" not in body.upper()
-                    and not _CITATION_RE.search(block)):
+                    and not _CITATION_RE.search(block) and not _la_cau_moi(body)):
                 unsupported.append(index)
         if unsupported and strict and answer_mode == "grounded":
             # BỎ HẲN khối không căn cứ thay vì chèn "[Đã ẩn đoạn…]" vào từng
@@ -3795,8 +4136,15 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     # Câu NGẮN thuần pháp lý ("cấp ERC và IRC loại nào trước?") không phải
     # tình huống dài, cũng không phải câu hỏi dữ liệu HDS (infer_intent = None)
     # — vẫn là câu hỏi luật, kệ luật phải được hỏi (Mai 29/08/2026).
-    if (channel == "internal" and _hoi_ve_phap_luat(question)
-            and (company_context._legal_or_scenario_question(_fold_text(question))
+    # Câu đã mở viết tắt ("hkd" → "hộ kinh doanh") cho các chốt nhận diện chủ đề.
+    # Kênh WEBSITE cũng chạy khối này (12/10/2026): cả kệ luật đều ở mức public,
+    # bản án/án lệ ở mức internal thì RLS tự lọc. Không có nó, người dân hỏi "hộ
+    # kinh doanh đang được miễn thuế bao nhiêu" nhận câu "được miễn thuế thu nhập
+    # doanh nghiệp" ghép từ một điều về doanh nghiệp — Nghị định 68/2026 (luật
+    # nền) không bao giờ được tìm. Cổng khách (portal) vẫn theo gói dịch vụ.
+    q_mo_rong = mo_rong_viet_tat(question)
+    if (channel in ("internal", "public") and _hoi_ve_phap_luat(q_mo_rong)
+            and (company_context._legal_or_scenario_question(_fold_text(q_mo_rong))
                  or company_context.infer_intent(question) is None)):
         truoc = len(kept)
         kept = [c for c in kept if c.get("doc_type") != "ho_so_ns"]
@@ -3846,12 +4194,12 @@ def prepare(question, channel, client_id=None, conversation_id=None,
         # chạy khi người dùng đã tự khoanh nguồn mà bộ luật nền nằm ngoài vùng.
         viec_nen = []
         id_nen = luat_nen.doc_ids(lambda: db.session(role="internal", admin=True))
-        for khoa in luat_nen.chu_de_luat(question):
+        for khoa in luat_nen.chu_de_luat(q_mo_rong):
             id_vb = id_nen.get(khoa)
             if not id_vb or (source_document_ids is not None
                              and id_vb not in set(source_document_ids)):
                 continue
-            cac_dieu = luat_nen.dieu_nen(question, khoa)
+            cac_dieu = luat_nen.dieu_nen(q_mo_rong, khoa)
             timings.setdefault("luat_nen", {})[khoa] = cac_dieu
 
             def _lay_nen(id_vb=id_vb, cac_dieu=cac_dieu):
@@ -3936,7 +4284,8 @@ def prepare(question, channel, client_id=None, conversation_id=None,
                 cac_dieu, doan_nen = ket_qua(fut) or ((), [])
                 for c in doan_nen:
                     cid = c["chunk_id"]
-                    la_dieu_nen = luat_nen.dieu_cua_doan(c) in cac_dieu
+                    khop = [d for d in luat_nen.cac_dieu_cua_doan(c) if d in cac_dieu]
+                    la_dieu_nen = bool(khop)
                     if cid in seen_ids:
                         if not la_dieu_nen or not any(k["chunk_id"] == cid for k in kept):
                             continue
@@ -3948,6 +4297,9 @@ def prepare(question, channel, client_id=None, conversation_id=None,
                         # tâm" — model 14B có điều đúng trong tay mà vẫn không nêu
                         # số (40 kịch bản 11/10/2026: 1.8, 2.8, 3.7).
                         c["dieu_nen"] = True
+                        # Số Điều thật sự khớp (đoạn .md mang nhãn "Điều 2" mà
+                        # chứa tiêu đề Điều 3) — để "điều luật trọng tâm" nêu đúng.
+                        c["dieu_khop"] = khop[0]
                         luat_them.append(c)
                         n_nen += 1
                     else:
@@ -4052,19 +4404,35 @@ def prepare(question, channel, client_id=None, conversation_id=None,
     # của văn bản THAY THẾ nằm trong kho, đặt lên đầu nguồn, và ghi thẳng vào
     # từng đoạn cũ "đã bị thay thế bởi X" để build_prompt/format_sources dùng.
     # Chạy cho MỌI kênh: người dân trên cổng public càng cần luật còn sống.
-    het_hl = {(c.get("so_hieu") or "").strip() for c in kept
-              if c.get("doc_type") == "law" and c.get("so_hieu")
-              and c.get("trang_thai_hieu_luc") in ("het_hieu_luc",
-                                                   "het_hieu_luc_mot_phan")}
-    if het_hl:
+    # Hỏi quan hệ cho MỌI văn bản luật trong nguồn (một câu SELECT có chỉ mục),
+    # không chỉ văn bản đã mang nhãn hết hiệu lực: nhãn hay trễ so với quan hệ —
+    # khối "kéo đoạn sửa đổi" bên dưới cần cả văn bản nhãn còn hiệu lực. Bản hợp
+    # nhất tra thêm theo số hiệu văn bản GỐC của nó (so_hieu_quan_he).
+    so_luat = set()
+    for c in kept:
+        if c.get("doc_type") == "law" and c.get("so_hieu"):
+            so_luat.add((c.get("so_hieu") or "").strip())
+            so_luat.add(so_hieu_quan_he(c))
+    moi_hon_tat_ca = []
+    if so_luat:
         try:
             with db.session(role=CHANNEL_LEVEL[channel], client_id=client_id,
                             dept_ids=dept_ids, is_banqt=is_banqt,
                             can_finance=can_finance) as conn:
                 with conn.cursor() as cur:
-                    moi_hon = van_ban.van_ban_moi_hon(cur, sorted(het_hl))
+                    moi_hon_tat_ca = van_ban.van_ban_moi_hon(cur, sorted(so_luat))
         except Exception:
-            moi_hon = []            # bảng quan hệ chưa có (kho cũ) — bỏ qua êm
+            moi_hon_tat_ca = []     # bảng quan hệ chưa có (kho cũ) — bỏ qua êm
+    n_vbhn_chet = danh_dau_vbhn_bi_thay(kept, moi_hon_tat_ca)
+    if n_vbhn_chet:
+        timings["vbhn_goc_bi_thay"] = n_vbhn_chet
+    het_hl = {so_hieu_quan_he(c) for c in kept
+              if c.get("doc_type") == "law" and c.get("so_hieu")
+              and c.get("trang_thai_hieu_luc") in ("het_hieu_luc",
+                                                   "het_hieu_luc_mot_phan")}
+    if het_hl:
+        het_hl_chuan = {van_ban.chuan_hoa_so_hieu(s) for s in het_hl}
+        moi_hon = [m for m in moi_hon_tat_ca if m["so_hieu_cu"] in het_hl_chuan]
         if moi_hon:
             # Nêu ĐÚNG loại quan hệ: "sửa đổi, bổ sung" mà nói thành "thay thế"
             # là sai nghiệp vụ — văn bản bị sửa một phần vẫn còn hiệu lực ở
@@ -4074,7 +4442,7 @@ def prepare(question, channel, client_id=None, conversation_id=None,
                 nhan = van_ban.LOAI_QUAN_HE_VN.get(m["loai"], m["loai"])
                 boi.setdefault(m["so_hieu_cu"], []).append(f"{m['ten']} ({nhan})")
             for c in kept:
-                so = van_ban.chuan_hoa_so_hieu(c.get("so_hieu") or "")
+                so = so_hieu_quan_he(c)
                 if so in boi:
                     c["thay_the_boi"] = "; ".join(dict.fromkeys(boi[so]))
             da_co_doc = {c["document_id"] for c in kept}
@@ -4123,10 +4491,63 @@ def prepare(question, channel, client_id=None, conversation_id=None,
                 for c in reversed(ban_song):
                     cu = cu_cua.get(c["document_id"], set())
                     vi_tri = next((i for i, k in enumerate(kept)
-                                   if van_ban.chuan_hoa_so_hieu(k.get("so_hieu") or "") in cu),
-                                  0)
+                                   if so_hieu_quan_he(k) in cu), 0)
                     kept.insert(vi_tri, c)
                 timings["van_ban_thay_the_them"] = len(ban_song)
+
+    # VĂN BẢN BỊ SỬA ĐỔI → KÉO ĐOẠN SỬA ĐỔI VÀO NGAY SAU NÓ (12/10/2026). Khối
+    # trên chỉ GHI CHÚ "đã bị sửa đổi bởi X", model không biết X sửa cái gì:
+    # nguồn có Điều 4 Nghị định 68/2026/NĐ-CP ("doanh thu năm từ 500 triệu đồng
+    # trở xuống không phải nộp thuế") mà không có Điều 1 Nghị định 141/2026/NĐ-CP
+    # ("sửa cụm từ 500 triệu đồng thành 01 tỷ đồng") thì bot trả lời 500 triệu —
+    # sai từ 01/01/2026. Khác lần kéo "Phần mở đầu + Điều 1" của mọi văn bản sửa
+    # đổi BLDS trước đây (F-28): chỉ văn bản sửa đổi mới hơn, tối đa 2 cái gần
+    # nhất mỗi văn bản, chỉ đoạn KHỚP câu hỏi và nêu đích danh văn bản bị sửa (bỏ
+    # phần mở đầu chỉ kê căn cứ), đặt ngay sau văn bản bị sửa chứ không lên đầu.
+    sua_cho = chon_van_ban_sua_doi(kept, moi_hon_tat_ca)
+    if source_document_ids is not None:
+        cho_phep = set(source_document_ids)
+        sua_cho = {i: s for i, s in sua_cho.items() if i in cho_phep}
+    if sua_cho:
+        try:
+            ung_vien = retrieve(
+                search_question, channel, client_id, dept_ids=dept_ids,
+                is_banqt=is_banqt, top_k=4 * len(sua_cho), can_finance=can_finance,
+                document_ids=list(sua_cho), max_per_document=4,
+                query_vector=query_vector, lexical="or", neighbours=False)
+        except Exception:  # noqa: BLE001 — lượt phụ hỏng không làm mất câu trả lời
+            ung_vien = []
+        diem_goc = {}
+        for c in kept:
+            so = van_ban.chuan_hoa_so_hieu(c.get("so_hieu") or "")
+            diem_goc[so] = max(diem_goc.get(so, 0.0), c.get("score") or 0.0)
+        doan_sua = chon_doan_sua_doi(ung_vien, sua_cho, diem_goc, min_score)
+        if doan_sua:
+            # Kèm điều HIỆU LỰC THI HÀNH của văn bản sửa đổi: câu "đang được miễn
+            # bao nhiêu" cần "áp dụng từ ngày nào" — Nghị định 141/2026 ban hành
+            # 29/4 nhưng hiệu lực từ 01/01/2026; thiếu đoạn này model đoán ngày.
+            dung = list(dict.fromkeys(c["document_id"] for c in doan_sua))
+            try:
+                hieu_luc = retrieve(
+                    "Hiệu lực thi hành", channel, client_id, dept_ids=dept_ids,
+                    is_banqt=is_banqt, top_k=3 * len(dung), can_finance=can_finance,
+                    document_ids=dung, max_per_document=3, lexical="or",
+                    neighbours=False)
+            except Exception:  # noqa: BLE001
+                hieu_luc = []
+            da_chon = {c["chunk_id"] for c in doan_sua}
+            for c in doan_hieu_luc(hieu_luc):
+                if c["chunk_id"] in da_chon:
+                    continue
+                # Điểm của lượt tìm "Hiệu lực thi hành" (0,9+) không phải độ liên
+                # quan tới câu hỏi — hạ về điểm văn bản bị sửa để panel nguồn và
+                # các bước xếp hạng sau không coi nó là nguồn khớp nhất.
+                c["score"] = min(c.get("score") or 0.0,
+                                 diem_goc.get(sua_cho.get(c["document_id"]), 0.0))
+                doan_sua.append(c)
+            kept = chen_doan_sua_doi(kept, doan_sua, sua_cho)
+            timings["doan_sua_doi_them"] = [
+                f"{c.get('so_hieu')} → {sua_cho[c['document_id']]}" for c in doan_sua]
 
     # Hỏi hợp đồng nước ngoài / tiếng Anh trong ngăn mẫu → các đoạn SEC khớp nhất
     # đứng đầu (xem _RE_HOI_HOP_DONG_NUOC_NGOAI). Từ khoá OR được phép vì đã
@@ -4414,7 +4835,9 @@ def prepare(question, channel, client_id=None, conversation_id=None,
                   if _models.is_cloud(chosen_model or "")
                   else _context_char_cap(_num("llm_num_ctx", 32768, int),
                                          _num("context_char_budget", CONTEXT_CHARS, int)))
-    prompt = build_prompt(question, chunks, temp_chunks, method,
+    # Model đọc câu đã mở viết tắt: "hkd đang được miễn bao nhiêu" mà không
+    # kèm nghĩa thì nó hỏi lại "hkd là viết tắt của gì?" (12/10/2026).
+    prompt = build_prompt(mo_rong_viet_tat(question), chunks, temp_chunks, method,
                           company=company, history=history, summary=summary,
                           chunk_chars=_num("chunk_char_limit", CHUNK_CHARS, int),
                           budget=budget_eff, van_ban_thieu=van_ban_thieu,

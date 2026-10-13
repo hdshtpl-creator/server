@@ -1014,7 +1014,7 @@ def van_ban_moi_hon(cur, so_hieu_list) -> list:
     """Các văn bản TRONG KHO đã thay thế / sửa đổi những số hiệu này.
 
     Dùng cho bộ tra cứu: nguồn trúng là luật đã chết → kéo bản mới vào prompt.
-    Trả [{document_id, title, ten, loai, so_hieu_cu}].
+    Trả [{document_id, title, ten, loai, so_hieu_cu, so_hieu, ngay_ban_hanh}].
     """
     ds = [chuan_hoa_so_hieu(s).lower() for s in (so_hieu_list or []) if s]
     if not ds:
@@ -1022,7 +1022,7 @@ def van_ban_moi_hon(cur, so_hieu_list) -> list:
     cur.execute(
         """SELECT DISTINCT ON (d.id, q.so_hieu_dich)
                   d.id, d.title, q.ten_nguon, q.loai, q.so_hieu_dich,
-                  d.trich_yeu, d.loai_van_ban, d.so_hieu
+                  d.trich_yeu, d.loai_van_ban, d.so_hieu, d.ngay_ban_hanh
              FROM van_ban_quan_he q
              JOIN documents d ON lower(d.so_hieu)=lower(q.so_hieu_nguon)
                   AND d.doc_type='law' AND coalesce(d.active,true)
@@ -1036,5 +1036,6 @@ def van_ban_moi_hon(cur, so_hieu_list) -> list:
         ten = r[2] or ten_day_du({"loai_van_ban": r[6], "trich_yeu": r[5]},
                                  so_hieu=r[7]) or r[1]
         ra.append({"document_id": r[0], "title": r[1], "ten": ten,
-                   "loai": r[3], "so_hieu_cu": chuan_hoa_so_hieu(r[4] or "")})
+                   "loai": r[3], "so_hieu_cu": chuan_hoa_so_hieu(r[4] or ""),
+                   "so_hieu": r[7], "ngay_ban_hanh": r[8]})
     return ra
