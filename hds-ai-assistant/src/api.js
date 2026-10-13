@@ -2640,11 +2640,14 @@ let mockState = {
     // (máy chủ thật mặc định TẮT, xem hds-ai/app/settings.py).
     cloud_scope: 'law_only',
     ai_soat_che_do: 'nut',
-    ai_soat_model: 'api:gpt-5-mini',
+    ai_soat_model: 'api:gpt-6.1-sol',
     ai_soat_effort: 'low',
     ai_khac_bat: 'true',
-    ai_khac_model: 'api:gpt-5',
+    ai_khac_model: 'api:gpt-6.1-sol',
     ai_khac_effort: 'medium',
+    ai_khac_tim_web: 'true',
+    ai_khac_nho_lich_su: 'true',
+    ai_khac_so_luot_nho: '6',
     ai_ngoai_che_dinh_danh: 'true',
     ai_ngoai_tran_luot_thang: '500',
     ai_ngoai_max_tokens: '12000',
@@ -3013,14 +3016,24 @@ async function mockCauTraLoiKhac(messageId, lamLai, onEvent, signal) {
   ];
   const loc = { cong_no: 0, ho_so_khach: 0, tai_lieu_noi_bo: 1, dinh_kem: 3, du_lieu_cong_ty: false, lich_su: 2, tong: 4 };
   onEvent?.({ type: 'meta', sources, loc });
-  onEvent?.({ type: 'status', label: 'ChatGPT (gpt-5) đang đọc và trả lời…' });
+  onEvent?.({ type: 'status', label: 'ChatGPT (gpt-6.1-sol) đang tìm trên web và trả lời…' });
   await wait(1200);
   const text =
     '**Ngắn gọn:** doanh nghiệp phải đăng ký thay đổi trong **10 ngày** kể từ ngày có thay đổi [Nguồn 1].\n\n' +
     '**Trình tự:**\n' +
-    '1. Lập hồ sơ theo Điều 15 Nghị định 01/2021/NĐ-CP [Nguồn 2].\n' +
+    '1. Lập hồ sơ theo Điều 15 Nghị định 01/2021/NĐ-CP [Nguồn 2]. Lưu ý Nghị định 01/2021 đã được thay bằng Nghị định 168/2025/NĐ-CP từ 01/07/2025 [Nguồn 3].\n' +
     '2. Nộp tới Phòng Đăng ký kinh doanh nơi đặt trụ sở chính [Nguồn 2].\n\n' +
     '*Lưu ý:* câu trả lời này không dựa trên file đính kèm (phạm vi dữ liệu không cho gửi ra ngoài).';
+  sources.push({
+    n: 3,
+    kind: 'web',
+    title: 'Nghị định 168/2025/NĐ-CP về đăng ký doanh nghiệp',
+    url: 'https://vbpl.vn/vb/168-2025-nd-cp',
+    domain: 'vbpl.vn',
+    tu_tim_kiem: true,
+    quote: '',
+    score: 0,
+  });
   const words = text.split(' ');
   for (let i = 0; i < words.length; i += 1) {
     onEvent?.({ type: 'delta', text: (i ? ' ' : '') + words[i] });
@@ -3031,12 +3044,17 @@ async function mockCauTraLoiKhac(messageId, lamLai, onEvent, signal) {
     text,
     sources,
     grounding_status: 'grounded',
-    model: 'api:gpt-5',
-    ten_model: 'ChatGPT (gpt-5)',
+    model: 'api:gpt-6.1-sol',
+    ten_model: 'ChatGPT (gpt-6.1-sol)',
     ms: 1200 + words.length * 35,
-    cost_usd: 0.041,
+    cost_usd: 0.051,
     loc,
     da_che: 0,
+    tim_web: true,
+    nguon_web: 1,
+    truy_van: ['thời hạn đăng ký thay đổi nội dung đăng ký doanh nghiệp 2026'],
+    so_lan_tim: 1,
+    nho_lich_su: 2,
     at: new Date().toISOString(),
   };
   if (m) m.ai_khac = ket_qua;
@@ -3783,17 +3801,25 @@ Với câu hỏi "${question}":
   if (endpoint === '/ai-ngoai/cau-hinh' && method === 'GET') {
     const s = mockState.settings;
     const ten = (m) => {
-      const t = String(m || '').replace(/^(api|claude):/, '');
-      return /^claude/.test(t) ? `Claude (${t})` : `ChatGPT (${t})`;
+      const t = String(m || '').replace(/^(api|claude|gemini):/, '');
+      return /^claude/.test(t)
+        ? `Claude (${t})`
+        : /^gemini/.test(t)
+        ? `Gemini (${t})`
+        : `ChatGPT (${t})`;
     };
+    const timWebDuoc = /^(api|gemini):/.test(String(s.ai_khac_model || ''));
     return {
       soat: s.ai_soat_che_do || 'tat',
       khac: s.ai_khac_bat === 'true',
       ten_soat: ten(s.ai_soat_model),
       ten_khac: ten(s.ai_khac_model),
+      tim_web: s.ai_khac_tim_web !== 'false' && timWebDuoc,
+      nho_lich_su: s.ai_khac_nho_lich_su !== 'false' && Number(s.ai_khac_so_luot_nho ?? 6) > 0,
       quan_tri: {
         co_khoa_openai: true,
         co_khoa_claude: false,
+        co_khoa_gemini: false,
         dia_chi_api: 'https://api.openai.com/v1',
         su_dung_thang: { luot: 37, soat: 29, khac: 8, usd: 0.4123 },
         tran_luot_thang: Number(s.ai_ngoai_tran_luot_thang || 0),

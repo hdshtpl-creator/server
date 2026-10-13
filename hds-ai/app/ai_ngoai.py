@@ -1,5 +1,5 @@
 """
-ai_ngoai.py — ChatGPT (hoặc model API khác) làm việc SONG SONG với Qwen.
+ai_ngoai.py — ChatGPT / Gemini (hoặc model API khác) làm việc SONG SONG với Qwen.
 
 Yêu cầu chủ dự án 04/10/2026: "gắn API ChatGPT chạy song song — ChatGPT kiểm
 tra đầu ra có ổn chưa, hoặc bấm nút xem câu trả lời khác thì ChatGPT trả lời;
@@ -12,7 +12,10 @@ Hai việc, đều là việc PHỤ — câu trả lời chính vẫn do Qwen tr
      Chỉ NHẬN XÉT, không sửa câu trả lời — luật sư đọc và quyết định.
   2. CÂU TRẢ LỜI KHÁC (cau_tra_loi_khac): model ngoài trả lời lại cùng câu hỏi,
      cùng quyền đọc tài liệu của người hỏi (rag.prepare chạy lại với đúng
-     tham số lượt gốc), hiện bên dưới để so sánh.
+     tham số lượt gốc), hiện bên dưới để so sánh. Từ 13/10/2026: được TÌM
+     WEB thời gian thực (ChatGPT web_search / Gemini Google Search — nguồn web
+     thành [Nguồn n] như nguồn trong kho) và NHỚ LỊCH SỬ khung chat (câu hỏi
+     trước + câu trả lời trước của chính nó, gửi thành các lượt riêng).
 
 DỮ LIỆU RỜI MÁY CHỦ — các chốt, gỡ cái nào là hở cái đó:
   · Chỉ kênh nội bộ; mặc định TẮT; cần khoá API trong .env (quản trị điền).
@@ -89,6 +92,10 @@ def cau_hinh() -> dict:
         "khac_bat": _dung(g.get("ai_khac_bat", d["ai_khac_bat"])),
         "khac_model": (g.get("ai_khac_model") or d["ai_khac_model"]).strip(),
         "khac_effort": (g.get("ai_khac_effort") or d["ai_khac_effort"]).strip().lower(),
+        "khac_tim_web": _dung(g.get("ai_khac_tim_web", d["ai_khac_tim_web"]), True),
+        "khac_nho_lich_su": _dung(g.get("ai_khac_nho_lich_su", d["ai_khac_nho_lich_su"]), True),
+        "khac_so_luot_nho": min(20, max(0, _so(g.get("ai_khac_so_luot_nho"),
+                                               _so(d["ai_khac_so_luot_nho"], 6)))),
         "che_dinh_danh": _dung(g.get("ai_ngoai_che_dinh_danh",
                                      d["ai_ngoai_che_dinh_danh"]), True),
         "tran_luot_thang": max(0, _so(g.get("ai_ngoai_tran_luot_thang"),
@@ -107,6 +114,8 @@ def ten_hien_thi(model: str) -> str:
     prov = _m.provider_of(model or "")
     if prov == _m.P_CLAUDE:
         return f"Claude ({ten})"
+    if prov == _m.P_GEMINI:
+        return f"Gemini ({ten})"
     if prov == _m.P_COMPAT and re.match(r"^(gpt|chatgpt|o\d)", ten, re.IGNORECASE):
         return f"ChatGPT ({ten})"
     return ten or "model ngoài"
@@ -122,7 +131,19 @@ def trang_thai(cfg: dict | None = None) -> dict:
     khac = cfg["khac_bat"] and _m.co_khoa_api(cfg["khac_model"])
     return {"soat": soat, "khac": bool(khac),
             "ten_soat": ten_hien_thi(cfg["soat_model"]),
-            "ten_khac": ten_hien_thi(cfg["khac_model"])}
+            "ten_khac": ten_hien_thi(cfg["khac_model"]),
+            "tim_web": bool(cfg["khac_tim_web"] and _m.ho_tro_tim_web(cfg["khac_model"])),
+            "nho_lich_su": bool(cfg["khac_nho_lich_su"] and cfg["khac_so_luot_nho"])}
+
+
+def _ten_khoa(model: str) -> str:
+    """Tên biến .env cần điền cho model này — để câu lỗi chỉ đúng chỗ."""
+    prov = _m.provider_of(model or "")
+    if prov == _m.P_GEMINI:
+        return "GEMINI_API_KEY"
+    if prov == _m.P_CLAUDE:
+        return "ANTHROPIC_API_KEY"
+    return "OPENAI_API_KEY"
 
 
 # ====================== PHẠM VI DỮ LIỆU ======================
@@ -596,7 +617,7 @@ def kiem_truoc_soat(message_id: int, user: dict):
     if not _m.co_khoa_api(cfg["soat_model"]):
         raise LoiAiNgoai(503, "Máy chủ chưa có khoá API cho "
                               f"{ten_hien_thi(cfg['soat_model'])} — quản trị cần "
-                              "điền OPENAI_API_KEY vào .env.")
+                              f"điền {_ten_khoa(cfg['soat_model'])} vào .env.")
     return cfg, doc_tin_nhan(message_id, user)
 
 
@@ -672,6 +693,214 @@ def thay_doc_lai_local(channel, evidence, answer_mode) -> bool:
     return not (tran and su_dung_thang()["luot"] >= tran)
 
 
+# ====================== 2a. NHỚ LỊCH SỬ KHUNG CHAT ======================
+# Model ngoài "nhớ" hội thoại như ChatGPT/Gemini: các lượt trước được gửi kèm
+# thành từng LƯỢT user/assistant. Câu trả lời của lượt trước lấy theo thứ tự:
+#   1. câu trả lời trước của CHÍNH model ngoài (messages.ai_khac) — nó vốn được
+#      sinh ra từ dữ liệu đã lọc theo phạm vi, gửi lại không lộ thêm gì;
+#   2. câu trả lời của Qwen — CHỈ khi mọi nguồn nó trích đều trong phạm vi
+#      (cùng chốt pham_vi_soat của lượt soát);
+#   3. còn lại: một dòng giữ chỗ — Gemini đòi lượt user/model xen kẽ.
+
+LICH_SU_KY_TU_HOI = 2000
+LICH_SU_KY_TU_DAP = 3000
+_GIU_CHO_DAP = "(Câu trả lời lượt này dùng dữ liệu nội bộ nên không được chia sẻ.)"
+_RE_NHAN_NGUON = re.compile(r"\s*\[\s*Nguồn\s+\d+(?:\s*[,–-]\s*\d+)*\s*\]", re.IGNORECASE)
+
+
+def _gon_cau_tra_loi(text: str) -> str:
+    """Bỏ ký hiệu [Nguồn n] (số nguồn của lượt cũ, lượt này không còn), phần
+    chân trang cảnh báo sau '---', cắt độ dài."""
+    t = (text or "").split("\n---\n", 1)[0]
+    t = _RE_NHAN_NGUON.sub("", t).strip()
+    if len(t) > LICH_SU_KY_TU_DAP:
+        t = t[:LICH_SU_KY_TU_DAP].rstrip() + " …"
+    return t
+
+
+def ghep_lich_su(rows, scope, so_luot) -> list:
+    """rows: tin nhắn TRƯỚC câu hỏi đang hỏi lại, theo thứ tự thời gian —
+    [{role, content, evidence, answer_mode, ai_khac}]. Trả [(user|assistant,
+    nội dung)] xen kẽ, bắt đầu bằng user, kết thúc bằng assistant, chỉ giữ
+    `so_luot` lượt gần nhất. Hàm thuần."""
+    if not so_luot:
+        return []
+    luot = []                      # [[câu hỏi, câu trả lời|None]]
+    for r in rows or []:
+        if r.get("role") == "user":
+            luot.append([(r.get("content") or "").strip()[:LICH_SU_KY_TU_HOI], None])
+        elif r.get("role") == "assistant" and luot and luot[-1][1] is None:
+            khac = r.get("ai_khac") if isinstance(r.get("ai_khac"), dict) else None
+            if khac and khac.get("trang_thai") == "xong" and (khac.get("text") or "").strip():
+                dap = _gon_cau_tra_loi(khac["text"])
+            elif not pham_vi_soat(r.get("evidence") or [], r.get("answer_mode"),
+                                  r.get("content") or "", scope)["chan"]:
+                dap = "[Trợ lý nội bộ đã trả lời:] " + _gon_cau_tra_loi(r.get("content"))
+            else:
+                dap = _GIU_CHO_DAP
+            luot[-1][1] = dap or _GIU_CHO_DAP
+    out = []
+    for hoi, dap in luot[-so_luot:]:
+        if not hoi:
+            continue
+        out += [("user", hoi), ("assistant", dap or _GIU_CHO_DAP)]
+    return out
+
+
+def _doc_lich_su(conversation_id, truoc_id, so_luot) -> list:
+    """Tin nhắn của hội thoại TRƯỚC câu hỏi `truoc_id` (mới nhất trước khi đảo)."""
+    if not conversation_id or not truoc_id or not so_luot:
+        return []
+
+    def _js(v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except ValueError:
+                return None
+        return v
+
+    with db.session(role="internal", admin=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT role, content, evidence, answer_mode, ai_khac
+                             FROM messages WHERE conversation_id=%s AND id < %s
+                            ORDER BY id DESC LIMIT %s""",
+                        (conversation_id, truoc_id, so_luot * 2 + 2))
+            rows = cur.fetchall()
+    return [{"role": r[0], "content": r[1], "evidence": _js(r[2]) or [],
+             "answer_mode": r[3], "ai_khac": _js(r[4])} for r in reversed(rows)]
+
+
+# ====================== 2b. NGUỒN WEB → [Nguồn n] ======================
+
+HUONG_DAN_TIM_WEB = (
+    "TÌM KIẾM WEB (được phép): ngoài TÀI LIỆU THAM KHẢO ở trên, bạn được tra cứu "
+    "Internet để kiểm tra và bổ sung thông tin MỚI NHẤT — văn bản pháp luật mới ban "
+    "hành, sửa đổi, hết hiệu lực; mức, ngưỡng, số liệu đang áp dụng; tin tức liên "
+    "quan tới câu hỏi. Ưu tiên nguồn chính thống: vbpl.vn, congbao.chinhphu.vn, "
+    "chinhphu.vn, baochinhphu.vn, cổng thông tin các bộ ngành (.gov.vn), rồi tới "
+    "thuvienphapluat.vn. Ý nào lấy từ web phải kèm đường link nguồn ngay trong câu; "
+    "ý lấy từ tài liệu tham khảo vẫn ghi [Nguồn n]. Web cho thấy tài liệu tham khảo "
+    "đã cũ hoặc đã bị sửa đổi thì nói rõ và nêu văn bản mới. Không tra cứu thông tin "
+    "về cá nhân hay khách hàng cụ thể; nhãn [Khách hàng], [Số định danh]… là dữ liệu "
+    "đã được che.")
+
+_RE_LINK_NGOAC = re.compile(r"\(\s*\[([^\]\n]{1,300})\]\((https?://[^\s)]+)\)\s*\)")
+_RE_LINK = re.compile(r"\[([^\]\n]{1,300})\]\((https?://[^\s)]+)\)")
+NGUON_WEB_TOI_DA = 12
+
+
+def _chuan_url(url: str) -> str:
+    """Bỏ tham số theo dõi (utm_*) và dấu thừa cuối — khoá gộp cùng một trang."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    u = (url or "").strip().rstrip(".,;")
+    try:
+        p = urlsplit(u)
+        q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
+             if not k.lower().startswith("utm_")]
+        return urlunsplit((p.scheme, p.netloc, p.path, urlencode(q), ""))
+    except ValueError:
+        return u
+
+
+def _ten_mien(url: str) -> str:
+    from urllib.parse import urlsplit
+    try:
+        net = urlsplit(url).netloc.lower()
+    except ValueError:
+        return ""
+    return net[4:] if net.startswith("www.") else net
+
+
+def gan_nguon_web(text: str, web: dict | None, so_dau: int) -> tuple:
+    """Đổi trích dẫn web của model ngoài thành [Nguồn n] nối tiếp sau `so_dau`
+    nguồn trong kho, để bộ kiểm chứng trích dẫn và panel nguồn dùng chung một
+    khuôn. Hàm thuần. Trả (văn bản, [evidence kind="web"]).
+
+      · ChatGPT viết link markdown ngay trong câu ("([vbpl.vn](https://…))") —
+        mỗi link thành [Nguồn n], tiêu đề lấy từ chú thích url_citation;
+      · Gemini trả đoạn chữ ↔ chỉ số nguồn (groundingSupports) — chèn [Nguồn n]
+        ngay sau đoạn chữ đó (tìm theo CHỮ, không theo vị trí: vị trí Google trả
+        đếm theo byte UTF-8, lệch với chuỗi tiếng Việt);
+      · có tìm mà không gắn được chỗ nào → thêm một dòng "Nguồn web đã tra".
+    Link model tự viết mà không có trong kết quả tìm vẫn được giữ, đánh dấu
+    tu_tim_kiem=False để giao diện ghi chú.
+    """
+    if not web:
+        return text, []
+    ket_qua = {_chuan_url(x.get("url")) for x in (web.get("nguon") or []) + (web.get("trich") or [])
+               if x.get("url")}
+    tieu_de = {}
+    for x in (web.get("trich") or []) + (web.get("nguon") or []):
+        k = _chuan_url(x.get("url"))
+        if k and x.get("title") and k not in tieu_de:
+            tieu_de[k] = x["title"]
+    nguon, so_cua = [], {}
+
+    def so(url, ten=""):
+        k = _chuan_url(url)
+        if not k:
+            return None
+        if k not in so_cua:
+            if len(nguon) >= NGUON_WEB_TOI_DA:
+                return None
+            n = so_dau + len(nguon) + 1
+            so_cua[k] = n
+            mien = _ten_mien(k)
+            nguon.append({"n": n, "kind": "web", "url": k, "domain": mien,
+                          "title": (tieu_de.get(k) or ten or mien or k)[:300],
+                          "quote": "", "snippet": "", "score": 0.0,
+                          "tu_tim_kiem": k in ket_qua})
+        return so_cua[k]
+
+    def thay(m):
+        n = so(m.group(2), m.group(1))
+        if not n:
+            return m.group(0)
+        truoc = m.string[m.start() - 1] if m.start() else " "
+        return ("" if truoc.isspace() else " ") + f"[Nguồn {n}]"
+
+    t = _RE_LINK_NGOAC.sub(thay, text or "")
+    t = _RE_LINK.sub(thay, t)
+
+    # Gemini: chèn sau từng đoạn chữ được Google gắn nguồn.
+    ds_nguon = web.get("nguon") or []
+    chen, con_tro = {}, 0
+    for sp in web.get("ho_tro") or []:
+        doan = (sp.get("text") or "").strip()
+        if not doan:
+            continue
+        vt = t.find(doan, con_tro)
+        if vt < 0:
+            vt = t.find(doan)
+        if vt < 0:
+            continue
+        cuoi = vt + len(doan)
+        con_tro = cuoi
+        for i in sp.get("chunks") or []:
+            if 0 <= i < len(ds_nguon):
+                n = so(ds_nguon[i].get("url"), ds_nguon[i].get("title"))
+                if n and n not in chen.setdefault(cuoi, []):
+                    chen[cuoi].append(n)
+    for vt in sorted(chen, reverse=True):
+        nhan = "".join(f" [Nguồn {n}]" for n in chen[vt])
+        if nhan.strip() not in t[vt:vt + len(nhan) + 2]:
+            t = t[:vt] + nhan + t[vt:]
+
+    if not nguon and ds_nguon:
+        for x in ds_nguon[:5]:
+            so(x.get("url"), x.get("title"))
+        if nguon:
+            t = t.rstrip() + "\n\nNguồn web đã tra: " + " ".join(f"[Nguồn {e['n']}]" for e in nguon)
+    return t, nguon
+
+
+def _doan_web(e: dict) -> dict:
+    """Đoạn GIẢ cho bộ kiểm chứng trích dẫn: [Nguồn n] của nguồn web hợp lệ."""
+    return {"kind": "web", "doc_type": "web", "title": e["title"], "url": e["url"],
+            "content": f"{e['title']} {e['domain']}", "score": 0.0}
+
+
 # ====================== 2. CÂU TRẢ LỜI KHÁC ======================
 
 def _ly_do_khong_co_nguon(loc: dict | None) -> str:
@@ -703,6 +932,7 @@ def cau_tra_loi_khac(cfg: dict, tn: dict, user: dict, lam_lai: bool = False,
         yield {"type": "done", "ket_qua": tn["ai_khac"]}
         return
     tham = tn["tham_so"] or {}
+    nho = bool(cfg.get("khac_nho_lich_su") and cfg.get("khac_so_luot_nho"))
     p = rag.prepare(
         tn["question"], "internal", conversation_id=tn["conversation_id"],
         use_temp=bool(tham.get("use_temp")), use_method=bool(tham.get("use_method")),
@@ -711,7 +941,8 @@ def cau_tra_loi_khac(cfg: dict, tn: dict, user: dict, lam_lai: bool = False,
         source_document_ids=tham.get("source_document_ids") or None,
         user_id=user.get("id"), mode=tham.get("mode"), on_status=on_status,
         dept_codes=user.get("dept_codes"),
-        ai_ngoai={"model": cfg["khac_model"], "scope": cfg["scope"]},
+        ai_ngoai={"model": cfg["khac_model"], "scope": cfg["scope"],
+                  "lich_su_rieng": nho},
         truoc_id=tn["question_id"])
     loc = p.get("ai_ngoai_loc")
     if cancel is not None and cancel.is_set():
@@ -725,19 +956,39 @@ def cau_tra_loi_khac(cfg: dict, tn: dict, user: dict, lam_lai: bool = False,
         return
 
     _kiem_tran(cfg)
+    tim_web = bool(cfg.get("khac_tim_web") and _m.ho_tro_tim_web(cfg["khac_model"]))
+    lich_su = []
+    if nho:
+        try:
+            lich_su = ghep_lich_su(
+                _doc_lich_su(tn["conversation_id"], tn["question_id"], cfg["khac_so_luot_nho"]),
+                cfg["scope"], cfg["khac_so_luot_nho"])
+        except Exception:  # noqa: BLE001 — thiếu lịch sử không làm mất câu trả lời
+            lich_su = []
     prompt, da_che = p["prompt"], 0
+    if tim_web:
+        prompt = prompt.rstrip() + "\n\n" + HUONG_DAN_TIM_WEB
     if cfg["che_dinh_danh"]:
         prompt, da_che = che_dinh_danh(prompt)
+        lich_su_che = []
+        for vai, nd in lich_su:
+            nd, n = che_dinh_danh(nd)
+            da_che += n
+            lich_su_che.append((vai, nd))
+        lich_su = lich_su_che
     yield {"type": "meta", "sources": p.get("evidence") or [], "loc": loc}
+    ten = ten_hien_thi(cfg["khac_model"])
     yield {"type": "status",
-           "label": f"{ten_hien_thi(cfg['khac_model'])} đang đọc và trả lời…"}
+           "label": (f"{ten} đang tìm trên web và trả lời…" if tim_web
+                     else f"{ten} đang đọc và trả lời…")}
 
     stats: dict = {}
     parts = []
     t0 = time.time()
     dong = _m.goi_dung_model(prompt, p["system"], cfg["khac_model"],
                              max_tokens=cfg["max_tokens"], effort=cfg["khac_effort"],
-                             temperature=p["temperature"], stats=stats)
+                             temperature=p["temperature"], stats=stats,
+                             lich_su=lich_su, tim_web=tim_web)
     try:
         for piece in dong:
             if cancel is not None and cancel.is_set():
@@ -768,8 +1019,13 @@ def cau_tra_loi_khac(cfg: dict, tn: dict, user: dict, lam_lai: bool = False,
                               "token cho phần suy nghĩ. Quản trị tăng "
                               "'Trần token mỗi lượt' trong Cài đặt AI.")
     yield {"type": "status", "label": "Đang kiểm chứng trích dẫn…"}
-    text, gs = rag.hoan_thien_cau_tra_loi(text, p, "internal")
-    nguon = rag.relevant_sources(text, p.get("evidence") or [])
+    web = stats.get("web") if tim_web else None
+    text, nguon_web = gan_nguon_web(text, web, len(p.get("chunks") or []))
+    # Bộ kiểm chứng trích dẫn chỉ coi [Nguồn n] là hợp lệ khi n có trong danh
+    # sách đoạn — nối các nguồn web vào sau nguồn trong kho.
+    p_web = dict(p, chunks=list(p.get("chunks") or []) + [_doan_web(e) for e in nguon_web])
+    text, gs = rag.hoan_thien_cau_tra_loi(text, p_web, "internal")
+    nguon = rag.relevant_sources(text, (p.get("evidence") or []) + nguon_web)
     kq = {"trang_thai": "xong", "text": text, "sources": nguon,
           "grounding_status": gs, "at": _bay_gio(), "ms": ms,
           "model": stats.get("model") or cfg["khac_model"],
@@ -777,12 +1033,22 @@ def cau_tra_loi_khac(cfg: dict, tn: dict, user: dict, lam_lai: bool = False,
           "cost_usd": stats.get("cost_usd"),
           "prompt_tokens": stats.get("prompt_tokens"),
           "gen_tokens": stats.get("gen_tokens"),
-          "loc": loc, "da_che": da_che}
+          "loc": loc, "da_che": da_che,
+          "tim_web": tim_web, "nguon_web": len(nguon_web),
+          "truy_van": list((web or {}).get("truy_van") or [])[:10],
+          "so_lan_tim": (web or {}).get("so_lan_tim", 0),
+          "nho_lich_su": len(lich_su) // 2}
+    if (web or {}).get("goi_y_html"):
+        # Ô "Gợi ý tìm kiếm" của Google — điều khoản Grounding with Google Search
+        # yêu cầu hiển thị; giao diện vẽ trong iframe sandbox.
+        kq["goi_y_html"] = web["goi_y_html"]
     luu_ket_qua(message_id, "ai_khac", kq)
     _ghi_nhat_ky(user.get("id"), "ai_khac", message_id,
                  {"ok": True, "model": kq["model"], "ms": ms,
                   "cost_usd": kq["cost_usd"], "grounding_status": gs,
-                  "da_che": da_che, "nguon_bo": (loc or {}).get("tong", 0)})
+                  "da_che": da_che, "nguon_bo": (loc or {}).get("tong", 0),
+                  "tim_web": tim_web, "so_lan_tim": kq["so_lan_tim"],
+                  "nho_lich_su": kq["nho_lich_su"]})
     yield {"type": "done", "ket_qua": kq}
 
 
@@ -795,7 +1061,7 @@ def kiem_truoc_cau_tra_loi_khac(message_id: int, user: dict, lam_lai: bool = Fal
     if not _m.co_khoa_api(cfg["khac_model"]):
         raise LoiAiNgoai(503, "Máy chủ chưa có khoá API cho "
                               f"{ten_hien_thi(cfg['khac_model'])} — quản trị cần "
-                              "điền OPENAI_API_KEY vào .env.")
+                              f"điền {_ten_khoa(cfg['khac_model'])} vào .env.")
     tn = doc_tin_nhan(message_id, user)
     da_co = tn["ai_khac"] and tn["ai_khac"].get("trang_thai") == "xong"
     if lam_lai or not da_co:

@@ -995,6 +995,7 @@ def ai_ngoai_cau_hinh(user=Depends(current_user)):
         out["quan_tri"] = {
             "co_khoa_openai": bool(models.COMPAT_API_KEY),
             "co_khoa_claude": bool(models.ANTHROPIC_API_KEY),
+            "co_khoa_gemini": bool(models.GEMINI_API_KEY),
             "dia_chi_api": models.COMPAT_BASE_URL,
             "su_dung_thang": ai_ngoai.su_dung_thang(),
             "tran_luot_thang": cfg["tran_luot_thang"],

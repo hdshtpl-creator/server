@@ -347,14 +347,29 @@ DEFAULTS = {
     # Soát đầu ra: tat | nut (người dùng bấm "ChatGPT soát") | tu_dong (soát
     # ngay sau mỗi câu trả lời, vẫn có nút soát lại).
     "ai_soat_che_do": "tat",
-    "ai_soat_model": "api:gpt-5-mini",
+    # Tên model: api:<tên> = OpenAI (ChatGPT) · gemini:<tên> = Google Gemini ·
+    # claude:<tên> = Anthropic. 13/10/2026 đổi mặc định sang dòng hiện hành
+    # (gpt-5/gpt-5-mini đã bị thay); chỉ có tác dụng khi quản trị chưa tự đặt.
+    "ai_soat_model": "api:gpt-6.1-sol",
     # Độ sâu suy nghĩ khi soát: low | medium | high. Soát là việc đọc-đối
     # chiếu, 'low' đủ và rẻ.
     "ai_soat_effort": "low",
     # Nút "Xem câu trả lời khác" dưới mỗi câu trả lời.
     "ai_khac_bat": "false",
-    "ai_khac_model": "api:gpt-5",
+    "ai_khac_model": "api:gpt-6.1-sol",
     "ai_khac_effort": "medium",
+    # TÌM WEB THỜI GIAN THỰC cho "Xem câu trả lời khác" (13/10/2026): model ngoài
+    # được tra Internet để bổ sung văn bản mới ban hành, số liệu, tin tức mà kho
+    # chưa có — nguồn web hiện thành [Nguồn n] bấm mở được. Chỉ ChatGPT (gọi
+    # đúng máy chủ OpenAI) và Gemini làm được; model khác bỏ qua. Câu hỏi đã che
+    # định danh mới được đem đi tìm. Mỗi lượt tìm tính phí riêng (~1–2,5 cent).
+    "ai_khac_tim_web": "true",
+    # NHỚ LỊCH SỬ khung chat: lượt sau gửi kèm các câu hỏi trước + câu trả lời
+    # trước của CHÍNH model ngoài trong hội thoại đó. Câu trả lời của Qwen chỉ
+    # được gửi kèm khi nguồn nó trích nằm trong phạm vi cloud_scope.
+    "ai_khac_nho_lich_su": "true",
+    # Số lượt hỏi–đáp gần nhất được nhớ (mỗi lượt cắt ~3.000 ký tự).
+    "ai_khac_so_luot_nho": "6",
     # CHE DỮ LIỆU ĐỊNH DANH trước khi gửi: số CCCD/CMND, điện thoại, email,
     # mã số thuế và TÊN KHÁCH HÀNG có trong kho được thay bằng nhãn
     # [Số định danh], [Khách hàng]… Tắt chỉ khi đã chọn cloud_scope
@@ -545,8 +560,10 @@ _GIA_TRI_DONG = {
     "ai_soat_effort": {"minimal", "low", "medium", "high"},
     "ai_khac_effort": {"minimal", "low", "medium", "high"},
     "cloud_scope": {"law_only", "plus_attachments", "all_but_finance"},
+    "ai_khac_tim_web": {"true", "false"},
+    "ai_khac_nho_lich_su": {"true", "false"},
 }
-_KHOA_SO_KHONG_AM = {"ai_ngoai_tran_luot_thang", "ai_ngoai_max_tokens"}
+_KHOA_SO_KHONG_AM = {"ai_ngoai_tran_luot_thang", "ai_ngoai_max_tokens", "ai_khac_so_luot_nho"}
 _KHOA_MODEL = {"ai_soat_model", "ai_khac_model"}
 
 
@@ -562,8 +579,8 @@ def kiem_gia_tri(key, value):
         except ValueError:
             raise ValueError(f"{key} phải là số nguyên ≥ 0") from None
     if key in _KHOA_MODEL and (not v or len(v) > 120 or any(c.isspace() for c in v)):
-        raise ValueError(f"{key}: tên model không hợp lệ (vd api:gpt-5-mini, "
-                         "claude:claude-sonnet-5)")
+        raise ValueError(f"{key}: tên model không hợp lệ (vd api:gpt-6.1-sol, "
+                         "gemini:gemini-3.8-flash, claude:claude-sonnet-5)")
 
 
 def set(key, value, user_id=None):  # noqa: A001 - đặt tên theo nghiệp vụ

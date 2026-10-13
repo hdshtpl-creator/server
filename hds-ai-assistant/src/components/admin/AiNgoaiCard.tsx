@@ -4,7 +4,8 @@ import type { AiNgoaiCauHinh } from '../../types';
 import { Bot, Save, Loader2, CircleCheck, CircleAlert, Info, RefreshCw } from 'lucide-react';
 
 /**
- * ChatGPT làm việc SONG SONG với Qwen — soát đầu ra + "Xem câu trả lời khác".
+ * ChatGPT / Gemini làm việc SONG SONG với Qwen — soát đầu ra + "Xem câu trả lời
+ * khác" (có tìm web thời gian thực + nhớ lịch sử khung chat, 13/10/2026).
  * Khoá cài đặt: ai_* (hds-ai/app/settings.py). Khoá API KHÔNG sửa ở đây: nó
  * nằm trong .env của máy chủ, quản trị IT điền tay — thẻ này chỉ báo có/chưa.
  */
@@ -21,11 +22,13 @@ type Field = {
 };
 
 const GOI_Y_MODEL = [
-  'api:gpt-5-mini',
-  'api:gpt-5',
-  'api:gpt-5-nano',
-  'claude:claude-haiku-4-5',
+  'api:gpt-6.1-sol',
+  'api:gpt-6-astra',
+  'api:gpt-6-luna',
+  'gemini:gemini-3.8-flash',
+  'gemini:gemini-3.5-flash-lite',
   'claude:claude-sonnet-5',
+  'claude:claude-haiku-4-5',
 ];
 
 const NHOM: Array<{ tieu_de: string; fields: Field[] }> = [
@@ -46,7 +49,7 @@ const NHOM: Array<{ tieu_de: string; fields: Field[] }> = [
       {
         key: 'ai_soat_model',
         label: 'Model soát',
-        hint: 'api:<tên> = OpenAI (ChatGPT); claude:<tên> = Anthropic. Soát là việc đọc–đối chiếu: gpt-5-mini đủ và rẻ (khoảng 0,5–1 cent mỗi lượt).',
+        hint: 'api:<tên> = OpenAI (ChatGPT) · gemini:<tên> = Google Gemini · claude:<tên> = Anthropic. Soát là việc đọc–đối chiếu: gpt-6.1-sol hoặc gemini-3.8-flash đủ (khoảng 1–4 cent mỗi lượt).',
         kind: 'text',
       },
       {
@@ -88,8 +91,37 @@ const NHOM: Array<{ tieu_de: string; fields: Field[] }> = [
       {
         key: 'ai_khac_model',
         label: 'Model trả lời khác',
-        hint: 'Nên dùng model mạnh (api:gpt-5) — đây là ý kiến thứ hai. Mỗi lượt gửi khoảng 20–25 nghìn token tài liệu (theo "trần ký tự tài liệu" của nhánh API ngoài).',
+        hint: 'ChatGPT: api:gpt-6.1-sol (cân bằng) hoặc api:gpt-6-astra (mạnh nhất, đắt gấp 5). Gemini: gemini:gemini-3.8-flash. Mỗi lượt gửi khoảng 20–25 nghìn token tài liệu. Gemini phải dùng khoá gói TRẢ PHÍ — gói miễn phí cho Google dùng dữ liệu gửi lên để cải tiến sản phẩm.',
         kind: 'text',
+      },
+      {
+        key: 'ai_khac_tim_web',
+        label: 'Cho model tìm thông tin mới trên web',
+        hint: 'Model tra Internet (ưu tiên vbpl.vn, chinhphu.vn, các cổng .gov.vn) để bổ sung văn bản mới ban hành, mức/ngưỡng đang áp dụng, tin tức mà kho chưa có; mỗi link web hiện thành [Nguồn n] bấm mở được. Chỉ ChatGPT (gọi đúng máy chủ OpenAI) và Gemini làm được. Câu hỏi đã che định danh mới được đem đi tìm. Phí thêm mỗi lượt tìm: OpenAI 1–2,5 cent, Gemini 1,4 cent (5.000 lượt đầu mỗi tháng miễn phí).',
+        kind: 'select',
+        options: [
+          { value: 'true', label: 'Bật (khuyến nghị)' },
+          { value: 'false', label: 'Tắt — chỉ dựa trên tài liệu trong kho' },
+        ],
+      },
+      {
+        key: 'ai_khac_nho_lich_su',
+        label: 'Nhớ lịch sử khung chat',
+        hint: 'Lượt sau gửi kèm các câu hỏi trước + câu trả lời trước của chính model ngoài trong hội thoại đó, để hỏi nối tiếp ("còn trường hợp…", "vậy thuế suất bao nhiêu") vẫn hiểu. Câu trả lời của bot nội bộ chỉ được gửi kèm khi nguồn nó trích nằm trong phạm vi dữ liệu bên dưới.',
+        kind: 'select',
+        options: [
+          { value: 'true', label: 'Bật (khuyến nghị)' },
+          { value: 'false', label: 'Tắt — mỗi lượt hỏi độc lập' },
+        ],
+      },
+      {
+        key: 'ai_khac_so_luot_nho',
+        label: 'Số lượt hỏi–đáp gần nhất được nhớ',
+        hint: 'Mỗi lượt cắt khoảng 3.000 ký tự. Nhớ nhiều thì hiểu ngữ cảnh tốt hơn nhưng tốn token hơn. Tối đa 20.',
+        kind: 'number',
+        min: 0,
+        max: 20,
+        step: 1,
       },
       {
         key: 'ai_khac_effort',
@@ -140,7 +172,7 @@ const NHOM: Array<{ tieu_de: string; fields: Field[] }> = [
       {
         key: 'ai_ngoai_max_tokens',
         label: 'Trần token model ngoài sinh ra mỗi lượt',
-        hint: 'Với gpt-5 trần này tính cả phần suy nghĩ — đặt thấp quá thì câu trả lời rỗng. Mặc định 12000.',
+        hint: 'Với model suy luận (GPT-5/6, Gemini 3) trần này tính cả phần suy nghĩ — đặt thấp quá thì câu trả lời rỗng. Mặc định 12000.',
         kind: 'number',
         min: 1024,
         max: 64000,
@@ -185,6 +217,14 @@ export const AiNgoaiCard: React.FC<Props> = ({ values, dirty, patch, save, savin
   const canKhoaClaude = [values.ai_soat_model, values.ai_khac_model].some((m) =>
     (m || '').startsWith('claude:')
   );
+  const canKhoaGemini = [values.ai_soat_model, values.ai_khac_model].some((m) =>
+    (m || '').startsWith('gemini:')
+  );
+  const thieuKhoa =
+    !!qt &&
+    ((canKhoaOpenAI && !qt.co_khoa_openai) ||
+      (canKhoaClaude && !qt.co_khoa_claude) ||
+      (canKhoaGemini && !qt.co_khoa_gemini));
 
   const luu = async () => {
     await save(AI_NGOAI_KEYS);
@@ -198,7 +238,7 @@ export const AiNgoaiCard: React.FC<Props> = ({ values, dirty, patch, save, savin
         <div className="flex items-center gap-2">
           <Bot className="w-4 h-4 text-hds-navy dark:text-blue-400" />
           <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
-            ChatGPT làm việc song song (soát đầu ra · câu trả lời khác)
+            ChatGPT / Gemini làm việc song song (soát đầu ra · câu trả lời khác có tìm web)
           </h3>
         </div>
         <button
@@ -214,7 +254,7 @@ export const AiNgoaiCard: React.FC<Props> = ({ values, dirty, patch, save, savin
         <Info className="w-3.5 h-3.5 shrink-0 mt-px text-hds-blue" />
         <span className="leading-relaxed">
           Câu trả lời chính vẫn do model trên máy chủ viết. Hai tính năng này gửi dữ liệu{' '}
-          <strong>ra khỏi máy chủ HDS</strong> tới nhà cung cấp (OpenAI/Anthropic) và tính tiền theo
+          <strong>ra khỏi máy chủ HDS</strong> tới nhà cung cấp (OpenAI/Google/Anthropic) và tính tiền theo
           lượt — mặc định tắt, chỉ dành cho nhân viên nội bộ, mọi lượt gọi được ghi vào Nhật ký.
         </span>
       </div>
@@ -224,12 +264,12 @@ export const AiNgoaiCard: React.FC<Props> = ({ values, dirty, patch, save, savin
         <div className="grid sm:grid-cols-2 gap-2 text-[11px]">
           <div
             className={`flex items-start gap-2 rounded-lg border p-2.5 ${
-              (canKhoaOpenAI && !qt.co_khoa_openai) || (canKhoaClaude && !qt.co_khoa_claude)
+              thieuKhoa
                 ? 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200'
                 : 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200'
             }`}
           >
-            {(canKhoaOpenAI && !qt.co_khoa_openai) || (canKhoaClaude && !qt.co_khoa_claude) ? (
+            {thieuKhoa ? (
               <CircleAlert className="w-4 h-4 shrink-0" />
             ) : (
               <CircleCheck className="w-4 h-4 shrink-0" />
@@ -237,6 +277,7 @@ export const AiNgoaiCard: React.FC<Props> = ({ values, dirty, patch, save, savin
             <div className="space-y-0.5 min-w-0">
               <div>
                 Khoá OpenAI: <strong>{qt.co_khoa_openai ? 'đã có' : 'chưa có'}</strong> · Khoá
+                Gemini: <strong>{qt.co_khoa_gemini ? 'đã có' : 'chưa có'}</strong> · Khoá
                 Anthropic: <strong>{qt.co_khoa_claude ? 'đã có' : 'chưa có'}</strong>
               </div>
               <div className="truncate">Địa chỉ API: {qt.dia_chi_api}</div>
@@ -245,6 +286,13 @@ export const AiNgoaiCard: React.FC<Props> = ({ values, dirty, patch, save, savin
                   IT điền <code className="font-mono">OPENAI_API_KEY=…</code> vào{' '}
                   <code className="font-mono">hds-ai/.env</code> rồi khởi động lại backend — nút
                   trong khung chat chỉ hiện khi có khoá.
+                </div>
+              )}
+              {canKhoaGemini && !qt.co_khoa_gemini && (
+                <div>
+                  IT điền <code className="font-mono">GEMINI_API_KEY=…</code> (khoá gói trả phí,
+                  tạo ở Google AI Studio) vào <code className="font-mono">hds-ai/.env</code> rồi
+                  khởi động lại backend.
                 </div>
               )}
             </div>
@@ -343,7 +391,7 @@ export const AiNgoaiCard: React.FC<Props> = ({ values, dirty, patch, save, savin
           ) : (
             <Save className="w-4 h-4" />
           )}
-          <span>Lưu cài đặt ChatGPT</span>
+          <span>Lưu cài đặt ChatGPT / Gemini</span>
         </button>
       </div>
     </section>

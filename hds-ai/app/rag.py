@@ -3345,6 +3345,25 @@ def _la_cau_moi(body: str) -> bool:
     return len(body) <= 320 and bool(_RE_CAU_MOI.search(_fold(body)))
 
 
+def _la_cau_dan(body: str) -> bool:
+    """Câu DẪN vào danh sách ("…mức lương tối thiểu vùng được quy định như sau:")
+    — khẳng định nằm ở các dòng liệt kê bên dưới, câu dẫn không cần nguồn riêng.
+    13/10/2026: câu dẫn chữ chung chung khớp 80% với sáu nguồn, bộ tự gắn chọn
+    trúng một BẢN ÁN ("[Nguồn 27]") dù câu đã nêu đích danh Nghị định 293/2025."""
+    return len(body) <= 250 and body.rstrip().endswith(":")
+
+
+# Trừ điểm khi tự gắn nguồn: hai đoạn chữ gần như nhau (Điều 4 Nghị định
+# 293/2025 và Điều 4 bản hợp nhất Nghị định 74/2024 đã bị thay) thì gắn vào văn
+# bản còn hiệu lực; bản án/án lệ là minh hoạ, không phải căn cứ.
+_AUTOCITE_PHAT = {"het_hieu_luc": 0.05, "ban_an": 0.05, "an_le": 0.05}
+
+
+def _so_hieu_cua_doan(c) -> set:
+    so = van_ban.chuan_hoa_so_hieu(c.get("so_hieu") or "")
+    return {x for x in (so, so_hieu_quan_he(c)) if x}
+
+
 def autocite(text, chunks, min_coverage=AUTOCITE_MIN_COVERAGE):
     """Tự gắn [Nguồn n] cho những đoạn CHỨNG MINH ĐƯỢC là lấy từ tài liệu.
 
@@ -3360,6 +3379,9 @@ def autocite(text, chunks, min_coverage=AUTOCITE_MIN_COVERAGE):
     if not chunks or not (text or "").strip():
         return text, 0
     chunk_tokens = [_content_tokens(c.get("content") or "") for c in chunks]
+    so_hieu_doan = [_so_hieu_cua_doan(c) for c in chunks]
+    phat = [max(_AUTOCITE_PHAT.get(c.get("trang_thai_hieu_luc") or "", 0.0),
+                _AUTOCITE_PHAT.get(c.get("doc_type") or "", 0.0)) for c in chunks]
 
     blocks = re.split(r"(\n\s*\n)", text)
     attached = 0
@@ -3370,16 +3392,22 @@ def autocite(text, chunks, min_coverage=AUTOCITE_MIN_COVERAGE):
         body_lines = [line for line in block.splitlines()
                       if not line.lstrip().startswith(("#", ">"))]
         body = re.sub(r"[`*_>#-]", "", " ".join(body_lines)).strip()
-        if len(body) < 35 or "[CẦN BỔ SUNG" in body.upper() or _la_cau_moi(body):
+        if (len(body) < 35 or "[CẦN BỔ SUNG" in body.upper() or _la_cau_moi(body)
+                or _la_cau_dan(body)):
             continue
         btokens = _content_tokens(body)
         if len(btokens) < 4:
             continue
-        best_n, best_cov = 0, 0.0
-        for n, ctokens in enumerate(chunk_tokens, 1):
-            coverage = len(btokens & ctokens) / len(btokens)
-            if coverage > best_cov:
-                best_n, best_cov = n, coverage
+        # Đoạn nêu đích danh số hiệu văn bản → chỉ gắn vào đoạn của chính văn bản
+        # đó (nếu nguồn có); không thì mọi nguồn đều là ứng viên như cũ. Đọc số
+        # hiệu trên đoạn GỐC: `body` đã bỏ dấu "-" (NĐ-CP thành NĐCP).
+        nhac = {van_ban.chuan_hoa_so_hieu(x) for x in _so_hieu_van_ban(block)}
+        ung_vien = [i for i in range(len(chunks)) if nhac & so_hieu_doan[i]] if nhac else []
+        best_n, best_cov, best_diem = 0, 0.0, -1.0
+        for i in (ung_vien or range(len(chunks))):
+            coverage = len(btokens & chunk_tokens[i]) / len(btokens)
+            if coverage >= min_coverage and coverage - phat[i] > best_diem:
+                best_n, best_cov, best_diem = i + 1, coverage, coverage - phat[i]
         if best_n and best_cov >= min_coverage:
             blocks[index] = block.rstrip() + f" [Nguồn {best_n}]"
             attached += 1
@@ -3689,7 +3717,8 @@ def validate_grounding(text, chunks, answer_mode="grounded", strict=True,
             # Tiêu đề, câu nối rất ngắn và placeholder không phải một khẳng
             # định cần nguồn. Các khối nội dung đáng kể thì bắt buộc phải có.
             if (len(body) >= 35 and "[CẦN BỔ SUNG" not in body.upper()
-                    and not _CITATION_RE.search(block) and not _la_cau_moi(body)):
+                    and not _CITATION_RE.search(block) and not _la_cau_moi(body)
+                    and not _la_cau_dan(body)):
                 unsupported.append(index)
         if unsupported and strict and answer_mode == "grounded":
             # BỎ HẲN khối không căn cứ thay vì chèn "[Đã ẩn đoạn…]" vào từng
@@ -4718,6 +4747,11 @@ def prepare(question, channel, client_id=None, conversation_id=None,
          method, ai_ngoai_loc) = _an.loc_du_lieu(
             chunks, temp_chunks, company, history, summary, phat_hien_tu_dong,
             method, ai_ngoai.get("scope"))
+        if ai_ngoai.get("lich_su_rieng"):
+            # Model ngoài nhận lịch sử thành các LƯỢT riêng (ai_ngoai.ghep_lich_su:
+            # câu hỏi trước + câu trả lời trước của chính nó) — không chép lại
+            # vào prompt lần nữa.
+            history, summary = [], ""
         timings["ai_ngoai_loc"] = ai_ngoai_loc
     # Chụp lại "lượt này đụng tới dữ liệu gì" NGAY BÂY GIỜ: mấy dòng dưới sẽ
     # gộp file đính kèm và đoạn người dùng dán vào chung `chunks`, sau đó

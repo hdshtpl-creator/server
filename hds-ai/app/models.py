@@ -51,8 +51,8 @@ BENCH_TOKENS = 64
 #                              DeepSeek, OpenRouter, vLLM tự dựng…)
 # Tên trần bắt đầu bằng 'claude-' cũng được hiểu là Anthropic, để admin gõ
 # thẳng 'claude-sonnet-5' vào ô cài đặt mà không cần nhớ tiền tố.
-P_LOCAL, P_CLAUDE, P_COMPAT = "local", "claude", "compat"
-PREFIX_CLAUDE, PREFIX_COMPAT = "claude:", "api:"
+P_LOCAL, P_CLAUDE, P_COMPAT, P_GEMINI = "local", "claude", "compat", "gemini"
+PREFIX_CLAUDE, PREFIX_COMPAT, PREFIX_GEMINI = "claude:", "api:", "gemini:"
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # Danh sách hiện trong bộ chọn model. Không phải mọi model Anthropic — chỉ mấy
@@ -70,6 +70,15 @@ COMPAT_API_KEY = os.getenv("COMPAT_API_KEY", "") or os.getenv("OPENAI_API_KEY", 
 COMPAT_MODELS = [m.strip() for m in os.getenv(
     "COMPAT_MODELS", os.getenv("OPENAI_MODEL", "")).split(",") if m.strip()]
 
+# Gemini (Google) — 13/10/2026, cho "Xem câu trả lời khác" có tìm Google. Gọi
+# REST gốc (models/{model}:streamGenerateContent) chứ không qua lớp tương thích
+# OpenAI của Google: chỉ đường gốc trả được groundingMetadata (nguồn web).
+# Gói MIỄN PHÍ của Gemini dùng dữ liệu gửi lên để cải tiến sản phẩm — công ty
+# luật phải dùng khoá của gói TRẢ PHÍ (ghi rõ ở thẻ cài đặt).
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+GEMINI_BASE_URL = os.getenv(
+    "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+
 # Giá USD trên 1 TRIỆU token (vào, ra) — chỉ để ƯỚC chi phí mỗi lượt rồi ghi
 # vào stats/log. Giá nhà cung cấp đổi thì sửa ở đây; sai số ở đây không ảnh
 # hưởng câu trả lời, chỉ ảnh hưởng con số báo cáo.
@@ -85,6 +94,11 @@ CLAUDE_PRICES = {
 # model mới thường xuyên: con số thật xem ở trang giá của họ rồi sửa tại đây.
 # Tên model khớp theo TIỀN TỐ dài nhất: 'gpt-5-mini-2025-08-07' → 'gpt-5-mini'.
 OPENAI_PRICES = {
+    # Dòng GPT-6 (bảng giá OpenAI 13/10/2026, ngữ cảnh ≤ 272K token).
+    "gpt-6-astra": (10.0, 50.0),
+    "gpt-6.1-sol": (2.0, 10.0),
+    "gpt-6-luna": (0.10, 0.50),
+    "gpt-5.5": (1.25, 10.0),
     "gpt-5": (1.25, 10.0),
     "gpt-5-mini": (0.25, 2.0),
     "gpt-5-nano": (0.05, 0.40),
@@ -95,6 +109,19 @@ OPENAI_PRICES = {
     "o3": (2.0, 8.0),
     "o4-mini": (1.10, 4.40),
 }
+# Gemini — giá gói trả phí (13/10/2026). Hai dòng Flash có giá ưu đãi tới hết
+# 31/12/2026, từ 01/01/2027 gấp đôi: sửa bảng này khi tới hạn.
+GEMINI_PRICES = {
+    "gemini-3.8-flash": (0.75, 3.75),
+    "gemini-3.6-flash": (0.75, 3.75),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+}
+# Phí MỖI LƯỢT TÌM WEB (USD), ngoài tiền token. OpenAI: model suy luận 10 USD /
+# 1.000 lượt (+ token nội dung tìm được tính theo giá model), model thường 25 USD
+# / 1.000 lượt. Gemini: 14 USD / 1.000 truy vấn sau 5.000 truy vấn miễn phí mỗi
+# tháng — ước theo giá đầy đủ cho chắc tay.
+GIA_TIM_WEB = {"openai_suy_luan": 0.010, "openai": 0.025, "gemini": 0.014}
 
 # Cửa sổ ngữ cảnh (token) của model cloud — dùng để quy ra trần ký tự cho
 # phần tài liệu, y như num_ctx làm với Ollama. Không có tên trong bảng thì
@@ -117,6 +144,8 @@ def provider_of(name: str) -> str:
         return P_CLAUDE
     if n.startswith(PREFIX_COMPAT):
         return P_COMPAT
+    if n.startswith(PREFIX_GEMINI) or n.startswith("gemini-"):
+        return P_GEMINI
     return P_LOCAL
 
 
@@ -127,7 +156,7 @@ def is_cloud(name: str) -> bool:
 def bare_model(name: str) -> str:
     """Bỏ tiền tố nhà cung cấp → tên model để gửi lên API."""
     n = (name or "").strip()
-    for pre in (PREFIX_CLAUDE, PREFIX_COMPAT):
+    for pre in (PREFIX_CLAUDE, PREFIX_COMPAT, PREFIX_GEMINI):
         if n.lower().startswith(pre):
             return n[len(pre):].strip()
     return n
@@ -578,9 +607,10 @@ def bang_gia(model: str):
     ten = bare_model(model or "").lower()
     if ten in CLAUDE_PRICES:
         return CLAUDE_PRICES[ten]
-    khop = [k for k in OPENAI_PRICES if ten == k or ten.startswith(k + "-")
+    bang = GEMINI_PRICES if provider_of(model or "") == P_GEMINI else OPENAI_PRICES
+    khop = [k for k in bang if ten == k or ten.startswith(k + "-")
             or ten.startswith(k + ".")]
-    return OPENAI_PRICES[max(khop, key=len)] if khop else None
+    return bang[max(khop, key=len)] if khop else None
 
 
 def _usd(model: str, tok_in: int, tok_out: int, cached_in: int = 0):
@@ -608,7 +638,8 @@ def _anthropic_client():
 
 def claude_stream(prompt: str, system: str = "", temperature: float = 0.2,
                   model: str | None = None, stats: dict | None = None,
-                  max_tokens: int | None = None, effort: str | None = None):
+                  max_tokens: int | None = None, effort: str | None = None,
+                  lich_su=None):
     """Sinh câu trả lời THEO DÒNG qua API Anthropic.
 
     `temperature` bị BỎ QUA (xem ghi chú đầu mục). Độ sâu suy nghĩ chỉnh bằng
@@ -625,7 +656,8 @@ def claude_stream(prompt: str, system: str = "", temperature: float = 0.2,
     kw = {
         "model": name,
         "max_tokens": max(1024, int(max_tokens or cfg["max_tokens"] or 8000)),
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": ([{"role": vai, "content": nd} for vai, nd in _lich_su_chuan(lich_su)]
+                     + [{"role": "user", "content": prompt}]),
     }
     if system:
         kw["system"] = [{"type": "text", "text": system,
@@ -666,7 +698,7 @@ def claude_stream(prompt: str, system: str = "", temperature: float = 0.2,
 # Model SUY LUẬN của OpenAI (gpt-5*, o1/o3/o4…) KHÔNG nhận `max_tokens` (phải
 # là `max_completion_tokens`, và trần đó tính cả token suy nghĩ) và chỉ nhận
 # temperature mặc định — gửi khuôn cũ là HTTP 400 ngay lượt đầu.
-_RE_OPENAI_SUY_LUAN = re.compile(r"^(gpt-5|o\d)", re.IGNORECASE)
+_RE_OPENAI_SUY_LUAN = re.compile(r"^(gpt-[5-9]|o\d)", re.IGNORECASE)
 
 # Tham số TUỲ CHỌN mà nhà cung cấp có thể không hiểu. Bị từ chối (HTTP 400 nêu
 # đúng tên tham số) thì bỏ đi rồi gửi lại — nhờ vậy một adapter chạy được cho
@@ -724,10 +756,19 @@ def _sua_body_theo_loi(body: dict, text: str):
     return b if b != body else None
 
 
+def _lich_su_chuan(lich_su) -> list:
+    """[(vai, nội dung)] → [(user|assistant, nội dung)] — bỏ lượt rỗng."""
+    out = []
+    for vai, nd in lich_su or []:
+        if (nd or "").strip():
+            out.append(("assistant" if vai in ("assistant", "model") else "user", nd))
+    return out
+
+
 def compat_stream(prompt: str, system: str = "", temperature: float = 0.2,
                   model: str | None = None, stats: dict | None = None,
                   max_tokens: int | None = None, effort: str | None = None,
-                  json_mode: bool = False):
+                  json_mode: bool = False, lich_su=None):
     """Sinh câu trả lời THEO DÒNG qua endpoint TƯƠNG THÍCH OpenAI.
 
     Một hàm cho cả nhóm: OpenAI (ChatGPT), Qwen trên DashScope, DeepSeek,
@@ -746,6 +787,7 @@ def compat_stream(prompt: str, system: str = "", temperature: float = 0.2,
     cfg = cloud_config()
     tran = max(1024, int(max_tokens or cfg["max_tokens"] or 8000))
     msgs = ([{"role": "system", "content": system}] if system else [])
+    msgs += [{"role": vai, "content": nd} for vai, nd in _lich_su_chuan(lich_su)]
     msgs.append({"role": "user", "content": prompt})
     body = {"model": name, "messages": msgs, "stream": True,
             # Không có cờ này thì luồng SSE của OpenAI KHÔNG gửi số token —
@@ -829,6 +871,326 @@ def compat_stream(prompt: str, system: str = "", temperature: float = 0.2,
         })
 
 
+# ================= TÌM WEB THỜI GIAN THỰC (13/10/2026) =================
+# "Xem câu trả lời khác" được phép tra Internet: ChatGPT qua Responses API với
+# công cụ `web_search`, Gemini qua Google Search grounding. Hai bên trả nguồn
+# web theo hai kiểu khác nhau; cả hai được gom về CÙNG một khuôn trong stats:
+#   stats["web"] = {"nguon": [{"url", "title"}],          — mọi trang được dẫn
+#                   "trich": [{"url", "title"}],          — (OpenAI) chú thích url_citation
+#                   "ho_tro": [{"text", "chunks": [i]}],  — (Gemini) đoạn chữ ↔ nguồn
+#                   "truy_van": [...], "so_lan_tim": n,
+#                   "goi_y_html": "…"}                    — (Gemini) ô "Gợi ý tìm kiếm"
+# rồi app/ai_ngoai.gan_nguon_web đổi chúng thành [Nguồn n] như nguồn trong kho.
+
+def ho_tro_tim_web(model: str) -> bool:
+    """Model này có tìm web được không: Gemini, hoặc model OpenAI gọi đúng máy
+    chủ OpenAI (DashScope/DeepSeek… nói giao thức chat completions, không có
+    công cụ web_search của Responses API)."""
+    prov = provider_of(model or "")
+    if prov == P_GEMINI:
+        return True
+    return prov == P_COMPAT and "api.openai.com" in COMPAT_BASE_URL
+
+
+# Tham số tuỳ chọn của Responses API — bị từ chối (HTTP 400 nêu tên) thì bỏ rồi
+# gửi lại, cùng cách _sua_body_theo_loi làm với chat completions.
+_THAM_SO_RESPONSES_BO_DUOC = ("reasoning", "temperature", "include", "store")
+
+
+def _sua_body_responses(body: dict, text: str):
+    b = dict(body)
+    param = ""
+    try:
+        err = json.loads(text or "{}").get("error") or {}
+        param = str(err.get("param") or "") if isinstance(err, dict) else ""
+    except (ValueError, AttributeError):
+        pass
+    loi = (text or "").lower()
+    goc = param.split(".")[0].split("[")[0]
+    if goc in _THAM_SO_RESPONSES_BO_DUOC and goc in b:
+        b.pop(goc)
+    elif goc == "tools" or "web_search" in loi or "user_location" in loi:
+        # Model / tài khoản chưa có bản `web_search` mới → bản preview cũ (không
+        # nhận user_location kiểu mới thì bỏ luôn).
+        tools = b.get("tools") or []
+        if tools and tools[0].get("type") == "web_search":
+            b["tools"] = [{"type": "web_search_preview"}]
+            b.pop("include", None)
+        else:
+            return None
+    elif "stream" in loi and "verif" in loi:
+        b["stream"] = False
+    else:
+        for k in _THAM_SO_RESPONSES_BO_DUOC:
+            if k in b and k in loi:
+                b.pop(k)
+    return b if b != body else None
+
+
+def _doc_ket_qua_responses(resp: dict, web: dict) -> str:
+    """Từ đối tượng response cuối (response.completed / phản hồi một cục): gom
+    nguồn web + truy vấn vào `web`, trả toàn văn câu trả lời."""
+    van = []
+    for item in resp.get("output") or []:
+        loai = item.get("type")
+        if loai == "web_search_call":
+            web["so_lan_tim"] = web.get("so_lan_tim", 0) + 1
+            act = item.get("action") or {}
+            for q in ([act.get("query")] if act.get("query") else []) + list(act.get("queries") or []):
+                if q and q not in web["truy_van"]:
+                    web["truy_van"].append(q)
+            for s in act.get("sources") or []:
+                if s.get("url"):
+                    web["nguon"].append({"url": s["url"], "title": s.get("title") or ""})
+        elif loai == "message":
+            for part in item.get("content") or []:
+                if part.get("type") != "output_text":
+                    continue
+                van.append(part.get("text") or "")
+                for a in part.get("annotations") or []:
+                    if a.get("type") == "url_citation" and a.get("url"):
+                        web["trich"].append({"url": a["url"], "title": a.get("title") or ""})
+    return "".join(van)
+
+
+def openai_responses_stream(prompt: str, system: str = "", model: str | None = None,
+                            stats: dict | None = None, max_tokens: int | None = None,
+                            effort: str | None = None, tim_web: bool = True,
+                            lich_su=None, temperature: float = 0.2):
+    """ChatGPT qua Responses API (POST /responses) — công cụ `web_search` để
+    tìm thông tin mới trên Internet. Theo dòng; nguồn web ghi vào stats["web"].
+
+    `store: False`: không để OpenAI lưu hội thoại phía họ — lịch sử đã được
+    gửi kèm từng lượt (lich_su), không cần previous_response_id."""
+    if not COMPAT_API_KEY:
+        raise CloudError("Chưa cấu hình OPENAI_API_KEY")
+    name = bare_model(model or "")
+    if not name:
+        raise CloudError("Chưa chọn model ChatGPT")
+    tran = max(1024, int(max_tokens or cloud_config()["max_tokens"] or 8000))
+    vao = [{"role": vai, "content": nd} for vai, nd in _lich_su_chuan(lich_su)]
+    vao.append({"role": "user", "content": prompt})
+    body = {"model": name, "input": vao, "stream": True,
+            "max_output_tokens": tran, "store": False}
+    if system:
+        body["instructions"] = system
+    if _la_openai_suy_luan(name):
+        if effort:
+            body["reasoning"] = {"effort": "low" if effort == "minimal" and tim_web else effort}
+    else:
+        body["temperature"] = temperature
+    if tim_web:
+        body["tools"] = [{"type": "web_search", "search_context_size": "medium",
+                          "user_location": {"type": "approximate", "country": "VN",
+                                            "timezone": "Asia/Ho_Chi_Minh"}}]
+        body["include"] = ["web_search_call.action.sources"]
+    web = {"nguon": [], "trich": [], "ho_tro": [], "truy_van": [], "so_lan_tim": 0}
+    url = f"{COMPAT_BASE_URL}/responses"
+    headers = {"Authorization": f"Bearer {COMPAT_API_KEY}"}
+    t0 = time.time()
+    r = None
+    for _ in range(5):
+        r = requests.post(url, headers=headers, json=body, timeout=600,
+                          stream=bool(body.get("stream")))
+        if r.status_code != 400:
+            break
+        loi = r.text
+        r.close()
+        sua = _sua_body_responses(body, loi)
+        if sua is None:
+            raise CloudError(f"API từ chối yêu cầu (HTTP 400): {_tom_loi_http(loi)}")
+        body = sua
+    usage = {}
+    try:
+        if r.status_code >= 400:
+            raise CloudError(f"API lỗi HTTP {r.status_code}: {_tom_loi_http(r.text)}")
+        if not body.get("stream"):
+            data = r.json()
+            text = _doc_ket_qua_responses(data, web)
+            if text:
+                yield text
+            usage = data.get("usage") or {}
+        else:
+            da_ra = False
+            for line in r.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                try:
+                    data = json.loads(line[5:].strip())
+                except ValueError:
+                    continue
+                loai = data.get("type") or ""
+                if loai == "response.output_text.delta":
+                    piece = data.get("delta") or ""
+                    if piece:
+                        da_ra = True
+                        yield piece
+                elif loai in ("response.completed", "response.incomplete"):
+                    resp = data.get("response") or {}
+                    toan_van = _doc_ket_qua_responses(resp, web)
+                    if not da_ra and toan_van:
+                        yield toan_van          # máy chủ không gửi delta — vẫn có chữ
+                    usage = resp.get("usage") or {}
+                    if loai == "response.incomplete":
+                        web["chua_xong"] = (resp.get("incomplete_details") or {}).get("reason")
+                elif loai in ("response.failed", "error"):
+                    err = (data.get("response") or {}).get("error") or data.get("error") or data
+                    msg = err.get("message") if isinstance(err, dict) else str(err)
+                    raise CloudError(f"ChatGPT báo lỗi: {str(msg)[:300]}")
+    finally:
+        r.close()
+    if stats is not None:
+        tok_in = usage.get("input_tokens") or 0
+        tok_out = usage.get("output_tokens") or 0
+        cached = (usage.get("input_tokens_details") or {}).get("cached_tokens") or 0
+        gia_tim = GIA_TIM_WEB["openai_suy_luan" if _la_openai_suy_luan(name) else "openai"]
+        tien = _usd(name, tok_in, tok_out, cached)
+        if tien is not None:
+            tien = round(tien + web["so_lan_tim"] * gia_tim, 6)
+        stats.update({
+            "model": PREFIX_COMPAT + name, "provider": P_COMPAT,
+            "prompt_tokens": tok_in, "gen_tokens": tok_out, "cache_read_tokens": cached,
+            "reasoning_tokens": (usage.get("output_tokens_details") or {}).get("reasoning_tokens") or 0,
+            "cost_usd": tien, "web": web,
+            "total_ms": int((time.time() - t0) * 1000),
+        })
+
+
+def _loi_gemini(text: str) -> str:
+    try:
+        err = json.loads(text or "{}")
+        if isinstance(err, list) and err:
+            err = err[0]
+        msg = (err.get("error") or {}).get("message")
+        if msg:
+            return str(msg)[:400]
+    except (ValueError, AttributeError):
+        pass
+    return (text or "").strip()[:400]
+
+
+def _sua_body_gemini(body: dict, text: str):
+    """Bỏ phần cấu hình tuỳ chọn bị từ chối (model cũ không biết thinkingLevel,
+    model không nhận temperature…) rồi gửi lại."""
+    b = json.loads(json.dumps(body))
+    gc = b.get("generationConfig") or {}
+    loi = (text or "").lower()
+    if "thinking" in loi and "thinkingConfig" in gc:
+        gc.pop("thinkingConfig")
+    elif "temperature" in loi and "temperature" in gc:
+        gc.pop("temperature")
+    elif "system" in loi and "systemInstruction" in b:
+        # Model không nhận chỉ dẫn hệ thống riêng → ghép vào đầu lượt hỏi cuối.
+        sys_txt = b.pop("systemInstruction")["parts"][0]["text"]
+        b["contents"][-1]["parts"][0]["text"] = sys_txt + "\n\n" + b["contents"][-1]["parts"][0]["text"]
+    else:
+        return None
+    return b
+
+
+def gemini_stream(prompt: str, system: str = "", model: str | None = None,
+                  stats: dict | None = None, max_tokens: int | None = None,
+                  effort: str | None = None, tim_web: bool = False,
+                  lich_su=None, temperature: float = 0.2, json_mode: bool = False):
+    """Gemini qua REST gốc, theo dòng (streamGenerateContent?alt=sse).
+
+    tim_web: bật công cụ google_search — nguồn web nằm trong groundingMetadata
+    của các gói cuối, gom vào stats["web"]. Lịch sử: Gemini đòi các lượt
+    user/model XEN KẼ — ai_ngoai.ghep_lich_su đã bảo đảm điều đó.
+    Không gửi temperature cho Gemini 3 trở lên: Google khuyến cáo để mặc định
+    1.0, hạ xuống làm model dễ lặp."""
+    if not GEMINI_API_KEY:
+        raise CloudError("Chưa cấu hình GEMINI_API_KEY")
+    name = bare_model(model or "")
+    if not name:
+        raise CloudError("Chưa chọn model Gemini")
+    tran = max(1024, int(max_tokens or cloud_config()["max_tokens"] or 8000))
+    contents = [{"role": "model" if vai == "assistant" else "user", "parts": [{"text": nd}]}
+                for vai, nd in _lich_su_chuan(lich_su)]
+    contents.append({"role": "user", "parts": [{"text": prompt}]})
+    gc = {"maxOutputTokens": tran}
+    if name.startswith(("gemini-1", "gemini-2")):
+        gc["temperature"] = temperature
+    if effort:
+        gc["thinkingConfig"] = {"thinkingLevel": "low" if effort == "minimal" else effort}
+    if json_mode and not tim_web:
+        gc["responseMimeType"] = "application/json"
+    body = {"contents": contents, "generationConfig": gc}
+    if system:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
+    if tim_web:
+        body["tools"] = [{"google_search": {}}]
+    url = f"{GEMINI_BASE_URL}/models/{name}:streamGenerateContent?alt=sse"
+    headers = {"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"}
+    web = {"nguon": [], "trich": [], "ho_tro": [], "truy_van": [], "so_lan_tim": 0}
+    t0 = time.time()
+    r = None
+    for _ in range(4):
+        r = requests.post(url, headers=headers, json=body, timeout=600, stream=True)
+        if r.status_code != 400:
+            break
+        loi = r.text
+        r.close()
+        sua = _sua_body_gemini(body, loi)
+        if sua is None:
+            raise CloudError(f"Gemini từ chối yêu cầu (HTTP 400): {_loi_gemini(loi)}")
+        body = sua
+    usage, grounding, ly_do_dung = {}, None, None
+    try:
+        if r.status_code >= 400:
+            raise CloudError(f"Gemini lỗi HTTP {r.status_code}: {_loi_gemini(r.text)}")
+        for line in r.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            try:
+                data = json.loads(line[5:].strip())
+            except ValueError:
+                continue
+            if data.get("error"):
+                raise CloudError(f"Gemini báo lỗi: {_loi_gemini(json.dumps(data))}")
+            for cand in data.get("candidates") or []:
+                for part in (cand.get("content") or {}).get("parts") or []:
+                    if part.get("thought"):
+                        continue        # phần suy nghĩ — không hiện
+                    piece = part.get("text") or ""
+                    if piece:
+                        yield piece
+                if cand.get("groundingMetadata"):
+                    grounding = cand["groundingMetadata"]
+                ly_do_dung = cand.get("finishReason") or ly_do_dung
+            if data.get("usageMetadata"):
+                usage = data["usageMetadata"]
+    finally:
+        r.close()
+    if grounding:
+        for ch in grounding.get("groundingChunks") or []:
+            w = ch.get("web") or {}
+            web["nguon"].append({"url": w.get("uri") or "", "title": w.get("title") or ""})
+        for sp in grounding.get("groundingSupports") or []:
+            seg = sp.get("segment") or {}
+            if seg.get("text"):
+                web["ho_tro"].append({"text": seg["text"],
+                                      "chunks": list(sp.get("groundingChunkIndices") or [])})
+        web["truy_van"] = list(grounding.get("webSearchQueries") or [])
+        web["so_lan_tim"] = len(web["truy_van"])
+        web["goi_y_html"] = ((grounding.get("searchEntryPoint") or {})
+                             .get("renderedContent") or "")[:20000]
+    if stats is not None:
+        tok_in = usage.get("promptTokenCount") or 0
+        tok_out = (usage.get("candidatesTokenCount") or 0) + (usage.get("thoughtsTokenCount") or 0)
+        cached = usage.get("cachedContentTokenCount") or 0
+        tien = _usd(PREFIX_GEMINI + name, tok_in, tok_out, cached)
+        if tien is not None:
+            tien = round(tien + web["so_lan_tim"] * GIA_TIM_WEB["gemini"], 6)
+        stats.update({
+            "model": PREFIX_GEMINI + name, "provider": P_GEMINI,
+            "prompt_tokens": tok_in, "gen_tokens": tok_out, "cache_read_tokens": cached,
+            "reasoning_tokens": usage.get("thoughtsTokenCount") or 0,
+            "cost_usd": tien, "web": web, "stop_reason": ly_do_dung,
+            "total_ms": int((time.time() - t0) * 1000),
+        })
+
+
 def co_khoa_api(model: str) -> bool:
     """Model này gọi được không: model API thì phải có khoá tương ứng trong
     .env; model trên máy chủ thì luôn được."""
@@ -837,28 +1199,43 @@ def co_khoa_api(model: str) -> bool:
         return bool(ANTHROPIC_API_KEY)
     if prov == P_COMPAT:
         return bool(COMPAT_API_KEY)
+    if prov == P_GEMINI:
+        return bool(GEMINI_API_KEY)
     return True
 
 
 def goi_dung_model(prompt: str, system: str = "", model: str | None = None, *,
                    max_tokens: int | None = None, effort: str | None = None,
                    json_mode: bool = False, temperature: float = 0.2,
-                   stats: dict | None = None):
+                   stats: dict | None = None, lich_su=None, tim_web: bool = False):
     """Gọi ĐÚNG model được chỉ định, theo dòng, KHÔNG lui về model khác.
 
     Khác llm_stream: đó là đường trả lời chính, API hỏng thì lặng lẽ quay về
     Qwen để người hỏi vẫn có câu trả lời. Ở đây (ChatGPT soát / câu trả lời
     khác) mục đích chính là ý kiến của MỘT model khác — lui về Qwen là đưa
     cho người dùng đúng thứ họ đã có mà dán nhãn ChatGPT. Hỏng thì báo hỏng.
+
+    lich_su: [(user|assistant, nội dung)] các lượt trước — model ngoài "nhớ"
+    hội thoại. tim_web: cho model tra Internet (Gemini, hoặc ChatGPT gọi đúng
+    máy chủ OpenAI — xem ho_tro_tim_web); model khác thì bỏ qua cờ này.
     """
     prov = provider_of(model or "")
-    if prov == P_CLAUDE:
+    if prov == P_GEMINI:
+        yield from gemini_stream(prompt, system, model, stats, max_tokens=max_tokens,
+                                 effort=effort, tim_web=tim_web, lich_su=lich_su,
+                                 temperature=temperature, json_mode=json_mode)
+    elif prov == P_COMPAT and tim_web and ho_tro_tim_web(model):
+        yield from openai_responses_stream(prompt, system, model, stats,
+                                           max_tokens=max_tokens, effort=effort,
+                                           tim_web=True, lich_su=lich_su,
+                                           temperature=temperature)
+    elif prov == P_CLAUDE:
         yield from claude_stream(prompt, system, temperature, model, stats,
-                                 max_tokens=max_tokens, effort=effort)
+                                 max_tokens=max_tokens, effort=effort, lich_su=lich_su)
     elif prov == P_COMPAT:
         yield from compat_stream(prompt, system, temperature, model, stats,
                                  max_tokens=max_tokens, effort=effort,
-                                 json_mode=json_mode)
+                                 json_mode=json_mode, lich_su=lich_su)
     else:
         yield from ollama_stream(prompt, system, temperature, model, stats)
 
@@ -875,7 +1252,11 @@ def llm_stream(prompt: str, system: str = "", temperature: float = 0.2,
         yield from ollama_stream(prompt, system, temperature, model, stats)
         return
 
-    fn = claude_stream if prov == P_CLAUDE else compat_stream
+    if prov == P_GEMINI:
+        def fn(p, s, t, m, st):
+            return gemini_stream(p, s, m, st, temperature=t)
+    else:
+        fn = claude_stream if prov == P_CLAUDE else compat_stream
     da_ra_chu = False
     try:
         for piece in fn(prompt, system, temperature, model, stats):

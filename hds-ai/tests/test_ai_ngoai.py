@@ -363,7 +363,7 @@ class TrangThaiTests(unittest.TestCase):
         tt = ai_ngoai.trang_thai()
         self.assertEqual(tt["soat"], "nut")
         self.assertTrue(tt["khac"])
-        self.assertEqual(tt["ten_khac"], "ChatGPT (gpt-5)")
+        self.assertEqual(tt["ten_khac"], "ChatGPT (gpt-6.1-sol)")
 
     def test_thay_doc_lai_chi_khi_chac_soat_duoc(self):
         _SettingsGia(self, ai_soat_che_do="tu_dong", ai_soat_thay_doc_lai="true",
@@ -453,6 +453,8 @@ class CauTraLoiKhacTests(unittest.TestCase):
              lambda mid, cot, kq: self.luu.update({(mid, cot): kq}))
         _gan(self, ai_ngoai, "_ghi_nhat_ky", lambda *a: None)
         _gan(self, ai_ngoai, "_re_ten_khach", lambda: ai_ngoai._dung_re_ten([]))
+        # update.sh chạy bộ test trên máy chủ thật — không đọc lịch sử thật.
+        _gan(self, ai_ngoai, "_doc_lich_su", lambda *a: [])
 
     def _tn(self, tham_so=None):
         return {"id": 55, "conversation_id": 9, "content": "đáp gốc", "evidence": [],
@@ -488,7 +490,7 @@ class CauTraLoiKhacTests(unittest.TestCase):
         self.assertTrue(kw["use_temp"])
         self.assertEqual(kw["source_document_ids"], [5])
         self.assertEqual(kw["truoc_id"], 54)
-        self.assertEqual(kw["ai_ngoai"]["model"], "api:gpt-5")
+        self.assertEqual(kw["ai_ngoai"]["model"], settings.DEFAULTS["ai_khac_model"])
         self.assertNotIn("0912345678", self.prompt[0])
         done = evs[-1]
         self.assertEqual(done["type"], "done")

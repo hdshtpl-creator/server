@@ -11,6 +11,7 @@ import {
   ExternalLink,
   Download,
   Eye,
+  Globe,
 } from 'lucide-react';
 
 /**
@@ -25,6 +26,8 @@ import {
  *   - thu gọn thì vẫn thấy một hàng chip tài liệu để biết bot đọc gì;
  *   - không có "Liên quan 100%" cho file đính kèm — điểm đó không phải độ liên
  *     quan, chỉ là "người dùng đưa cho bot".
+ *   - nguồn WEB (model ngoài tìm trên Internet, 13/10/2026) có nút mở trang gốc
+ *     ở tab mới; link model tự viết mà không có trong kết quả tìm thì ghi chú.
  */
 
 interface Props {
@@ -40,7 +43,7 @@ interface Props {
   onDownload: (docId: number, title: string) => void;
 }
 
-type Loai = 'document' | 'attachment' | 'user_provided' | 'system' | 'other';
+type Loai = 'document' | 'attachment' | 'user_provided' | 'system' | 'web' | 'other';
 
 export interface NhomNguon {
   key: string;
@@ -59,7 +62,8 @@ const RE_KH = /^\[KH: ([^\]]+)\]\s*/;
 
 export function loaiNguon(s: Source): Loai {
   const k = s.kind;
-  if (k === 'attachment' || k === 'user_provided' || k === 'system' || k === 'document') return k;
+  if (k === 'attachment' || k === 'user_provided' || k === 'system' || k === 'document' || k === 'web')
+    return k;
   if (RE_FILE.test(s.title || '')) return 'attachment';
   if ((s.title || '') === '[Người dùng cung cấp trong hội thoại]') return 'user_provided';
   return typeof s.document_id === 'number' || s.doc_id != null ? 'document' : 'other';
@@ -95,6 +99,8 @@ export function nhomNguon(sources: Source[], cited: Set<number>): NhomNguon[] {
         ? `file:${s.attachment_name || s.title}`
         : loai === 'user_provided'
         ? 'user'
+        : loai === 'web'
+        ? `web:${s.url || s.title || idx}`
         : `t:${s.title || idx}`;
     let g = map.get(key);
     if (!g) {
@@ -131,6 +137,7 @@ const IconLoai: React.FC<{ loai: Loai; className?: string }> = ({ loai, classNam
   if (loai === 'attachment') return <Paperclip className={className} />;
   if (loai === 'user_provided') return <UserRound className={className} />;
   if (loai === 'system') return <Database className={className} />;
+  if (loai === 'web') return <Globe className={className} />;
   return <FileText className={className} />;
 };
 
@@ -147,7 +154,14 @@ const NHAN_LOAI: Partial<Record<Loai, { text: string; cls: string }>> = {
     text: 'Dữ liệu hệ thống',
     cls: 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600',
   },
+  web: {
+    text: 'Web',
+    cls: 'bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200 border-teal-200 dark:border-teal-800',
+  },
 };
+
+/** Chỉ mở link http(s) — chặn javascript:/data: dù backend đã lọc. */
+const linkWeb = (u?: string | null) => (u && /^https?:\/\//i.test(u) ? u : null);
 
 const chipSo = (dan: boolean) =>
   `inline-flex items-center justify-center shrink-0 text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 border mt-0.5 ${
@@ -164,7 +178,8 @@ const Doan: React.FC<{
   domId?: string;
 }> = ({ s, loai, dan, focus, domId }) => {
   const [mo, setMo] = useState(false);
-  const quote = s.quote ?? s.excerpt ?? s.snippet;
+  // Nguồn web không có đoạn trích — hiện đường link để biết đúng trang nào.
+  const quote = (s.quote ?? s.excerpt ?? s.snippet) || (loai === 'web' ? s.url : null);
   const page = s.page_number ?? s.page;
   const section = s.section_title ?? s.section;
   const rawScore = s.relevance_score ?? s.score;
@@ -242,6 +257,7 @@ const The: React.FC<{
   const nhan = NHAN_LOAI[g.loai];
   const docId = typeof m.document_id === 'number' ? m.document_id : null;
   const driveId = m.drive_file_id && !String(m.drive_file_id).startsWith('local:') ? String(m.drive_file_id) : null;
+  const webUrl = g.loai === 'web' ? linkWeb(m.url) : null;
   const iconBtn =
     'p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-hds-navy dark:hover:text-blue-300 hover:bg-white dark:hover:bg-slate-700 transition-colors';
 
@@ -304,7 +320,31 @@ const The: React.FC<{
               → Đã bị thay thế/sửa đổi bởi: {m.thay_the_boi}
             </div>
           )}
+          {g.loai === 'web' && (
+            <div className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400 break-all">
+              {m.domain || webUrl}
+              {m.tu_tim_kiem === false && (
+                <span className="ml-1.5 text-amber-700 dark:text-amber-300">
+                  · link do model tự ghi, không có trong kết quả tìm kiếm — kiểm tra trước khi dùng
+                </span>
+              )}
+            </div>
+          )}
         </div>
+        {webUrl && (
+          <div className="flex items-center gap-0.5 shrink-0 -mr-1">
+            <a
+              href={webUrl}
+              target="_blank"
+              rel="noopener noreferrer nofollow"
+              className={iconBtn}
+              title="Mở trang web gốc (tab mới)"
+              aria-label="Mở trang web gốc"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        )}
         {(driveId || docId !== null) && (
           <div className="flex items-center gap-0.5 shrink-0 -mr-1">
             {driveId && (

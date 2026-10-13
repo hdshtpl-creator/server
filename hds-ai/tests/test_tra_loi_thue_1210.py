@@ -270,6 +270,43 @@ class KeoDoanSuaDoi(unittest.TestCase):
         self.assertIn("NGOẠI LỆ", p)
 
 
+class TuGanNguonKhongLac(unittest.TestCase):
+    """13/10/2026: "Theo Nghị định số 293/2025/NĐ-CP, mức lương tối thiểu vùng hiện
+    nay được quy định như sau: [Nguồn 27]" — nguồn 27 là một bản án."""
+    ND293 = {"doc_type": "law", "so_hieu": "293/2025/NĐ-CP", "section_title": "Nghị định số 293/2025/NĐ-CP",
+             "content": "Điều 3. Mức lương tối thiểu vùng I 5.310.000 đồng/tháng, vùng II 4.730.000 "
+                        "đồng/tháng áp dụng đối với người lao động theo hợp đồng lao động"}
+    BAN_AN = {"doc_type": "ban_an", "so_hieu": "25/2025/LĐ-PT",
+              "content": "Nghị định 293/2025 quy định mức lương tối thiểu vùng hiện nay, theo đó "
+                         "bị đơn phải trả lương không thấp hơn mức lương tối thiểu vùng I"}
+
+    def test_cau_dan_khong_gan_nguon_rieng(self):
+        tl = ("Theo Nghị định số 293/2025/NĐ-CP, mức lương tối thiểu vùng hiện nay được quy định như sau:"
+              "\n\n- Vùng I: 5.310.000 đồng/tháng, vùng II 4.730.000 đồng/tháng áp dụng cho người lao "
+              "động theo hợp đồng lao động")
+        ra, _n = rag.autocite(tl, [self.ND293, self.BAN_AN])
+        dong_dau = ra.split("\n\n")[0]
+        self.assertNotIn("[Nguồn", dong_dau)
+        self.assertTrue(ra.rstrip().endswith("[Nguồn 1]"))
+
+    def test_doan_neu_so_hieu_chi_gan_vao_van_ban_do(self):
+        tl = ("Nghị định 293/2025/NĐ-CP quy định mức lương tối thiểu vùng hiện nay, người lao động "
+              "phải được trả không thấp hơn mức lương tối thiểu vùng.")
+        ra, _n = rag.autocite(tl, [self.BAN_AN, self.ND293], min_coverage=0.3)
+        self.assertTrue(ra.rstrip().endswith("[Nguồn 2]"), ra)
+
+    def test_ngang_diem_thi_chon_van_ban_con_hieu_luc(self):
+        noi_dung = ("Điều 4. Áp dụng mức lương tối thiểu tháng là mức lương thấp nhất làm cơ sở thỏa "
+                    "thuận và trả lương đối với người lao động áp dụng hình thức trả lương theo tháng")
+        cu = {"doc_type": "law", "so_hieu": "02/VBHN-BNV", "trang_thai_hieu_luc": "het_hieu_luc",
+              "content": noi_dung}
+        moi = {"doc_type": "law", "so_hieu": "293/2025/NĐ-CP", "content": noi_dung}
+        tl = ("- Mức lương tối thiểu tháng là mức lương thấp nhất làm cơ sở thỏa thuận và trả lương "
+              "đối với người lao động áp dụng hình thức trả lương theo tháng.")
+        ra, _n = rag.autocite(tl, [cu, moi])
+        self.assertTrue(ra.rstrip().endswith("[Nguồn 2]"), ra)
+
+
 class BanHopNhatChetTheoVanBanGoc(unittest.TestCase):
     """"Lương tối thiểu vùng hiện nay": kho chỉ có bản hợp nhất 02/VBHN-BNV của
     Nghị định 74/2024 (mức 2025), quan hệ "293/2025/NĐ-CP thay thế 74/2024/NĐ-CP"

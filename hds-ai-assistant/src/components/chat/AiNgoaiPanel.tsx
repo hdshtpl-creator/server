@@ -23,14 +23,18 @@ import {
   ChevronUp,
   Square,
   AlertTriangle,
+  Globe,
+  History,
 } from 'lucide-react';
 
 /**
  * ChatGPT làm việc SONG SONG với Qwen (hds-ai/app/ai_ngoai.py):
  *   · SOÁT đầu ra — huy hiệu "ChatGPT: ổn / cần xem lại / có sai sót" kèm
  *     từng vấn đề; chế độ tự động thì soát ngay khi câu trả lời viết xong.
- *   · "XEM CÂU TRẢ LỜI KHÁC" — model ngoài trả lời lại cùng câu hỏi, cùng
- *     quyền đọc tài liệu, hiện ngay bên dưới để luật sư so sánh.
+ *   · "XEM CÂU TRẢ LỜI KHÁC" — model ngoài (ChatGPT / Gemini) trả lời lại cùng
+ *     câu hỏi, cùng quyền đọc tài liệu, hiện ngay bên dưới để luật sư so sánh.
+ *     Từ 13/10/2026: được TÌM WEB thời gian thực (nguồn web hiện thành
+ *     [Nguồn n] bấm mở được) và NHỚ các lượt trước của hội thoại.
  *
  * Nút chỉ hiện khi quản trị đã bật VÀ máy chủ có khoá API (GET
  * /ai-ngoai/cau-hinh). Nút hiện THƯỜNG TRỰC — không ẩn chờ rê chuột (nút ẩn
@@ -294,10 +298,12 @@ export const AiNgoaiPanel: React.FC<Props> = ({ message, onPreview, onDownload }
             type="button"
             onClick={() => void chayKhac(false)}
             className={`${nutCls} border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-hds-navy hover:text-hds-navy dark:hover:text-blue-300`}
-            title={`${cfg?.ten_khac || 'ChatGPT'} trả lời lại cùng câu hỏi`}
+            title={`${cfg?.ten_khac || 'ChatGPT'} trả lời lại cùng câu hỏi${
+              cfg?.tim_web ? ', có tìm thông tin mới trên web' : ''
+            }${cfg?.nho_lich_su ? ', nhớ các lượt trước của hội thoại' : ''}`}
           >
-            <Shuffle className="w-3.5 h-3.5" />
-            Xem câu trả lời khác
+            {cfg?.tim_web ? <Globe className="w-3.5 h-3.5" /> : <Shuffle className="w-3.5 h-3.5" />}
+            Xem câu trả lời khác{cfg?.tim_web ? ' (có tìm web)' : ''}
           </button>
         )}
         {(khac || khacText || khacDang) && !khacMo && (
@@ -400,6 +406,24 @@ export const AiNgoaiPanel: React.FC<Props> = ({ message, onPreview, onDownload }
             <span className="flex items-center gap-1.5 font-bold text-indigo-900 dark:text-indigo-200 min-w-0">
               <Shuffle className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">Câu trả lời khác — {tenKhac}</span>
+              {(khac?.tim_web ?? (khacDang && cfg?.tim_web)) && (
+                <span
+                  className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-200 border-teal-200 dark:border-teal-800"
+                  title="Model được tra cứu Internet để bổ sung thông tin mới"
+                >
+                  <Globe className="w-3 h-3" />
+                  Tìm web
+                </span>
+              )}
+              {!!khac?.nho_lich_su && (
+                <span
+                  className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-semibold bg-white/70 dark:bg-slate-900/60 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                  title="Số lượt hỏi–đáp trước trong hội thoại này được gửi kèm để model nhớ ngữ cảnh"
+                >
+                  <History className="w-3 h-3" />
+                  nhớ {khac.nho_lich_su} lượt trước
+                </span>
+              )}
             </span>
             <span className="flex items-center gap-2 shrink-0 text-[11px]">
               {khacDang ? (
@@ -461,6 +485,25 @@ export const AiNgoaiPanel: React.FC<Props> = ({ message, onPreview, onDownload }
                   )}
                 </div>
               ) : null}
+              {khac?.trang_thai === 'xong' && (khac.truy_van || []).length > 0 && (
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-start gap-1.5">
+                  <Globe className="w-3 h-3 shrink-0 mt-0.5" />
+                  <span>
+                    Đã tìm trên web: {(khac.truy_van || []).map((q) => `“${q}”`).join(' · ')}
+                  </span>
+                </p>
+              )}
+              {khac?.trang_thai === 'xong' && khac.goi_y_html && (
+                // Ô "Gợi ý tìm kiếm" của Google — điều khoản Grounding with Google
+                // Search yêu cầu hiển thị. HTML của bên thứ ba nên vẽ trong iframe
+                // sandbox KHÔNG chạy script, link mở ở tab mới.
+                <iframe
+                  title="Gợi ý tìm kiếm Google"
+                  srcDoc={khac.goi_y_html}
+                  sandbox="allow-popups allow-popups-to-escape-sandbox"
+                  className="w-full h-14 rounded-lg border border-slate-200 dark:border-slate-700 bg-white"
+                />
+              )}
               {moTaLoc(locKhac) && (
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-start gap-1.5">
                   <Lock className="w-3 h-3 shrink-0 mt-0.5" />
@@ -513,7 +556,8 @@ export const AiNgoaiPanel: React.FC<Props> = ({ message, onPreview, onDownload }
             </div>
           )}
           <p className="text-[10px] italic text-slate-400 dark:text-slate-500">
-            Ý kiến thứ hai từ model ngoài, chỉ để so sánh — không lưu vào lịch sử hỏi đáp của bot.
+            Ý kiến thứ hai từ model ngoài, chỉ để so sánh — không thay câu trả lời của bot. Nguồn
+            web do model ngoài tự tìm: mở trang gốc đối chiếu trước khi dùng làm căn cứ.
           </p>
         </div>
       )}

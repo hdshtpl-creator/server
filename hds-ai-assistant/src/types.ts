@@ -191,8 +191,14 @@ export interface Source {
   /** Tên văn bản đã thay thế/sửa đổi văn bản này (nếu có trong kho). */
   thay_the_boi?: string | null;
   /** document (kho) · attachment (file đính kèm) · user_provided (dán vào chat)
-   *  · notice (lời nhắn cho model, không hiện) · system (dữ liệu vận hành). */
+   *  · notice (lời nhắn cho model, không hiện) · system (dữ liệu vận hành)
+   *  · web (trang web model ngoài tìm được — "Xem câu trả lời khác"). */
   kind?: string;
+  /** Nguồn web: địa chỉ trang, tên miền, và có nằm trong kết quả tìm kiếm thật
+   *  không (false = link model tự viết, chưa xác minh). */
+  url?: string | null;
+  domain?: string | null;
+  tu_tim_kiem?: boolean;
   /** Tên file đính kèm — các đoạn cùng tên gom thành một thẻ trong panel nguồn. */
   attachment_name?: string | null;
   /** Đoạn này là bản tóm tắt cả file (file dài), không phải trích nguyên văn. */
@@ -327,6 +333,15 @@ export interface AiKhacKetQua {
   loc?: AiNgoaiLoc | null;
   da_che?: number;
   at?: string;
+  /** Lượt này có cho model tìm web không; số nguồn web; các truy vấn đã tìm. */
+  tim_web?: boolean;
+  nguon_web?: number;
+  truy_van?: string[];
+  so_lan_tim?: number;
+  /** Số lượt hội thoại trước được gửi kèm (model "nhớ"). */
+  nho_lich_su?: number;
+  /** Gemini: ô "Gợi ý tìm kiếm" của Google (HTML) — vẽ trong iframe sandbox. */
+  goi_y_html?: string;
 }
 
 /** GET /ai-ngoai/cau-hinh — nút nào dùng được lúc này. */
@@ -335,10 +350,14 @@ export interface AiNgoaiCauHinh {
   khac: boolean;
   ten_soat?: string;
   ten_khac?: string;
+  /** "Xem câu trả lời khác" có tìm web / nhớ lịch sử khung chat không. */
+  tim_web?: boolean;
+  nho_lich_su?: boolean;
   /** Chỉ admin. */
   quan_tri?: {
     co_khoa_openai: boolean;
     co_khoa_claude: boolean;
+    co_khoa_gemini?: boolean;
     dia_chi_api: string;
     su_dung_thang: { luot: number; soat: number; khac: number; usd: number };
     tran_luot_thang: number;
